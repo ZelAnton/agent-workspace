@@ -22,7 +22,7 @@ fn test_init_creates_config() {
 
     assert!(output.status.success());
 
-    let config_path = dir.path().join(".agent-worktree.toml");
+    let config_path = dir.path().join(".agent-workspace.toml");
     assert!(config_path.exists());
 
     let content = std::fs::read_to_string(&config_path).unwrap();
@@ -65,7 +65,7 @@ fn test_init_with_default_trunk() {
 
     assert!(output.status.success());
 
-    let config_path = dir.path().join(".agent-worktree.toml");
+    let config_path = dir.path().join(".agent-workspace.toml");
     assert!(config_path.exists());
 
     let content = std::fs::read_to_string(&config_path).unwrap();
@@ -85,7 +85,7 @@ fn test_init_with_custom_trunk() {
 
     assert!(output.status.success());
 
-    let content = std::fs::read_to_string(dir.path().join(".agent-worktree.toml")).unwrap();
+    let content = std::fs::read_to_string(dir.path().join(".agent-workspace.toml")).unwrap();
     assert!(content.contains("develop"));
 }
 
@@ -102,7 +102,7 @@ fn test_init_multiple_options() {
 
     assert!(output.status.success());
 
-    let content = std::fs::read_to_string(dir.path().join(".agent-worktree.toml")).unwrap();
+    let content = std::fs::read_to_string(dir.path().join(".agent-workspace.toml")).unwrap();
     assert!(content.contains("master"));
 }
 
@@ -119,7 +119,7 @@ fn test_init_with_merge_strategy() {
 
     assert!(output.status.success());
 
-    let content = std::fs::read_to_string(dir.path().join(".agent-worktree.toml")).unwrap();
+    let content = std::fs::read_to_string(dir.path().join(".agent-workspace.toml")).unwrap();
     assert!(
         content.contains("merge"),
         "Expected merge in config, got: {content}"
@@ -139,7 +139,7 @@ fn test_init_with_copy_files() {
 
     assert!(output.status.success());
 
-    let content = std::fs::read_to_string(dir.path().join(".agent-worktree.toml")).unwrap();
+    let content = std::fs::read_to_string(dir.path().join(".agent-workspace.toml")).unwrap();
     assert!(
         content.contains(".env"),
         "Expected .env in config, got: {content}"
@@ -169,7 +169,7 @@ fn test_init_with_all_options() {
 
     assert!(output.status.success());
 
-    let content = std::fs::read_to_string(dir.path().join(".agent-worktree.toml")).unwrap();
+    let content = std::fs::read_to_string(dir.path().join(".agent-workspace.toml")).unwrap();
     assert!(content.contains("develop"));
     assert!(content.contains("squash"));
     assert!(content.contains("rebase"));
@@ -189,7 +189,7 @@ fn test_init_with_sync_strategy() {
 
     assert!(output.status.success());
 
-    let content = std::fs::read_to_string(dir.path().join(".agent-worktree.toml")).unwrap();
+    let content = std::fs::read_to_string(dir.path().join(".agent-workspace.toml")).unwrap();
     assert!(
         content.contains("sync_strategy") && content.contains("merge"),
         "Expected sync_strategy=merge in config, got: {content}"

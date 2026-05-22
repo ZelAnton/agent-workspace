@@ -25,7 +25,7 @@ pub enum Error {
 }
 
 // ---------------------------------------------------------------------------
-// Global Config (~/.agent-worktree/config.toml)
+// Global Config (~/.agent-workspace/config.toml)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -38,7 +38,7 @@ pub struct GlobalConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Project Config (.agent-worktree.toml)
+// Project Config (.agent-workspace.toml)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -172,7 +172,7 @@ impl Config {
     }
 
     pub fn base_dir() -> Result<PathBuf> {
-        Self::resolve_base_dir(std::env::var("AGENT_WORKTREE_DIR").ok().as_deref())
+        Self::resolve_base_dir(std::env::var("AGENT_WORKSPACE_DIR").ok().as_deref())
     }
 
     // Split out so tests can exercise both env and fallback branches
@@ -182,7 +182,7 @@ impl Config {
             return Ok(PathBuf::from(dir));
         }
         let base = BaseDirs::new().ok_or(Error::NoHome)?;
-        Ok(base.home_dir().join(".agent-worktree"))
+        Ok(base.home_dir().join(".agent-workspace"))
     }
 
     fn load_global(base_dir: &Path) -> Result<GlobalConfig> {
@@ -196,13 +196,13 @@ impl Config {
 
     fn load_project() -> Result<ProjectConfig> {
         // Resolve from the main repo root (via git --git-common-dir) so the
-        // same `.agent-worktree.toml` applies whether the user is in the main
+        // same `.agent-workspace.toml` applies whether the user is in the main
         // repo, a worktree root, or any subdirectory of either. Reading
         // CWD-relative would silently miss the file inside worktrees.
         // Outside any git repo, fall back to default — non-git commands
         // (setup/update) must still load.
         let path = match crate::git::repo_root() {
-            Ok(root) => root.join(".agent-worktree.toml"),
+            Ok(root) => root.join(".agent-workspace.toml"),
             Err(_) => return Ok(ProjectConfig::default()),
         };
         if !path.exists() {
@@ -368,7 +368,7 @@ post_merge = ["git push", "notify-team"]
         let result = Config::base_dir();
         assert!(result.is_ok());
         let path = result.unwrap();
-        assert!(path.to_string_lossy().contains(".agent-worktree"));
+        assert!(path.to_string_lossy().contains(".agent-workspace"));
     }
 
     #[test]
@@ -380,13 +380,13 @@ post_merge = ["git push", "notify-team"]
     #[test]
     fn test_resolve_base_dir_empty_env_falls_back() {
         let path = Config::resolve_base_dir(Some("")).unwrap();
-        assert!(path.to_string_lossy().contains(".agent-worktree"));
+        assert!(path.to_string_lossy().contains(".agent-workspace"));
     }
 
     #[test]
     fn test_resolve_base_dir_none_falls_back() {
         let path = Config::resolve_base_dir(None).unwrap();
-        assert!(path.to_string_lossy().contains(".agent-worktree"));
+        assert!(path.to_string_lossy().contains(".agent-workspace"));
     }
 
     #[test]

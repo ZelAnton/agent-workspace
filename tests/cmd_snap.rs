@@ -69,7 +69,7 @@ fn test_new_with_snap_creates_metadata() {
 
     assert!(output.status.success());
 
-    let workspaces_dir = home.join(".agent-worktree").join("workspaces");
+    let workspaces_dir = home.join(".agent-workspace").join("workspaces");
     let workspace_dir = std::fs::read_dir(&workspaces_dir)
         .unwrap()
         .filter_map(|e| e.ok())

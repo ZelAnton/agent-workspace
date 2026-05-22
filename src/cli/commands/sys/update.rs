@@ -27,7 +27,7 @@ pub fn determine_action(check_result: update::Result<Option<String>>) -> cli::Re
 
 /// 构造 npm install 命令参数
 pub fn npm_install_args() -> Vec<&'static str> {
-    vec!["install", "-g", "agent-worktree@latest"]
+    vec!["install", "-g", "agent-workspace@latest"]
 }
 
 pub fn run() -> cli::Result<()> {
@@ -40,7 +40,7 @@ pub fn run() -> cli::Result<()> {
             eprintln!("Already up to date ({})", VERSION);
         }
         UpdateAction::UpdateAvailable(latest) => {
-            eprintln!("Updating agent-worktree: {} -> {}", VERSION, latest);
+            eprintln!("Updating agent-workspace: {} -> {}", VERSION, latest);
 
             let status = std::process::Command::new("npm")
                 .args(npm_install_args())
@@ -90,6 +90,6 @@ mod tests {
     #[test]
     fn test_npm_install_args() {
         let args = npm_install_args();
-        assert_eq!(args, vec!["install", "-g", "agent-worktree@latest"]);
+        assert_eq!(args, vec!["install", "-g", "agent-workspace@latest"]);
     }
 }

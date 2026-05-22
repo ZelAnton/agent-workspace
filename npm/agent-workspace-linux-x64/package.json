@@ -1,0 +1,13 @@
+{
+  "name": "@ZelAnton/agent-workspace-linux-x64",
+  "version": "0.11.0",
+  "description": "agent-workspace binary for Linux x64",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ZelAnton/agent-workspace.git"
+  },
+  "os": ["linux"],
+  "cpu": ["x64"],
+  "files": ["bin/wt"]
+}

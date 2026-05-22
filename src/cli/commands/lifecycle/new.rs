@@ -124,7 +124,7 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
 
 /// Reject patterns that could escape the repo root.
 ///
-/// Without this guard, a malicious `.agent-worktree.toml` could exfiltrate
+/// Without this guard, a malicious `.agent-workspace.toml` could exfiltrate
 /// host files into the worktree via `/abs/path` or `..` traversal — the
 /// downstream `strip_prefix` would silently skip mismatches.
 fn validate_copy_pattern(pattern: &str) -> Result<()> {

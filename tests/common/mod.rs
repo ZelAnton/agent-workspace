@@ -67,7 +67,7 @@ pub fn setup_git_repo_with_home(dir: &Path) -> PathBuf {
     let home = dir.join("fake_home");
     std::fs::create_dir_all(&home).unwrap();
 
-    let wt_dir = home.join(".agent-worktree");
+    let wt_dir = home.join(".agent-workspace");
     std::fs::create_dir_all(&wt_dir).unwrap();
 
     let config = r#"
@@ -87,7 +87,7 @@ pub fn setup_worktree_test_env() -> (tempfile::TempDir, PathBuf, PathBuf) {
     setup_git_repo(&repo);
 
     let home = dir.path().join("home");
-    let wt_dir = home.join(".agent-worktree");
+    let wt_dir = home.join(".agent-workspace");
     std::fs::create_dir_all(&wt_dir).unwrap();
 
     let config = r#"

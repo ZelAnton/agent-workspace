@@ -1,6 +1,6 @@
-use agent_worktree::cli::Cli;
-use agent_worktree::config::Config;
-use agent_worktree::update;
+use agent_workspace::cli::Cli;
+use agent_workspace::config::Config;
+use agent_workspace::update;
 use clap::Parser;
 use std::thread::JoinHandle;
 
@@ -8,7 +8,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() {
     // Must be first: intercepts COMPLETE env var for shell completions
-    clap_complete::env::CompleteEnv::with_factory(agent_worktree::cli::build_command).complete();
+    clap_complete::env::CompleteEnv::with_factory(agent_workspace::cli::build_command).complete();
 
     // Check for updates (once per day), runs in background
     let base_dir = Config::base_dir().ok();
@@ -38,7 +38,7 @@ fn spawn_update_check(base_dir: std::path::PathBuf) -> JoinHandle<()> {
     std::thread::spawn(move || {
         if let Ok(Some(latest)) = update::check_update(VERSION) {
             eprintln!(
-                "\x1b[33mA new version of agent-worktree is available: {} -> {}\x1b[0m",
+                "\x1b[33mA new version of agent-workspace is available: {} -> {}\x1b[0m",
                 VERSION, latest
             );
             eprintln!("\x1b[33mRun `wt update` to update\x1b[0m");

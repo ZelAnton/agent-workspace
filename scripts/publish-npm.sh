@@ -31,7 +31,7 @@ sync_versions() {
 
     log "Syncing version to $version..."
 
-    for pkg_dir in "$NPM_DIR"/agent-worktree*/; do
+    for pkg_dir in "$NPM_DIR"/agent-workspace*/; do
         local pkg_json="$pkg_dir/package.json"
         if [[ -f "$pkg_json" ]]; then
             # macOS sed needs different syntax
@@ -45,12 +45,12 @@ sync_versions() {
     done
 
     # Also update optionalDependencies versions in main package
-    local main_pkg="$NPM_DIR/agent-worktree/package.json"
+    local main_pkg="$NPM_DIR/agent-workspace/package.json"
     for platform in darwin-arm64 darwin-x64 linux-x64 win32-x64; do
         if [[ "$(uname)" == "Darwin" ]]; then
-            sed -i '' "s/\"@nekocode\/agent-worktree-$platform\": \".*\"/\"@nekocode\/agent-worktree-$platform\": \"$version\"/" "$main_pkg"
+            sed -i '' "s/\"@zelanton\/agent-workspace-$platform\": \".*\"/\"@zelanton\/agent-workspace-$platform\": \"$version\"/" "$main_pkg"
         else
-            sed -i "s/\"@nekocode\/agent-worktree-$platform\": \".*\"/\"@nekocode\/agent-worktree-$platform\": \"$version\"/" "$main_pkg"
+            sed -i "s/\"@zelanton\/agent-workspace-$platform\": \".*\"/\"@zelanton\/agent-workspace-$platform\": \"$version\"/" "$main_pkg"
         fi
     done
 }
@@ -108,8 +108,8 @@ sync_versions "$VERSION"
 
 # Publish platform packages first (main package depends on them)
 for platform in darwin-arm64 darwin-x64 linux-x64 win32-x64; do
-    pkg_dir="$NPM_DIR/agent-worktree-$platform"
-    pkg_name="@nekocode/agent-worktree-$platform"
+    pkg_dir="$NPM_DIR/agent-workspace-$platform"
+    pkg_name="@ZelAnton/agent-workspace-$platform"
     # Windows uses .exe extension
     if [[ "$platform" == "win32-x64" ]]; then
         binary="$pkg_dir/bin/wt.exe"
@@ -124,6 +124,6 @@ for platform in darwin-arm64 darwin-x64 linux-x64 win32-x64; do
 done
 
 # Publish main package last
-publish_package "$NPM_DIR/agent-worktree" "agent-worktree" "$VERSION" "$DRY_RUN"
+publish_package "$NPM_DIR/agent-workspace" "agent-workspace" "$VERSION" "$DRY_RUN"
 
 log "Publish complete!"

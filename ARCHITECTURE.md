@@ -1,8 +1,8 @@
-# agent-worktree 架构设计文档
+# agent-workspace 架构设计文档
 
 ## 概述
 
-agent-worktree 是一个 Git Worktree 工作流工具，为 AI coding agent 提供隔离的并行开发环境。
+agent-workspace 是一个 Git Worktree 工作流工具，为 AI coding agent 提供隔离的并行开发环境。
 
 **核心价值**：
 - 并行开发：同时运行多个 agent，互不干扰
@@ -13,10 +13,10 @@ agent-worktree 是一个 Git Worktree 工作流工具，为 AI coding agent 提�
 
 ## 目录结构
 
-基础目录默认 `~/.agent-worktree`，可通过 `AGENT_WORKTREE_DIR` 环境变量覆盖（空串视同未设）。
+基础目录默认 `~/.agent-workspace`，可通过 `AGENT_WORKSPACE_DIR` 环境变量覆盖（空串视同未设）。
 
 ```
-$AGENT_WORKTREE_DIR/  (默认 ~/.agent-worktree/)
+$AGENT_WORKSPACE_DIR/  (默认 ~/.agent-workspace/)
 ├── config.toml                    # 全局配置
 └── workspaces/                    # 所有 worktree 存储位置
     └── {repo}-{hash}/             # 按项目组织（hash 基于仓库绝对路径，防止同名冲突）
@@ -29,7 +29,7 @@ $AGENT_WORKTREE_DIR/  (默认 ~/.agent-worktree/)
             └── ...                # 项目文件
 
 项目根目录/
-└── .agent-worktree.toml           # 项目级配置（可选）
+└── .agent-workspace.toml           # 项目级配置（可选）
 ```
 
 ### 元数据格式
@@ -270,7 +270,7 @@ State:        REBASE/MERGE IN PROGRESS (sync)
 
 ## 配置文件
 
-### 全局配置 `$AGENT_WORKTREE_DIR/config.toml`（默认 `~/.agent-worktree/config.toml`）
+### 全局配置 `$AGENT_WORKSPACE_DIR/config.toml`（默认 `~/.agent-workspace/config.toml`）
 
 ```toml
 [general]
@@ -292,7 +292,7 @@ post_merge = []
 - `merge_strategy` / `sync_strategy`：project 非空时**覆盖** global（`Option` 语义）
 - `trunk`：仅 project 级别配置
 
-### 项目配置 `.agent-worktree.toml`
+### 项目配置 `.agent-workspace.toml`
 
 ```toml
 [general]

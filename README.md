@@ -1,12 +1,10 @@
-# agent-worktree
+# agent-workspace
 
-[![npm version](https://img.shields.io/npm/v/agent-worktree)](https://www.npmjs.com/package/agent-worktree)
+[![npm version](https://img.shields.io/npm/v/agent-workspace)](https://www.npmjs.com/package/agent-workspace)
 
 A Git worktree workflow tool for AI coding agents. Enables parallel development with isolated environments.
 
-[中文文档](README.zh-CN.md)
-
-![Cover](cover.jpg)
+![Cover](cover.png)
 
 ## Why
 
@@ -19,7 +17,7 @@ AI coding agents work best with isolated environments:
 ## Install
 
 ```bash
-npm install -g agent-worktree
+npm install -g agent-workspace
 ```
 
 Update to the latest version:
@@ -155,13 +153,13 @@ checks the worktree state:
 
 ### Base Directory
 
-Defaults to `~/.agent-worktree`. Override via `AGENT_WORKTREE_DIR`:
+Defaults to `~/.agent-workspace`. Override via `AGENT_WORKSPACE_DIR`:
 
 ```bash
-export AGENT_WORKTREE_DIR=/data/agent-worktree
+export AGENT_WORKSPACE_DIR=/data/agent-workspace
 ```
 
-### Global Config `$AGENT_WORKTREE_DIR/config.toml` (default `~/.agent-worktree/config.toml`)
+### Global Config `$AGENT_WORKSPACE_DIR/config.toml` (default `~/.agent-workspace/config.toml`)
 
 ```toml
 [general]
@@ -180,13 +178,13 @@ post_merge = []
 > rejected. Symlinks are not followed.
 >
 > **Hook trust boundary** — hooks run via `sh -c` (or `cmd /C` on Windows)
-> with no sandboxing or timeout. Treat `.agent-worktree.toml` like any
+> with no sandboxing or timeout. Treat `.agent-workspace.toml` like any
 > committed shell script: only run repos whose hooks you would `bash` directly.
 >
 > **Hook CWD** — `pre_merge` and `post_merge` always run with the worktree
 > root as the working directory. `post_create` runs in the new worktree.
 
-### Project Config `.agent-worktree.toml`
+### Project Config `.agent-workspace.toml`
 
 Project config overrides global. `trunk` is project-only; other fields are merged.
 
@@ -204,7 +202,7 @@ post_create = ["pnpm install"]  # Replaces global hooks if set
 ## Storage Layout
 
 ```
-~/.agent-worktree/
+~/.agent-workspace/
 ├── config.toml                    # Global config
 └── workspaces/
     └── {project}/

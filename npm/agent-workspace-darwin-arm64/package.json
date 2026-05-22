@@ -1,0 +1,13 @@
+{
+  "name": "@ZelAnton/agent-workspace-darwin-arm64",
+  "version": "0.11.0",
+  "description": "agent-workspace binary for macOS ARM64",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ZelAnton/agent-workspace.git"
+  },
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "files": ["bin/wt"]
+}

@@ -95,7 +95,7 @@ fn test_new_creates_metadata_file() {
     if output.status.success() {
         let repo_name = repo.file_name().unwrap().to_str().unwrap();
         let meta_path = home
-            .join(".agent-worktree")
+            .join(".agent-workspace")
             .join("workspaces")
             .join(repo_name)
             .join("meta-test.toml");

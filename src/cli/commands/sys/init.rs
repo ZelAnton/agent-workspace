@@ -32,7 +32,7 @@ pub struct InitArgs {
 }
 
 pub fn run(args: InitArgs) -> Result<()> {
-    let config_path = Path::new(".agent-worktree.toml");
+    let config_path = Path::new(".agent-workspace.toml");
 
     if config_path.exists() {
         return Err(Error::Other("Config file already exists".into()));
@@ -56,7 +56,7 @@ pub fn run(args: InitArgs) -> Result<()> {
 
     std::fs::write(config_path, content).map_err(|e| Error::Other(e.to_string()))?;
 
-    eprintln!("Created .agent-worktree.toml");
+    eprintln!("Created .agent-workspace.toml");
     eprintln!("Trunk branch: {trunk}");
     if let Some(ref strategy) = config.general.merge_strategy {
         eprintln!("Merge strategy: {strategy:?}");

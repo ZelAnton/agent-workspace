@@ -1,5 +1,5 @@
 // ===========================================================================
-// agent-worktree - Git Worktree Workflow Tool for AI Coding Agents
+// agent-workspace - Git Worktree Workflow Tool for AI Coding Agents
 // ===========================================================================
 
 pub mod cli;

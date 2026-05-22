@@ -1,10 +1,10 @@
 [package]
-name = "agent-worktree"
+name = "agent-workspace"
 version = "0.11.0"
 edition = "2021"
 description = "Git worktree workflow tool for AI coding agents"
 license = "MIT"
-repository = "https://github.com/nekocode/agent-worktree"
+repository = "https://github.com/ZelAnton/agent-workspace"
 keywords = ["cli", "git", "worktree", "ai", "agent"]
 categories = ["command-line-utilities", "development-tools"]
 readme = "README.md"

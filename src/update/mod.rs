@@ -66,7 +66,7 @@ pub fn compare_versions(current: &str, latest: &str) -> bool {
 /// Check for updates from npm registry
 /// Returns Some(latest_version) if update available, None otherwise
 pub fn check_update(current_version: &str) -> Result<Option<String>> {
-    let url = "https://registry.npmjs.org/agent-worktree/latest";
+    let url = "https://registry.npmjs.org/agent-workspace/latest";
 
     let agent = ureq::Agent::new_with_config(
         ureq::config::Config::builder()

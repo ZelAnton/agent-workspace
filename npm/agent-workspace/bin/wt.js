@@ -8,10 +8,10 @@ const { join } = require("path");
 // ============================================================
 
 const PLATFORMS = {
-  "darwin-arm64": "@nekocode/agent-worktree-darwin-arm64",
-  "darwin-x64": "@nekocode/agent-worktree-darwin-x64",
-  "linux-x64": "@nekocode/agent-worktree-linux-x64",
-  "win32-x64": "@nekocode/agent-worktree-win32-x64",
+  "darwin-arm64": "@ZelAnton/agent-workspace-darwin-arm64",
+  "darwin-x64": "@ZelAnton/agent-workspace-darwin-x64",
+  "linux-x64": "@ZelAnton/agent-workspace-linux-x64",
+  "win32-x64": "@ZelAnton/agent-workspace-win32-x64",
 };
 
 function getPlatformPackage() {
@@ -37,7 +37,7 @@ function getBinaryPath() {
     return join(pkgPath, "..", "bin", exe);
   } catch {
     console.error(`Platform package not found: ${pkg}`);
-    console.error("Try reinstalling: npm install -g agent-worktree");
+    console.error("Try reinstalling: npm install -g agent-workspace");
     process.exit(1);
   }
 }
@@ -57,7 +57,7 @@ try {
   }
   if (err.code === "ENOENT") {
     console.error(`Binary not found: ${binary}`);
-    console.error("Try reinstalling: npm install -g agent-worktree");
+    console.error("Try reinstalling: npm install -g agent-workspace");
     process.exit(1);
   }
   if (err.code === "EACCES") {

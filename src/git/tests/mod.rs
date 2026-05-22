@@ -165,7 +165,7 @@ fn test_clean_git_error_error_prefix() {
 #[test]
 fn test_clean_git_error_worktree_uncommitted() {
     let msg = clean_git_error(
-        "fatal: '/Users/foo/.agent-worktree/workspaces/proj/branch' contains modified or untracked files, use --force to delete it",
+        "fatal: '/Users/foo/.agent-workspace/workspaces/proj/branch' contains modified or untracked files, use --force to delete it",
     );
     assert_eq!(
         msg,

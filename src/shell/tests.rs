@@ -175,46 +175,46 @@ fn test_remove_wrapper_no_wrapper() {
 #[test]
 fn test_remove_wrapper_with_wrapper() {
     let content = r#"alias ll='ls -la'
-# === agent-worktree BEGIN ===
+# === agent-workspace BEGIN ===
 wt() { ... }
-# === agent-worktree END ===
+# === agent-workspace END ===
 export PATH=$PATH:/usr/local/bin
 "#;
     let result = remove_wrapper(content).unwrap();
     assert!(result.contains("alias ll"));
     assert!(result.contains("export PATH"));
-    assert!(!result.contains("agent-worktree"));
+    assert!(!result.contains("agent-workspace"));
     assert!(!result.contains("wt()"));
 }
 
 #[test]
 fn test_remove_wrapper_only_wrapper() {
-    let content = r#"# === agent-worktree BEGIN ===
+    let content = r#"# === agent-workspace BEGIN ===
 wt() { ... }
-# === agent-worktree END ===
+# === agent-workspace END ===
 "#;
     let result = remove_wrapper(content).unwrap();
-    assert!(!result.contains("agent-worktree"));
+    assert!(!result.contains("agent-workspace"));
 }
 
 #[test]
 fn test_remove_wrapper_at_start() {
-    let content = r#"# === agent-worktree BEGIN ===
+    let content = r#"# === agent-workspace BEGIN ===
 wt() { ... }
-# === agent-worktree END ===
+# === agent-workspace END ===
 alias ll='ls -la'
 "#;
     let result = remove_wrapper(content).unwrap();
-    assert!(!result.contains("agent-worktree"));
+    assert!(!result.contains("agent-workspace"));
     assert!(result.contains("alias ll"));
 }
 
 #[test]
 fn test_remove_wrapper_preserves_content_order() {
     let content = r#"line1
-# === agent-worktree BEGIN ===
+# === agent-workspace BEGIN ===
 wt() { ... }
-# === agent-worktree END ===
+# === agent-workspace END ===
 line2
 "#;
     let result = remove_wrapper(content).unwrap();
@@ -226,7 +226,7 @@ line2
 #[test]
 fn test_remove_wrapper_unmatched_begin_errors() {
     let content = r#"line1
-# === agent-worktree BEGIN ===
+# === agent-workspace BEGIN ===
 wt() { ... }
 line2
 "#;
@@ -239,7 +239,7 @@ line2
 fn test_remove_wrapper_unmatched_end_errors() {
     let content = r#"line1
 wt() { ... }
-# === agent-worktree END ===
+# === agent-workspace END ===
 line2
 "#;
     let err = remove_wrapper(content).unwrap_err();
@@ -249,11 +249,11 @@ line2
 
 #[test]
 fn test_remove_wrapper_nested_begin_errors() {
-    let content = r#"# === agent-worktree BEGIN ===
+    let content = r#"# === agent-workspace BEGIN ===
 wt1() { ... }
-# === agent-worktree BEGIN ===
+# === agent-workspace BEGIN ===
 wt2() { ... }
-# === agent-worktree END ===
+# === agent-workspace END ===
 "#;
     let err = remove_wrapper(content).unwrap_err();
     assert!(matches!(err, Error::Other(_)));
@@ -299,9 +299,9 @@ fn test_install_replaces_existing_wrapper() {
 
     // Create config with old wrapper
     let old_content = r#"alias ll='ls -la'
-# === agent-worktree BEGIN ===
+# === agent-workspace BEGIN ===
 old_wt_function() { echo old; }
-# === agent-worktree END ===
+# === agent-workspace END ===
 export PATH=/usr/local/bin
 "#;
     std::fs::write(&config_path, old_content).unwrap();

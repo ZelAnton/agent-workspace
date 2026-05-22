@@ -192,12 +192,12 @@ fn test_sync_uses_project_config_strategy() {
     let (dir, repo, home) = setup_worktree_test_env();
 
     std::fs::write(
-        repo.join(".agent-worktree.toml"),
+        repo.join(".agent-workspace.toml"),
         "[general]\nsync_strategy = \"merge\"\n",
     )
     .unwrap();
     Command::new("git")
-        .args(["add", ".agent-worktree.toml"])
+        .args(["add", ".agent-workspace.toml"])
         .current_dir(&repo)
         .output()
         .unwrap();

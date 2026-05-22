@@ -51,7 +51,7 @@ detect_platform() {
 
 build_current_platform() {
     local platform=$(detect_platform)
-    local target_dir="$NPM_DIR/agent-worktree-$platform/bin"
+    local target_dir="$NPM_DIR/agent-workspace-$platform/bin"
 
     log "Building for $platform..."
 
@@ -63,7 +63,7 @@ build_current_platform() {
     cp target/release/wt "$target_dir/wt"
     chmod +x "$target_dir/wt"
 
-    log "Done: agent-worktree-$platform"
+    log "Done: agent-workspace-$platform"
 }
 
 build_cross_compile() {
@@ -105,22 +105,22 @@ case "${1:-current}" in
         ;;
     all)
         log "Building all platforms (requires cross)..."
-        build_cross_compile "aarch64-apple-darwin" "agent-worktree-darwin-arm64"
-        build_cross_compile "x86_64-apple-darwin" "agent-worktree-darwin-x64"
-        build_cross_compile "x86_64-unknown-linux-gnu" "agent-worktree-linux-x64"
-        build_cross_compile "x86_64-pc-windows-gnu" "agent-worktree-win32-x64" "true"
+        build_cross_compile "aarch64-apple-darwin" "agent-workspace-darwin-arm64"
+        build_cross_compile "x86_64-apple-darwin" "agent-workspace-darwin-x64"
+        build_cross_compile "x86_64-unknown-linux-gnu" "agent-workspace-linux-x64"
+        build_cross_compile "x86_64-pc-windows-gnu" "agent-workspace-win32-x64" "true"
         ;;
     darwin-arm64)
-        build_cross_compile "aarch64-apple-darwin" "agent-worktree-darwin-arm64"
+        build_cross_compile "aarch64-apple-darwin" "agent-workspace-darwin-arm64"
         ;;
     darwin-x64)
-        build_cross_compile "x86_64-apple-darwin" "agent-worktree-darwin-x64"
+        build_cross_compile "x86_64-apple-darwin" "agent-workspace-darwin-x64"
         ;;
     linux-x64)
-        build_cross_compile "x86_64-unknown-linux-gnu" "agent-worktree-linux-x64"
+        build_cross_compile "x86_64-unknown-linux-gnu" "agent-workspace-linux-x64"
         ;;
     win32-x64)
-        build_cross_compile "x86_64-pc-windows-gnu" "agent-worktree-win32-x64" "true"
+        build_cross_compile "x86_64-pc-windows-gnu" "agent-workspace-win32-x64" "true"
         ;;
     *)
         echo "Usage: $0 [current|all|darwin-arm64|darwin-x64|linux-x64|win32-x64]"

@@ -93,7 +93,7 @@ enum Command {
     /// Install shell integration (bash/zsh/fish)
     Setup(commands::SetupArgs),
 
-    /// Create .agent-worktree.toml config file
+    /// Create .agent-workspace.toml config file
     Init(commands::InitArgs),
 
     /// Update to the latest version
