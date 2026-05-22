@@ -74,13 +74,32 @@ Worktrees live under `$AGENT_WORKSPACE_DIR/workspaces/{repo}-{hash}/` where the 
 - `src/shell/` — wrapper script templates and rc-file install/uninstall (strict BEGIN/END marker pairing — refuses to touch a file with orphaned markers).
 - `src/process/` `src/prompt/` `src/update/` `src/util/` — hook execution, dialoguer prompts, daily update check, random branch-name generator (~100 adjectives × ~100 nouns, numeric suffix on collision).
 
+## Install channels and `wt update`
+
+Two install channels, distinguished by a marker file at `~/.agent-workspace/install_channel` (content: `npm` or `shell`):
+
+- **npm** — `npm install -g agent-workspace`. Postinstall (`npm/agent-workspace/install.js`) writes `npm` to the marker.
+- **shell** — `install.sh` / `install.ps1` at repo root. Downloads a prebuilt archive from GitHub Releases, places `wt` at `~/.agent-workspace/bin/wt`, writes `shell` to the marker.
+
+`wt update` (`src/cli/commands/sys/update.rs`) reads the marker via `update::detect_channel()` and branches:
+- `Channel::Npm` → `npm install -g agent-workspace@latest` (legacy path).
+- `Channel::Shell` → `update::self_update()` downloads `agent-workspace-<version>-<platform>.tar.gz` from the GitHub release and uses the `self-replace` crate for atomic binary replacement, then re-invokes `wt setup`.
+
+Missing marker defaults to `Channel::Npm` — keeps existing installs predating the marker working.
+
+The version check (`update::check_update` in `src/update/mod.rs`) hits the **GitHub Releases API** for both channels — GitHub is the canonical truth, npm publishes happen after a GitHub release. Requires a non-empty `User-Agent` header (GitHub returns 403 otherwise — `USER_AGENT` const handles this).
+
+Platform key strings (`darwin-arm64`, `darwin-x64`, `linux-x64`, `win32-x64`) must stay consistent across `update::platform_key()`, `npm/agent-workspace/bin/wt.js`, `install.sh`, `install.ps1`, and the CI release archive naming (`.github/workflows/release.yml`). Changing them requires touching all five.
+
 ## Local-only files
 
 `.gitignore` carves out `*.local.md`, `task_plan.md`, `findings.md`, `progress.md` — use those names freely for scratch notes; they won't be committed. `FILE_TREE.local.md` is the convention for the per-file responsibility doc.
 
 ## Windows specifics
 
-`wt update` reinvokes npm to reinstall the package; on Windows the OS holds an exclusive lock on a running `wt.exe`, so the update fails if any shell is sitting on `wt`. The README and `sys/update.rs` already warn the user, but if you change update flow, preserve this signal.
+For the **shell channel**, `wt update` uses the `self-replace` crate which handles the running-`.exe` lock via the rename-trick (move running exe aside as `.old`, drop new one in place, OS cleans up on next reboot). No user action needed.
+
+For the **npm channel**, `wt update` shells out to `npm install -g`. npm tries to overwrite the running `wt.exe` and fails — users on the npm channel must close all shells running `wt` before updating. Reflect this in any user-facing messaging you add to the npm update path.
 
 The repo's working tree may carry CRLF line endings on Windows despite `.gitattributes` mandating LF — that's stat-cache state from a pre-attributes checkout, not actual file divergence. The committed blobs are LF; pushed commits are clean. Colocated `jj st` may show phantom modifications for files that haven't been re-extracted since `.gitattributes` was added.
 

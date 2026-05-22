@@ -1,0 +1,130 @@
+name: Release
+
+# Triggered by pushing a tag like `v0.11.0`. Produces a GitHub Release with
+# prebuilt binaries for all four supported platforms plus the install scripts,
+# which the shell installer (install.sh / install.ps1) downloads.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write  # required by softprops/action-gh-release
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            platform: linux-x64
+            bin: wt
+          - os: macos-13          # last Intel runner
+            target: x86_64-apple-darwin
+            platform: darwin-x64
+            bin: wt
+          - os: macos-latest      # arm64 by default
+            target: aarch64-apple-darwin
+            platform: darwin-arm64
+            bin: wt
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: win32-x64
+            bin: wt.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # Package the single binary as tar.gz. Windows 10 1803+ ships bsdtar, so
+      # using tar.gz for all platforms keeps `wt update` and install scripts
+      # simple (one archive format, one extractor).
+      - name: Package (Unix)
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: |
+          set -eu
+          VERSION="${{ steps.version.outputs.version }}"
+          PLATFORM="${{ matrix.platform }}"
+          BIN="${{ matrix.bin }}"
+          ARCHIVE="agent-workspace-${VERSION}-${PLATFORM}.tar.gz"
+
+          # Strip debug symbols to shrink the archive.
+          strip "target/${{ matrix.target }}/release/${BIN}" || true
+
+          # tar from inside the release dir so the archive has wt at top level.
+          tar -czf "${ARCHIVE}" -C "target/${{ matrix.target }}/release" "${BIN}"
+          echo "archive=${ARCHIVE}" >> "$GITHUB_OUTPUT"
+        id: package_unix
+
+      - name: Package (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          set -eu
+          VERSION="${{ steps.version.outputs.version }}"
+          PLATFORM="${{ matrix.platform }}"
+          BIN="${{ matrix.bin }}"
+          ARCHIVE="agent-workspace-${VERSION}-${PLATFORM}.tar.gz"
+
+          # Windows runner has tar.exe; use bash for consistent syntax.
+          tar -czf "${ARCHIVE}" -C "target/${{ matrix.target }}/release" "${BIN}"
+          echo "archive=${ARCHIVE}" >> "$GITHUB_OUTPUT"
+        id: package_win
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-workspace-${{ matrix.platform }}
+          path: agent-workspace-*.tar.gz
+          retention-days: 7
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (for install scripts)
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist/
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/agent-workspace-*.tar.gz
+            install.sh
+            install.ps1
+          generate_release_notes: true
+          fail_on_unmatched_files: true

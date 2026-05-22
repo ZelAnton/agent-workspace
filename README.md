@@ -16,21 +16,39 @@ AI coding agents work best with isolated environments:
 
 ## Install
 
+### Quick install (no Node.js required)
+
+**macOS / Linux:**
+
+```bash
+curl -fsSL https://github.com/ZelAnton/agent-workspace/releases/latest/download/install.sh | sh
+```
+
+**Windows (PowerShell):**
+
+```powershell
+iwr https://github.com/ZelAnton/agent-workspace/releases/latest/download/install.ps1 -UseBasicParsing | iex
+```
+
+Installs `wt` to `~/.agent-workspace/bin`, adds it to your PATH, and runs `wt setup` for shell integration.
+
+### Via npm
+
 ```bash
 npm install -g agent-workspace
 ```
 
-Update to the latest version:
+### Update
 
 ```bash
 wt update
 ```
 
-> **Windows note** — `wt update` reinstalls the npm package, which fails if
-> any `wt` process is running because Windows locks the running `.exe`.
-> Close all shells running `wt` before updating.
+`wt update` detects how `wt` was installed (`~/.agent-workspace/install_channel`):
+- **Shell installer** — downloads the latest release from GitHub and atomically replaces itself (uses [`self_replace`](https://crates.io/crates/self-replace) for the Windows .exe rename-trick).
+- **npm** — re-runs `npm install -g agent-workspace@latest`.
 
-Shell integration is installed automatically. To reinstall manually:
+Shell integration is installed automatically by both channels. To reinstall manually:
 
 ```bash
 wt setup

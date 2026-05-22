@@ -1,9 +1,19 @@
 // ===========================================================================
-// cli/commands/update - Self-update Command
+// cli/commands/update - Self-update Command (channel-aware)
 // ===========================================================================
+//
+// `wt update` reads the install_channel marker in the base dir and dispatches:
+//   - Channel::Npm   → `npm install -g agent-workspace@latest`
+//   - Channel::Shell → download from GitHub Releases + atomic self-replace
+//                      + re-run `wt setup` for any wrapper template changes
+//
+// Marker is missing for legacy installs (defaults to Npm). New installs stamp
+// the marker explicitly: npm via install.js postinstall, shell via install.sh
+// / install.ps1.
 
 use crate::cli;
-use crate::update;
+use crate::config::Config;
+use crate::update::{self, Channel};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -35,24 +45,53 @@ pub fn run() -> cli::Result<()> {
 
     let action = determine_action(update::check_update(VERSION))?;
 
-    match action {
+    let latest = match action {
         UpdateAction::AlreadyUpToDate => {
             eprintln!("Already up to date ({})", VERSION);
+            return Ok(());
         }
-        UpdateAction::UpdateAvailable(latest) => {
-            eprintln!("Updating agent-workspace: {} -> {}", VERSION, latest);
+        UpdateAction::UpdateAvailable(v) => v,
+    };
 
-            let status = std::process::Command::new("npm")
-                .args(npm_install_args())
-                .status()
-                .map_err(|e| cli::Error::Other(format!("failed to run npm: {e}")))?;
+    eprintln!("Updating agent-workspace: {} -> {}", VERSION, latest);
 
-            if !status.success() {
-                return Err(cli::Error::Other("npm install failed".into()));
-            }
+    let base_dir = Config::base_dir().map_err(|e| cli::Error::Other(e.to_string()))?;
+    let channel = update::detect_channel(&base_dir);
 
-            eprintln!("Updated successfully!");
-        }
+    match channel {
+        Channel::Npm => run_npm_update()?,
+        Channel::Shell => run_shell_update(&latest)?,
+    }
+
+    eprintln!("Updated successfully!");
+    Ok(())
+}
+
+fn run_npm_update() -> cli::Result<()> {
+    let status = std::process::Command::new("npm")
+        .args(npm_install_args())
+        .status()
+        .map_err(|e| cli::Error::Other(format!("failed to run npm: {e}")))?;
+
+    if !status.success() {
+        return Err(cli::Error::Other("npm install failed".into()));
+    }
+    Ok(())
+}
+
+fn run_shell_update(latest: &str) -> cli::Result<()> {
+    // self_update atomically replaces the currently running binary.
+    update::self_update(latest)
+        .map_err(|e| cli::Error::Other(format!("self-update failed: {e}")))?;
+
+    // Re-run `wt setup` from the new binary so any wrapper template changes
+    // propagate. The current process is the *old* binary — spawn a subprocess
+    // pointing at the path of the running exe (which now contains the new
+    // bytes after self_replace).
+    if let Ok(current_exe) = std::env::current_exe() {
+        let _ = std::process::Command::new(&current_exe)
+            .arg("setup")
+            .status();
     }
 
     Ok(())
