@@ -107,14 +107,23 @@ The repo's working tree may carry CRLF line endings on Windows despite `.gitattr
 
 The repo uses [jujutsu (`jj`)](https://jj-vcs.github.io/jj/) (colocated with git). Use `jj` commands; the canonical workflow:
 
+- **Per-prompt evaluation (mandatory).** Before any edits, run `jj st` and classify the incoming prompt against the current change description:
+
+	| Signal in prompt | Category | Action |
+	|---|---|---|
+	| Same topic, refinement, follow-up of in-progress work | **Continuation** | Just work. jj auto-folds edits into the current change. |
+	| Same change but goal has been refined or expanded | **Scope shift** | `jj describe -m "<refined summary>"`. **Don't** start a new change. |
+	| Orthogonal topic, different area, "теперь сделай X" | **New work** | If current change is finished → `jj new -m "<summary>"` (descendant). If still in progress → `jj new @- -m "..."` (parallel sibling). |
+
+	Reliable signals: word changes like "теперь" / "now" / "next" / "также сделай" / "and also" usually mean **new work** or **scope shift**. Imperative follow-ups inside the same scope ("исправь это", "почини", "продолжи") mean **continuation**. When in doubt, ask the user.
+
+	A `UserPromptSubmit` hook (`.claude/hooks/jj-prompt-reminder.sh`) injects this same checklist into context each turn — the hook is the reminder, this table is the rulebook.
+
 - **Describe early.** When starting a new piece of work, immediately set the change description:
 	```
 	jj describe -m "Concise summary"
 	```
-	Small follow-ups for the same task get folded into the current change without asking — keep extending the same `jj` change, don't spawn one per edit. If the scope shifts, run `jj describe -m "..."` again so the description matches reality.
-- **Unrelated work mid-task.** If the user requests something orthogonal, ask before splitting:
-	- Current change finished? → `jj new -m "..."` (descendant).
-	- Current change still in progress? → `jj new @- -m "..."` (parallel sibling, so you can return to the original later).
+	The description should reflect intent *before* the work — not be backfilled at commit time. Keep extending the same `jj` change for follow-ups; don't spawn one per edit.
 - **Sync on the user's trigger.** When the user says `pull` (or `push`/`sync`), run the full handshake:
 	1. `jj git fetch` first — picks up any remote movement (CI release commits, etc.).
 	2. Rebase if `main@origin` advanced: `jj rebase -r @- -d main@origin`.

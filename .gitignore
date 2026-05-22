@@ -9,6 +9,13 @@ npm/*/bin/wt
 npm/*/bin/wt.exe
 npm/*/*.tgz
 
+# Override global ~/.gitignore that excludes `.claude` — this project ships
+# its own Claude Code hook configuration to contributors. Keep .local.json
+# excluded; it's per-user.
+!.claude/
+!.claude/**
+.claude/settings.local.json
+
 # Added by cargo
 #
 # already existing elements were commented out
