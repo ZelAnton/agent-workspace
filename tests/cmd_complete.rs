@@ -81,6 +81,7 @@ fn test_complete_dynamic_branches() {
     let output = Command::new(wt_binary())
         .env("COMPLETE", "bash")
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .env("_CLAP_COMPLETE_INDEX", "3")
         .env("_CLAP_COMPLETE_COMP_TYPE", "9")
         .env("_CLAP_COMPLETE_SPACE", "true")

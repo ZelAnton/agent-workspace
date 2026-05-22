@@ -48,6 +48,7 @@ fn test_clean_after_merge() {
         .args(["new", "clean-test"])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
 
@@ -67,6 +68,7 @@ fn test_clean_after_merge() {
         .arg("clean")
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt clean failed");
 
@@ -81,6 +83,7 @@ fn test_clean_remvs_merged_worktree() {
         .args(["new", "clean-merged"])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
 
@@ -100,6 +103,7 @@ fn test_clean_remvs_merged_worktree() {
         .arg("clean")
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt clean failed");
 
@@ -121,6 +125,7 @@ fn test_clean_dry_run() {
         .args(["new", "clean-dry"])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
     assert!(output.status.success());
@@ -130,6 +135,7 @@ fn test_clean_dry_run() {
         .args(["clean", "--dry-run"])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt clean --dry-run failed");
 
@@ -141,6 +147,7 @@ fn test_clean_dry_run() {
         .arg("ls")
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt ls failed");
     let stdout = String::from_utf8_lossy(&ls_output.stdout);
@@ -156,33 +163,27 @@ fn test_clean_skips_dirty_worktree() {
     // A worktree with no committed diff but uncommitted edits is NOT eligible
     // for clean — git would refuse non-force removal anyway, and silently
     // discarding in-flight work would be a footgun.
-    let (_dir, repo, home) = setup_worktree_test_env();
+    let (dir, repo, home) = setup_worktree_test_env();
 
+    // Use --path-file so we get the worktree path directly without parsing
+    // `wt ls -l` output (whose `~`-prefix shortening on hosts where the
+    // tempdir happens to live under $HOME breaks naive Path::is_absolute
+    // detection).
+    let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
-        .args(["new", "dirty-clean"])
+        .args([
+            "new",
+            "dirty-clean",
+            "--path-file",
+            path_file.to_str().unwrap(),
+        ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
     assert!(output.status.success());
-
-    // Locate the worktree path and add an uncommitted file there
-    let ls_output = Command::new(wt_binary())
-        .args(["ls", "-l"])
-        .current_dir(&repo)
-        .env("HOME", &home)
-        .output()
-        .expect("wt ls failed");
-    let stdout = String::from_utf8_lossy(&ls_output.stdout);
-    let wt_line = stdout
-        .lines()
-        .find(|l| l.contains("dirty-clean"))
-        .expect("worktree should appear in ls -l");
-    // ls -l output contains the path; pull whatever looks like a path token
-    let wt_path = wt_line
-        .split_whitespace()
-        .find(|tok| tok.starts_with('/'))
-        .expect("ls -l should contain absolute path");
+    let wt_path = read_path_file(&path_file).trim().to_string();
     std::fs::write(format!("{wt_path}/scratch.tmp"), "in-flight\n").unwrap();
 
     // Dry-run should report the dirty skip, not "Would clean"
@@ -190,6 +191,7 @@ fn test_clean_skips_dirty_worktree() {
         .args(["clean", "--dry-run"])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt clean --dry-run failed");
     let stderr = String::from_utf8_lossy(&output.stderr);

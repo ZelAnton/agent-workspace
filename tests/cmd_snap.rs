@@ -28,6 +28,7 @@ fn test_new_with_snap_outputs_two_lines() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
 
@@ -42,6 +43,7 @@ fn test_new_with_snap_outputs_two_lines() {
         .args(["rm", "snap-test", "-f"])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output();
 }
 
@@ -64,6 +66,7 @@ fn test_new_with_snap_creates_metadata() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
 
@@ -88,6 +91,7 @@ fn test_new_with_snap_creates_metadata() {
         .args(["rm", "snap-meta-test", "-f"])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output();
 }
 

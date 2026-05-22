@@ -43,6 +43,8 @@ fn test_new_with_base() {
         .args(["new", "feature-from-main", "--base", "main"])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
 
@@ -72,6 +74,8 @@ fn test_new_generates_random_name() {
         .args(["new", "--path-file", path_file.to_str().unwrap()])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
 
@@ -89,6 +93,8 @@ fn test_new_creates_metadata_file() {
         .args(["new", "meta-test"])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
 
@@ -125,6 +131,8 @@ fn test_worktree_lifecycle_new_ls_rm() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
 
@@ -137,6 +145,8 @@ fn test_worktree_lifecycle_new_ls_rm() {
             .arg("ls")
             .current_dir(&repo)
             .env("HOME", &home)
+            .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
+            .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
             .output()
             .expect("wt ls failed");
 
@@ -148,6 +158,8 @@ fn test_worktree_lifecycle_new_ls_rm() {
             .args(["rm", "feature-test", "--force"])
             .current_dir(&repo)
             .env("HOME", &home)
+            .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
+            .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
             .output()
             .expect("wt rm failed");
 
@@ -169,6 +181,8 @@ fn test_full_worktree_lifecycle() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
 
@@ -185,6 +199,8 @@ fn test_full_worktree_lifecycle() {
         .arg("ls")
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt ls failed");
 
@@ -197,6 +213,8 @@ fn test_full_worktree_lifecycle() {
         .args(["rm", "feature-lifecycle", "--force"])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt rm failed");
 
@@ -222,6 +240,8 @@ fn test_nested_snap_is_rejected() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new outer failed");
     assert!(output.status.success());
@@ -240,6 +260,8 @@ fn test_nested_snap_is_rejected() {
         ])
         .current_dir(&outer_wt)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new -s failed");
 

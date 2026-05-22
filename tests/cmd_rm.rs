@@ -54,6 +54,7 @@ fn test_rm_force_dirty_worktree() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
 
@@ -71,6 +72,7 @@ fn test_rm_force_dirty_worktree() {
         .args(["rm", "rm-dirty", "--force"])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt rm failed");
 
@@ -94,6 +96,7 @@ fn test_rm_dot_without_wrapper_is_rejected() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
     assert!(output.status.success());
@@ -104,6 +107,7 @@ fn test_rm_dot_without_wrapper_is_rejected() {
         .args(["rm", "."])
         .current_dir(&wt_path)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt rm . failed");
 
@@ -135,6 +139,7 @@ fn test_rm_dot_with_wrapper_works() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
     assert!(output.status.success());
@@ -147,6 +152,7 @@ fn test_rm_dot_with_wrapper_works() {
         .args(["rm", ".", "--path-file", rm_path_file.to_str().unwrap()])
         .current_dir(&wt_path)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt rm . failed");
     assert!(

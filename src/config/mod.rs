@@ -128,8 +128,13 @@ impl Config {
     pub fn load() -> Result<Self> {
         let base_dir = Self::base_dir()?;
         // Canonicalize base_dir 解决 macOS /var -> /private/var symlink，
-        // 确保与 git worktree list 返回的 canonicalized 路径一致
+        // 确保与 git worktree list 返回的 canonicalized 路径一致。
+        // Windows-specific: std::fs::canonicalize returns a verbatim path
+        // (`\\?\C:\...`) which git refuses to accept. Strip the prefix —
+        // canonicalize is mostly noise on Windows since there are no
+        // /var-style symlinks in user-data paths.
         let base_dir = base_dir.canonicalize().unwrap_or(base_dir);
+        let base_dir = strip_verbatim_prefix(base_dir);
         let workspaces_dir = base_dir.join("workspaces");
 
         let global = Self::load_global(&base_dir)?;
@@ -219,6 +224,28 @@ fn merge_hooks(global: &[String], project: &[String]) -> Vec<String> {
     } else {
         project.to_vec()
     }
+}
+
+/// Strip Windows verbatim path prefix (`\\?\`) from a canonicalized path.
+///
+/// `std::fs::canonicalize` on Windows returns paths prefixed with `\\?\`,
+/// which git (and many other Win32 tools) refuse to accept. Verbatim paths
+/// also break naive `Path::join` comparisons. We strip the prefix unless the
+/// path is a UNC verbatim (`\\?\UNC\...`), where stripping would lose
+/// information.
+///
+/// On non-Windows targets this is a no-op identity function.
+pub(crate) fn strip_verbatim_prefix(p: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let s = p.to_string_lossy();
+        if let Some(rest) = s.strip_prefix(r"\\?\") {
+            if !rest.starts_with("UNC\\") {
+                return PathBuf::from(rest.to_string());
+            }
+        }
+    }
+    p
 }
 
 #[cfg(test)]

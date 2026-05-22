@@ -54,6 +54,7 @@ fn test_mv_existing_branch() {
         .args(["new", "mv-old-name"])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
 
@@ -67,6 +68,7 @@ fn test_mv_existing_branch() {
         .args(["mv", "mv-old-name", "mv-new-name"])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt mv failed");
 
@@ -82,6 +84,7 @@ fn test_mv_renames_worktree() {
         .args(["new", "mv-src"])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
 
@@ -95,6 +98,7 @@ fn test_mv_renames_worktree() {
         .args(["mv", "mv-src", "mv-dst"])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt mv failed");
 

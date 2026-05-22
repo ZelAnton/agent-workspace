@@ -51,6 +51,7 @@ fn test_ls_shows_worktree_details() {
         .args(["new", "ls-test-branch"])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
 
@@ -64,6 +65,7 @@ fn test_ls_shows_worktree_details() {
         .arg("ls")
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt ls failed");
 
@@ -83,6 +85,7 @@ fn test_ls_with_multiple_worktrees() {
             .args(["new", name])
             .current_dir(&repo)
             .env("HOME", &home)
+            .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
             .output();
     }
 
@@ -90,6 +93,7 @@ fn test_ls_with_multiple_worktrees() {
         .arg("ls")
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt ls failed");
 

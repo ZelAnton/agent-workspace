@@ -40,6 +40,7 @@ fn test_status_in_worktree() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
     assert!(output.status.success());
@@ -50,6 +51,7 @@ fn test_status_in_worktree() {
         .arg("status")
         .current_dir(&wt_path)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt status failed");
 
@@ -91,6 +93,7 @@ fn test_status_with_commits() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
     assert!(output.status.success());
@@ -114,6 +117,7 @@ fn test_status_with_commits() {
         .arg("status")
         .current_dir(&wt_path)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt status failed");
 
@@ -154,6 +158,7 @@ fn test_status_with_base_branch() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
     assert!(output.status.success());
@@ -164,6 +169,7 @@ fn test_status_with_base_branch() {
         .arg("status")
         .current_dir(&wt_path)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt status failed");
 

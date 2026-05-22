@@ -82,6 +82,7 @@ fn test_sync_on_feature_branch() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
 
@@ -97,6 +98,7 @@ fn test_sync_on_feature_branch() {
         .arg("sync")
         .current_dir(&wt_path)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt sync failed");
 
@@ -118,6 +120,7 @@ fn test_sync_on_feature_with_updates() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
 
@@ -145,6 +148,7 @@ fn test_sync_on_feature_with_updates() {
         .arg("sync")
         .current_dir(&wt_path)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt sync failed");
 
@@ -166,6 +170,7 @@ fn test_sync_from_nonexistent_branch_fails() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
     assert!(output.status.success());
@@ -176,6 +181,7 @@ fn test_sync_from_nonexistent_branch_fails() {
         .args(["sync", "--from", "nonexistent-branch-xyz"])
         .current_dir(&wt_path)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt sync --from failed");
 
@@ -217,6 +223,7 @@ fn test_sync_uses_project_config_strategy() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
     assert!(output.status.success());
@@ -239,6 +246,7 @@ fn test_sync_uses_project_config_strategy() {
         .arg("sync")
         .current_dir(&wt_path)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt sync failed");
 
@@ -288,6 +296,7 @@ fn test_sync_from_specific_branch() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
     assert!(output.status.success());
@@ -299,6 +308,7 @@ fn test_sync_from_specific_branch() {
         .args(["sync", "--from", "source-branch", "--strategy", "merge"])
         .current_dir(&wt_path)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt sync --from failed");
 

@@ -13,6 +13,21 @@ pub fn wt_binary() -> PathBuf {
     path
 }
 
+/// Build a `Command` for the `wt` binary with test-isolation env vars applied.
+///
+/// Setting `HOME` is enough on Unix, where `directories::BaseDirs` reads it
+/// directly. On Windows that crate reads the user profile via the
+/// `SHGetKnownFolderPath` WinAPI — env vars don't influence it — so we also
+/// set `AGENT_WORKSPACE_DIR`, which `Config::base_dir()` (in
+/// `src/config/mod.rs`) checks before falling back to `BaseDirs`. This makes
+/// tests isolate cross-platform.
+pub fn wt_command(home: &Path) -> Command {
+    let mut cmd = Command::new(wt_binary());
+    cmd.env("HOME", home);
+    cmd.env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"));
+    cmd
+}
+
 pub fn create_path_file(dir: &Path) -> PathBuf {
     dir.join(".wt-path")
 }

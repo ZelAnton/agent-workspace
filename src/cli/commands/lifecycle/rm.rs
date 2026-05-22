@@ -56,6 +56,14 @@ pub fn run(args: RmArgs, config: &Config, path_file: Option<&Path>) -> Result<()
         ));
     }
 
+    // On Windows the OS holds an exclusive handle on every process's cwd —
+    // git's directory delete would fail with "Permission denied" if we sit
+    // on the worktree while removing it. Switch to the main repo *before*
+    // the remove, not after. Harmless on Unix (lazy-unlink semantics).
+    if inside_target {
+        std::env::set_current_dir(&main_path).ok();
+    }
+
     // Remove worktree
     git::remove_worktree(&wt_path, args.force)?;
 

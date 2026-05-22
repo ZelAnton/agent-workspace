@@ -47,6 +47,7 @@ fn test_cd_to_existing_worktree() {
         .args(["new", "cd-target"])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
 
@@ -66,6 +67,7 @@ fn test_cd_to_existing_worktree() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt cd failed");
 
@@ -89,6 +91,7 @@ fn test_cd_returns_correct_path() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
 
@@ -110,6 +113,7 @@ fn test_cd_returns_correct_path() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt cd failed");
 

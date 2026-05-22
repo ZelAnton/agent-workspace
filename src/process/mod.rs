@@ -207,8 +207,11 @@ mod tests {
         let result = run_hooks(&hooks, dir.path());
         assert!(result.is_ok());
 
+        // Lines are trimmed because cmd.exe's `echo` preserves whitespace
+        // between the argument and the redirect operator — `echo one >> f`
+        // writes "one \n" on Windows, "one\n" on Unix.
         let content = std::fs::read_to_string(&file).unwrap();
-        let lines: Vec<&str> = content.lines().collect();
+        let lines: Vec<&str> = content.lines().map(str::trim).collect();
         assert_eq!(lines, vec!["one", "two", "three"]);
     }
 }

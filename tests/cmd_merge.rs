@@ -40,6 +40,7 @@ fn test_merge_from_feature_branch() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
 
@@ -67,6 +68,7 @@ fn test_merge_from_feature_branch() {
         .args(["merge", "--strategy", "squash"])
         .current_dir(&wt_path)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt merge failed");
 
@@ -88,6 +90,7 @@ fn test_merge_with_changes() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
 
@@ -115,6 +118,7 @@ fn test_merge_with_changes() {
         .args(["merge"])
         .current_dir(&wt_path)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt merge failed");
 
@@ -137,6 +141,7 @@ fn test_merge_delete_removes_worktree() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
     assert!(
@@ -163,6 +168,7 @@ fn test_merge_delete_removes_worktree() {
         .args(["merge", "--delete"])
         .current_dir(&wt_path)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt merge --delete failed");
 
@@ -190,6 +196,7 @@ fn test_merge_conflict_rejected() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
 
@@ -229,6 +236,7 @@ fn test_merge_conflict_rejected() {
         .args(["merge"])
         .current_dir(&wt_path)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt merge failed");
 
@@ -262,6 +270,7 @@ fn test_merge_into_nonexistent_branch_fails() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
     assert!(output.status.success());
@@ -272,6 +281,7 @@ fn test_merge_into_nonexistent_branch_fails() {
         .args(["merge", "--into", "nonexistent-branch-xyz"])
         .current_dir(&wt_path)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt merge --into failed");
 
@@ -301,6 +311,7 @@ fn test_merge_into_branch_held_by_another_worktree_fails() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new src failed");
     assert!(output.status.success());
@@ -332,6 +343,7 @@ fn test_merge_into_branch_held_by_another_worktree_fails() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new busy failed");
     assert!(output.status.success());
@@ -341,6 +353,7 @@ fn test_merge_into_branch_held_by_another_worktree_fails() {
         .args(["merge", "--into", "busy-target"])
         .current_dir(&src_wt)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt merge --into busy failed");
 
@@ -372,6 +385,7 @@ fn test_merge_already_up_to_date_with_merge_strategy() {
         ])
         .current_dir(&repo)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt new failed");
     assert!(output.status.success());
@@ -383,6 +397,7 @@ fn test_merge_already_up_to_date_with_merge_strategy() {
         .args(["merge", "--strategy", "merge", "-d"])
         .current_dir(&wt_path)
         .env("HOME", &home)
+        .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
         .expect("wt merge failed");
 
