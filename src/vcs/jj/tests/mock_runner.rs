@@ -161,6 +161,169 @@ fn merge_continue_explains_no_in_progress_state() {
 }
 
 // ---------------------------------------------------------------------------
+// Review regression tests
+// ---------------------------------------------------------------------------
+
+/// Review fix #3: `workspace_name_for_path` must use the workspace's
+/// registered `name` field from `jj workspace list`, not a re-derivation
+/// from the path basename. Regression for the `feat/x` → ws name
+/// `feat_x` mismatch.
+#[test]
+fn workspace_name_for_path_uses_registered_name_not_basename() {
+    use crate::vcs::jj::worktree::workspace_name_for_path;
+    let list_out = "feat_x\tdeadbeef\tfeat/x\n";
+    let root_path = if cfg!(windows) { "C:\\repo\\wt\\feat\\x" } else { "/repo/wt/feat/x" };
+    let mock = MockRunner::new()
+        .expect_when(
+            |cmd| cmd.to_string().starts_with("jj workspace list -T"),
+            ok_str(list_out),
+        )
+        .expect_when(
+            |cmd| cmd.to_string().starts_with("jj workspace root --name feat_x"),
+            ok_str(format!("{root_path}\n")),
+        );
+
+    // The path argument is the same dir jj reported — exercises the equality
+    // branch without going through canonicalize (the dir doesn't exist).
+    let result = workspace_name_for_path(&mock, std::path::Path::new(root_path)).unwrap();
+    assert_eq!(
+        result, "feat_x",
+        "must use the workspace's registered name, not basename ('x')"
+    );
+}
+
+/// Review fix #4: jj merge() must return Ok(()) without spawning any
+/// `jj new` when `branch` has no commits the working copy lacks. Prevents
+/// degenerate merge commits during `wt sync --strategy=merge` on an
+/// up-to-date worktree.
+#[test]
+fn jj_merge_noop_when_branch_already_in_ancestors() {
+    use procpilot::testing::ok_str;
+    // The pre-flight `commit_count_via_revset("(branch) ~ ancestors(@)")`
+    // emits an empty `jj log` — count is 0, merge() returns Ok(()) early.
+    let mock = MockRunner::new().expect_when(
+        |cmd| {
+            let s = cmd.to_string();
+            s.starts_with("jj log -r")
+                && s.contains("(branch) ~ ancestors(@)")
+        },
+        ok_str(""),
+    );
+    let backend = JjBackend::with_runner(Arc::new(mock));
+    backend.merge("branch", false, false, None).unwrap();
+    // If the no-op short-circuit failed, MockRunner's strict-by-default
+    // mode would panic on the unexpected `jj new` invocation.
+}
+
+/// Review round-2 fix #3: `detect_trunk` must return a deterministic
+/// answer when `trunk()` resolves to a commit with multiple local
+/// bookmarks. Regression for non-deterministic ordering across jj
+/// versions / hash-map iteration shuffles.
+#[test]
+fn detect_trunk_prefers_main_over_master_when_both_on_trunk_commit() {
+    // jj emits the bookmarks in some order; we pin selection to "main"
+    // first regardless. Putting master first in the mock output stresses
+    // the priority logic.
+    let mock = MockRunner::new().expect_when(
+        |cmd| {
+            let s = cmd.to_string();
+            // Cmd::display single-quotes `trunk()` because of the parens.
+            s.starts_with("jj log -r 'trunk()'")
+        },
+        ok_str("master\nmain\n"),
+    );
+    let backend = JjBackend::with_runner(Arc::new(mock));
+    assert_eq!(backend.detect_trunk().unwrap(), "main");
+}
+
+/// Same regression with reverse ordering — selection must NOT depend on
+/// the order jj emits names.
+#[test]
+fn detect_trunk_prefers_main_regardless_of_emission_order() {
+    let mock = MockRunner::new().expect_when(
+        |cmd| cmd.to_string().starts_with("jj log -r 'trunk()'"),
+        ok_str("main\nmaster\n"),
+    );
+    let backend = JjBackend::with_runner(Arc::new(mock));
+    assert_eq!(backend.detect_trunk().unwrap(), "main");
+}
+
+/// R3-Fix #3: workspace_name_for must escape newlines so embedded \\n in
+/// a branch name doesn't break the WORKSPACE_TEMPLATE parsing (one row
+/// per line, tab-separated).
+#[test]
+fn workspace_name_for_replaces_newline_with_underscore() {
+    use crate::vcs::jj::worktree::workspace_name_for;
+    assert_eq!(workspace_name_for("feat\nx"), "feat_x");
+    assert_eq!(workspace_name_for("a\rb\nc"), "a_b_c");
+    assert_eq!(workspace_name_for("normal-name"), "normal-name");
+}
+
+/// When neither main nor master is attached but other bookmarks are, fall
+/// back to lex-smallest (alphabetical) — still deterministic.
+#[test]
+fn detect_trunk_lex_smallest_when_no_well_known_name() {
+    let mock = MockRunner::new().expect_when(
+        |cmd| cmd.to_string().starts_with("jj log -r 'trunk()'"),
+        ok_str("zeta\nalpha\nbeta\n"),
+    );
+    let backend = JjBackend::with_runner(Arc::new(mock));
+    assert_eq!(backend.detect_trunk().unwrap(), "alpha");
+}
+
+/// R4 review: stress detect_trunk's lex-smallest fallback with a larger,
+/// non-trivially-shuffled set. Three names could pass with a no-op sort
+/// by chance — exercise more to pin the actual sort.
+#[test]
+fn detect_trunk_lex_smallest_stable_with_many_shuffled_names() {
+    // 10 names in reverse-alphabetical order. Any working sort returns "a-feat".
+    // A no-op (or fixed-order picker) would return "z-feat" or similar.
+    let mock = MockRunner::new().expect_when(
+        |cmd| cmd.to_string().starts_with("jj log -r 'trunk()'"),
+        ok_str("z-feat\ny-feat\nx-feat\nw-feat\nv-feat\nu-feat\nt-feat\ns-feat\nr-feat\na-feat\n"),
+    );
+    let backend = JjBackend::with_runner(Arc::new(mock));
+    assert_eq!(backend.detect_trunk().unwrap(), "a-feat");
+}
+
+/// R4 review: full slash-branch round-trip — the motivating scenario for
+/// R1-Fix #3. Branch `feat/x` → ws name `feat_x` (slash → underscore via
+/// `workspace_name_for`) → workspace path under `<wt_dir>/feat/x`. The
+/// path→name lookup must return `feat_x`, not `x` (basename).
+#[test]
+fn workspace_name_for_path_slash_branch_full_round_trip() {
+    use crate::vcs::jj::worktree::{workspace_name_for, workspace_name_for_path};
+
+    // Step 1: derive ws name from branch. Confirms the contract.
+    assert_eq!(workspace_name_for("feat/x"), "feat_x");
+
+    // Step 2: simulate `jj workspace list` showing this ws at the slash
+    // path. Path comparison should match by the registered name even
+    // though the path's basename ("x") would yield the wrong derivation.
+    let list_out = "feat_x\tdeadbeef\tfeat/x\n";
+    let path_str = if cfg!(windows) {
+        "C:\\repo\\wt\\feat\\x"
+    } else {
+        "/repo/wt/feat/x"
+    };
+    let mock = MockRunner::new()
+        .expect_when(
+            |cmd| cmd.to_string().starts_with("jj workspace list -T"),
+            ok_str(list_out),
+        )
+        .expect_when(
+            |cmd| cmd.to_string().starts_with("jj workspace root --name feat_x"),
+            ok_str(format!("{path_str}\n")),
+        );
+
+    let result = workspace_name_for_path(&mock, std::path::Path::new(path_str)).unwrap();
+    assert_eq!(
+        result, "feat_x",
+        "slash-branch round-trip must return 'feat_x' (registered name), not 'x' (path basename)"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // F-3: parse_jj_stat_footer — pure parser tests
 // ---------------------------------------------------------------------------
 

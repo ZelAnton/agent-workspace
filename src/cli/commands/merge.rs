@@ -215,22 +215,32 @@ pub fn execute_merge(branch: &str, trunk: &str, strategy: MergeStrategy) -> Resu
     let log = vcs::log_oneline(trunk, branch).unwrap_or_default();
     let msg = build_merge_message(branch, &log);
 
-    // Both strategies use the same pattern post-refactor:
-    //   1. Pre-check `commit_count` for "already up to date" (returning
-    //      false means cleanup paths know nothing actually happened).
-    //   2. Single `vcs::merge(...)` call with `message=Some(_)` — the
-    //      backend handles both the merge mechanic and the resulting
-    //      commit description (git: stage + commit; jj: atomic).
+    // No-op detection in two layers so cleanup paths only run when
+    // something actually changed:
     //
-    // The pre-Phase-F `has_staged_changes()` gate was git-specific
-    // (jj has no staging area). After F-3, jj's has_staged_changes is
-    // hardcoded to false — so the gate became git-only anyway. Replacing
-    // it with a backend-agnostic commit_count pre-check makes both paths
-    // symmetric and removes the last leak of git's staging concept into
-    // command-layer code.
+    //   1. `commit_count(trunk, branch) == 0` — branch has no commits
+    //      trunk lacks (sha-level). Cheap; catches the common case.
+    //   2. **Post-merge `current_commit` comparison** — catches the
+    //      cherry-pick scenario where branch has commits trunk lacks (by
+    //      sha) but their content is already present in trunk under
+    //      different shas. `git merge --squash` stages nothing in that
+    //      case, the commit step is skipped, and HEAD doesn't advance.
+    //      Comparing HEAD before/after gives a backend-agnostic signal.
+    //
+    // **Why not `diff_shortstat(trunk, branch) == 0/0` as the pre-check?**
+    // The git impl uses `git diff --shortstat trunk...branch` (three-dot
+    // / merge-base diff), which shows branch's accumulated work from the
+    // merge base — non-zero in the cherry-pick case even though `merge
+    // --squash` would stage nothing. The three-dot diff is the right
+    // shape for "what does this branch add to its merge base" but the
+    // wrong shape for "would a squash merge produce content changes".
+    // A two-dot tree diff `git diff trunk branch` would be correct, but
+    // we don't expose that primitive — and the post-merge check below
+    // works for both backends without a new trait method.
     if vcs::commit_count(trunk, branch)? == 0 {
         return Ok(false);
     }
+    let pre_commit = vcs::current_commit().ok();
     match strategy {
         MergeStrategy::Squash => {
             vcs::merge(branch, true, false, Some(&msg))?;
@@ -238,6 +248,17 @@ pub fn execute_merge(branch: &str, trunk: &str, strategy: MergeStrategy) -> Resu
         MergeStrategy::Merge => {
             vcs::merge(branch, false, true, Some(&msg))?;
         }
+    }
+    let post_commit = vcs::current_commit().ok();
+    // Git: HEAD stays put when `merge --squash` stages nothing and the
+    //      commit step is skipped — pre == post → return false.
+    // Jj:  `@` always advances on merge() (new change for squash, merge
+    //      commit for non-squash), so pre != post → return true. Jj's
+    //      pre-flight check inside `merge()` catches the "branch is
+    //      ancestor of @" no-op upstream; the cherry-pick-where-content-
+    //      already-applied case in jj is an accepted limitation.
+    if pre_commit.is_some() && pre_commit == post_commit {
+        return Ok(false);
     }
     Ok(true)
 }

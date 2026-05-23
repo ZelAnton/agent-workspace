@@ -219,22 +219,88 @@ impl Config {
     }
 
     fn load_project() -> Result<ProjectConfig> {
-        // Resolve from the main repo root (via git --git-common-dir) so the
-        // same `.agent-workspace.toml` applies whether the user is in the main
-        // repo, a worktree root, or any subdirectory of either. Reading
-        // CWD-relative would silently miss the file inside worktrees.
-        // Outside any git repo, fall back to default — non-git commands
-        // (setup/update) must still load.
-        let path = match crate::vcs::repo_root() {
-            Ok(root) => root.join(".agent-workspace.toml"),
+        // Resolve the **main repo** root so the same `.agent-workspace.toml`
+        // applies whether the user is in the main repo, a worktree, or a
+        // subdirectory of either.
+        //
+        // **Why not just `crate::vcs::repo_root()`?** This runs BEFORE
+        // `Cli::run` calls `set_backend(...)`, so the lazy-init GitBackend
+        // is active. In a pure-jj repo (no `.git`), GitBackend's
+        // `git rev-parse --git-common-dir` fails → `Error::NotInRepo` →
+        // project config silently lost (R2-Fix #1 motivation).
+        //
+        // **Why not just `vcs_runner::detect_vcs`?** It checks
+        // `dir.join(".git").exists()` which is true for both gitdirs AND
+        // gitlink files. In a git worktree, `.git` is a FILE pointing at
+        // the main repo's `.git/worktrees/<name>`. detect_vcs stops at
+        // the worktree and returns its path instead of the main repo —
+        // R3 regression review caught this. The pre-Phase-F path used
+        // git's own `--git-common-dir` which resolves the gitlink.
+        //
+        // The hybrid: ask git first (handles worktrees correctly via
+        // `--git-common-dir`); fall back to detect_vcs for pure-jj repos
+        // or filesystems where git isn't available.
+        let cwd = match std::env::current_dir() {
+            Ok(c) => c,
             Err(_) => return Ok(ProjectConfig::default()),
         };
+        let root = match resolve_main_repo_root(&cwd) {
+            Some(r) => r,
+            None => return Ok(ProjectConfig::default()),
+        };
+        let path = root.join(".agent-workspace.toml");
         if !path.exists() {
             return Ok(ProjectConfig::default());
         }
         let content = std::fs::read_to_string(&path)?;
         Ok(toml::from_str(&content)?)
     }
+}
+
+/// Resolve the **main repo** root for project-config discovery, handling
+/// git worktrees correctly.
+///
+/// This is the backend-independent counterpart to `GitBackend::repo_root`,
+/// used during `Config::load` (which runs before any backend is installed).
+/// See [`Config::load_project`] for the rationale.
+fn resolve_main_repo_root(cwd: &Path) -> Option<PathBuf> {
+    use std::path::Component;
+
+    let (backend, detect_root) = vcs_runner::detect_vcs(cwd).ok()?;
+
+    // For git or colocated repos, `--git-common-dir` correctly resolves
+    // gitlink files (used by git worktrees) to the main repo's `.git`.
+    if backend.has_git()
+        && let Ok(common_dir) = vcs_runner::run_git_utf8(cwd, &["rev-parse", "--git-common-dir"])
+    {
+        let common_dir = common_dir.trim();
+        if !common_dir.is_empty() {
+            let p = PathBuf::from(common_dir);
+            let p = if p.is_absolute() { p } else { cwd.join(&p) };
+            if let Ok(canonical) = p.canonicalize() {
+                let canonical = strip_verbatim_prefix(canonical);
+                // canonical typically ends in `.git`; the main repo root
+                // is its parent. For worktree-internal queries it can be
+                // `.git/worktrees/<name>` — walk back to `.git`.
+                let mut current = canonical.as_path();
+                while !current
+                    .components()
+                    .next_back()
+                    .is_some_and(|c| matches!(c, Component::Normal(s) if s == ".git"))
+                {
+                    current = current.parent()?;
+                }
+                if let Some(parent) = current.parent() {
+                    return Some(parent.to_path_buf());
+                }
+            }
+        }
+    }
+
+    // Pure-jj or git-unavailable fallback: use detect_vcs's answer
+    // directly. For pure-jj there are no worktree gitlinks to resolve;
+    // detect_root IS the repo root.
+    Some(detect_root)
 }
 
 fn merge_hooks(global: &[String], project: &[String]) -> Vec<String> {

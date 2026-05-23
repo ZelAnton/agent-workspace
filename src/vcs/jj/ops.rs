@@ -188,6 +188,20 @@ pub(super) fn dry_run_merge(runner: &dyn Runner, branch: &str, squash: bool) -> 
 ///      target and branch as parents
 ///   2. `jj bookmark move <target> --to @` — advance bookmark to the merge
 ///      commit
+///
+/// **Self-cleaning** (review fix #2): captures the op id before any
+/// mutation and `jj op restore`s on any internal step failure. Without
+/// this, a failure between steps 1 and 2 (squash) would leave the merge
+/// commit on `@` with no bookmark advance — and merge.rs's `reset_merge`
+/// fallback is `jj op undo`, which only walks back one op and can't fully
+/// recover. Self-cleaning makes merge() atomic from the caller's view.
+///
+/// **No-op detection** (review fix #4): if `branch` has no commits the
+/// current `@` lacks AND the content diff is empty, returns Ok(()) without
+/// creating a degenerate merge commit. This is the symmetric guard to
+/// `execute_merge`'s pre-check — needed here too because `wt sync
+/// --strategy=merge` and other callers reach `merge()` without the
+/// command-layer pre-check.
 pub(super) fn merge(
     runner: &dyn Runner,
     branch: &str,
@@ -195,28 +209,56 @@ pub(super) fn merge(
     _no_ff: bool, // jj has no FF/non-FF distinction — always explicit merge commits
     message: Option<&str>,
 ) -> Result<()> {
+    // No-op pre-flight: if branch has no commits @ lacks, nothing to merge.
+    // Avoids degenerate "merge commit with already-ancestor parent" output
+    // when `wt sync` calls merge() on an up-to-date worktree.
+    if super::branch::commit_count_via_revset(
+        runner,
+        &format!("({branch}) ~ ancestors(@)"),
+    )? == 0
+    {
+        return Ok(());
+    }
+
     // Capture target bookmark BEFORE the merge so we can move it after.
     // current_branch() requires a bookmark on @ — managed worktrees always
     // have one (locked decision), so this should succeed.
     let target_bookmark = super::repo::current_branch(runner)?;
 
+    // Capture pre-merge op id for precise rollback on internal failure.
+    // Critical: op_id capture goes here, BEFORE any mutation, so a failure
+    // at any subsequent step can restore the full pre-merge state in one
+    // op_restore — far more reliable than jj op undo's "last op only".
+    let pre_op = capture_op_id(runner)?;
+
     let msg = message.unwrap_or("(merge)");
 
-    if squash {
-        super::exec(runner, &["new", "-m", msg, "@", branch])?;
-        super::exec(runner, &["squash", "--into", "@-"])?;
-        // After squash, the description on @- is the user's <msg>; @ is a
-        // new empty change above it. Move the bookmark forward.
-        super::exec(
-            runner,
-            &["bookmark", "move", &target_bookmark, "--to", "@-", "--allow-backwards"],
-        )?;
-    } else {
-        super::exec(runner, &["new", "-m", msg, "@", branch])?;
-        super::exec(
-            runner,
-            &["bookmark", "move", &target_bookmark, "--to", "@", "--allow-backwards"],
-        )?;
+    let attempt: Result<()> = (|| {
+        if squash {
+            super::exec(runner, &["new", "-m", msg, "@", branch])?;
+            super::exec(runner, &["squash", "--into", "@-"])?;
+            // After squash, the description on @- is the user's <msg>; @ is a
+            // new empty change above it. Move the bookmark forward.
+            super::exec(
+                runner,
+                &["bookmark", "move", &target_bookmark, "--to", "@-", "--allow-backwards"],
+            )?;
+        } else {
+            super::exec(runner, &["new", "-m", msg, "@", branch])?;
+            super::exec(
+                runner,
+                &["bookmark", "move", &target_bookmark, "--to", "@", "--allow-backwards"],
+            )?;
+        }
+        Ok(())
+    })();
+
+    if let Err(e) = attempt {
+        // Best-effort rollback to pre-merge state. Errors from op restore
+        // are intentionally ignored — bubbling them would mask the original
+        // error the user needs to see.
+        let _ = super::exec(runner, &["op", "restore", &pre_op]);
+        return Err(e);
     }
     Ok(())
 }

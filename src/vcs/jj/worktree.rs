@@ -45,11 +45,17 @@ const WORKSPACE_TEMPLATE: &str = concat!(
 /// whitespace. Branch names commonly contain `/` (`feat/x`), so we
 /// substitute to `_`. The derivation is deterministic so `remove_worktree`
 /// can reconstruct the workspace name from the branch name.
+///
+/// **Newline handling**: `\n`/`\r` would corrupt the tab/newline-delimited
+/// `WORKSPACE_TEMPLATE` output parsed by `list_workspace_rows`. Branch
+/// names with embedded newlines are unusual but possible (some git
+/// imports allow them); collapsing them to `_` keeps the round-trip
+/// consistent and prevents silent row drops in workspace lookups.
 pub(super) fn workspace_name_for(branch: &str) -> String {
     branch
         .chars()
         .map(|c| match c {
-            '/' | '\\' | '.' | ':' | ' ' | '\t' => '_',
+            '/' | '\\' | '.' | ':' | ' ' | '\t' | '\n' | '\r' => '_',
             other => other,
         })
         .collect()
@@ -126,40 +132,21 @@ pub(super) fn remove_worktree(runner: &dyn Runner, path: &Path, _force: bool) ->
     Ok(())
 }
 
-/// Look up the workspace name whose root matches `path`. Returns
-/// `Error::WorktreeNotFound` if no workspace has that root.
-fn workspace_name_for_path(runner: &dyn Runner, path: &Path) -> Result<String> {
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    for ws in list_worktrees(runner)? {
-        if ws.path == canonical || ws.path == path {
-            // `path` field comes from `jj workspace root --name <name>`
-            // — that's a canonical path on Windows but a plain absolute
-            // path on Unix. Compare both forms to be safe.
-            return Ok(workspace_name_for(
-                ws.branch.as_deref().unwrap_or_else(|| {
-                    // Fallback: if no bookmark is attached, the workspace
-                    // name itself is the only handle we have. We can't
-                    // recover that from `WorktreeInfo` directly (the type
-                    // doesn't carry it) — best-effort use of the dir
-                    // basename as the derivation source.
-                    path.file_name().and_then(|n| n.to_str()).unwrap_or("default")
-                }),
-            ));
-        }
-    }
-    Err(Error::WorktreeNotFound(
-        path.display().to_string(),
-    ))
+/// One row of `jj workspace list -T WORKSPACE_TEMPLATE` plus its resolved
+/// filesystem path. Private to this module — the public `WorktreeInfo` type
+/// doesn't carry the workspace name, but we need it for `forget`/`remove`
+/// lookups, so we keep it alongside in this internal struct.
+pub(super) struct WorkspaceRow {
+    pub(super) name: String,
+    pub(super) path: PathBuf,
+    pub(super) commit: Option<String>,
+    pub(super) bookmarks: Vec<String>,
 }
 
-/// List all attached workspaces.
-///
-/// Implementation note: jj 0.38's `WorkspaceRef` template type exposes
-/// `name` and `target` but not the workspace path. We list names via the
-/// template, then call `jj workspace root --name <name>` per workspace to
-/// fetch the path. N+1 in the worst case, but worktree counts in `wt`
-/// usage are small (typically <10) and the per-row call is fast.
-pub(super) fn list_worktrees(runner: &dyn Runner) -> Result<Vec<WorktreeInfo>> {
+/// List all workspaces with their internal `name` field (which the public
+/// `WorktreeInfo` drops). Used internally for path→name lookups when
+/// removing workspaces by path.
+pub(super) fn list_workspace_rows(runner: &dyn Runner) -> Result<Vec<WorkspaceRow>> {
     let cwd = std::env::current_dir()?;
     let out = runner
         .run(
@@ -172,7 +159,7 @@ pub(super) fn list_worktrees(runner: &dyn Runner) -> Result<Vec<WorktreeInfo>> {
             other => map_run_err(other),
         })?;
 
-    let mut workspaces = Vec::new();
+    let mut rows = Vec::new();
     for line in out.stdout_lossy().lines() {
         if line.trim().is_empty() {
             continue;
@@ -181,32 +168,92 @@ pub(super) fn list_worktrees(runner: &dyn Runner) -> Result<Vec<WorktreeInfo>> {
         if parts.len() != 3 {
             continue;
         }
-        let name = parts[0];
-        let commit = parts[1];
-        let bookmarks: Vec<&str> = parts[2]
+        let name = parts[0].to_string();
+        let commit = parts[1].to_string();
+        let bookmarks: Vec<String> = parts[2]
             .split(',')
             .filter(|s| !s.trim().is_empty())
+            .map(|s| s.to_string())
             .collect();
 
-        // Resolve path via a per-workspace call. jj's `workspace root --name`
-        // is a one-shot lookup, no template needed.
+        // Resolve path via per-workspace call. Failures skip the row —
+        // there's no useful WorkspaceRow without a path.
         let path = match runner.run(Cmd::new("jj").in_dir(&cwd).args([
-            "workspace", "root", "--name", name,
+            "workspace", "root", "--name", &name,
         ])) {
             Ok(p_out) => PathBuf::from(p_out.stdout_lossy().trim()),
-            Err(_) => continue, // skip workspaces whose root we can't resolve
+            Err(_) => continue,
         };
 
-        workspaces.push(WorktreeInfo {
+        rows.push(WorkspaceRow {
+            name,
             path,
-            // Match git's behaviour: pick the first attached bookmark.
-            // Multiple bookmarks on @ are possible but rare; deterministic
-            // ordering is preserved by template (the join order is whatever
-            // jj's internal ordering produces — stable per repo).
-            branch: bookmarks.first().map(|s| s.to_string()),
-            commit: Some(commit.to_string()),
-            is_bare: false,
+            commit: if commit.is_empty() { None } else { Some(commit) },
+            bookmarks,
         });
     }
-    Ok(workspaces)
+    Ok(rows)
+}
+
+/// Normalize a path for comparison against jj's `workspace root` output.
+///
+/// Two normalizations:
+///   - `canonicalize` to resolve symlinks and case differences on macOS.
+///   - Strip the Windows verbatim prefix (`\\?\C:\…`). `canonicalize` on
+///     Windows always returns verbatim paths; jj returns plain paths. Bare
+///     equality would always fail without this strip.
+fn normalize_for_compare(p: &Path) -> PathBuf {
+    let canonical = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    #[cfg(windows)]
+    {
+        let s = canonical.to_string_lossy();
+        if let Some(rest) = s.strip_prefix(r"\\?\")
+            && !rest.starts_with("UNC\\")
+        {
+            return PathBuf::from(rest.to_string());
+        }
+    }
+    canonical
+}
+
+/// Look up the workspace name whose root matches `path`. Returns
+/// `Error::WorktreeNotFound` if no workspace has that root.
+///
+/// **Uses the workspace `name` field directly** from `jj workspace list`
+/// — not a re-derived guess from `path.file_name()`. Critical when:
+///   - branch contains `/` (e.g. `feat/x` → ws name `feat_x`, path
+///     basename `x`); the re-derived guess would forget the wrong ws.
+///   - the @ bookmark was deleted (the `branch` field becomes None, but
+///     the registered ws name is still recoverable from list output).
+pub(super) fn workspace_name_for_path(runner: &dyn Runner, path: &Path) -> Result<String> {
+    let target = normalize_for_compare(path);
+    for row in list_workspace_rows(runner)? {
+        let row_normalized = normalize_for_compare(&row.path);
+        if row_normalized == target || row.path == target || row.path == path {
+            return Ok(row.name);
+        }
+    }
+    Err(Error::WorktreeNotFound(path.display().to_string()))
+}
+
+/// List all attached workspaces.
+///
+/// Wraps the internal [`list_workspace_rows`] (which also tracks the
+/// workspace name for path→name lookups) and projects each row into the
+/// backend-agnostic `WorktreeInfo` shape. The workspace name itself is
+/// dropped here — only `remove_worktree` needs it, and it goes through
+/// the internal helper directly.
+pub(super) fn list_worktrees(runner: &dyn Runner) -> Result<Vec<WorktreeInfo>> {
+    Ok(list_workspace_rows(runner)?
+        .into_iter()
+        .map(|row| WorktreeInfo {
+            path: row.path,
+            // Match git's behaviour: pick the first attached bookmark.
+            // Multiple bookmarks on @ are possible but rare; ordering is
+            // whatever jj's template emits — stable per repo per op.
+            branch: row.bookmarks.into_iter().next(),
+            commit: row.commit,
+            is_bare: false,
+        })
+        .collect())
 }

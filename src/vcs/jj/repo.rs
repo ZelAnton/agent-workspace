@@ -122,27 +122,42 @@ pub(super) fn current_commit(runner: &dyn Runner) -> Result<String> {
 /// Priority: jj's `trunk()` revset (which already prefers default-remote
 /// trunk → `main` → `master` → `trunk`) → check for local `main`/`master`
 /// bookmark explicitly → literal `"main"`.
+///
+/// **Deterministic selection** when `trunk()` resolves to a commit with
+/// multiple bookmarks attached (e.g. both `main` and `master`): prefer
+/// `main` → `master` → lex-smallest. jj's internal bookmark iteration
+/// order is implementation-defined and could shift across versions; we
+/// pin a stable choice so `wt status`/`wt cd` output doesn't flicker.
 pub(super) fn detect_trunk(runner: &dyn Runner) -> Result<String> {
     let cwd = std::env::current_dir()?;
-    // Query the local bookmarks attached to whatever `trunk()` resolves to.
     if let Ok(out) = runner.run(Cmd::new("jj").in_dir(&cwd).args([
         "log",
         "-r",
         "trunk()",
         "-T",
-        // Just the local bookmarks, joined by newlines.
         r#"self.local_bookmarks().map(|b| b.name()).join("\n") ++ "\n""#,
         "--no-graph",
         "--limit",
         "1",
     ])) {
-        let first = out
+        let mut names: Vec<String> = out
             .stdout_lossy()
             .lines()
-            .find(|l| !l.trim().is_empty())
-            .map(|s| s.trim().to_string());
-        if let Some(name) = first {
-            return Ok(name);
+            .map(|l| l.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        // Stable priority: well-known trunk names first, then alphabetical
+        // for the lex-smallest fallback. The sort only matters for the
+        // fallback — the well-known lookup doesn't care about order — so
+        // do it lazily inside that branch.
+        if !names.is_empty() {
+            for preferred in ["main", "master", "trunk"] {
+                if let Some(name) = names.iter().find(|n| n.as_str() == preferred) {
+                    return Ok(name.clone());
+                }
+            }
+            names.sort();
+            return Ok(names.remove(0));
         }
     }
 
