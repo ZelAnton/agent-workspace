@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 
 use crate::cli::Result;
 use crate::config::Config;
-use crate::git;
+use crate::vcs;
 use crate::meta;
 
 #[derive(Args)]
@@ -21,7 +21,7 @@ pub struct LsArgs {
 }
 
 pub fn run(args: LsArgs, config: &Config) -> Result<()> {
-    let workspace_id = git::workspace_id()?;
+    let workspace_id = vcs::workspace_id()?;
     let wt_dir = config.workspaces_dir.join(&workspace_id);
 
     if !wt_dir.exists() {
@@ -29,7 +29,7 @@ pub fn run(args: LsArgs, config: &Config) -> Result<()> {
         return Ok(());
     }
 
-    let worktrees = git::list_worktrees()?;
+    let worktrees = vcs::list_worktrees()?;
 
     let managed: Vec<_> = worktrees
         .iter()
@@ -43,12 +43,12 @@ pub fn run(args: LsArgs, config: &Config) -> Result<()> {
 
     let trunk = config.resolve_trunk();
     // Fetch all local branches once instead of N subprocess calls.
-    let known_branches: HashSet<String> = git::local_branches()
+    let known_branches: HashSet<String> = vcs::local_branches()
         .unwrap_or_default()
         .into_iter()
         .collect();
 
-    let current = git::current_branch().ok();
+    let current = vcs::current_branch().ok();
     let home = dirs::home_dir();
 
     let mut rows: Vec<Row> = Vec::new();
@@ -69,14 +69,14 @@ pub fn run(args: LsArgs, config: &Config) -> Result<()> {
             &trunk,
         );
 
-        let uncommitted = git::uncommitted_count_in(&wt.path).unwrap_or(0);
-        let commits = git::commit_count(&effective_target, branch).unwrap_or(0);
+        let uncommitted = vcs::uncommitted_count_in(&wt.path).unwrap_or(0);
+        let commits = vcs::commit_count(&effective_target, branch).unwrap_or(0);
 
-        let c = git::diff_shortstat(&effective_target, branch).unwrap_or(git::DiffStat {
+        let c = vcs::diff_shortstat(&effective_target, branch).unwrap_or(vcs::DiffStat {
             insertions: 0,
             deletions: 0,
         });
-        let u = git::diff_shortstat_in(&wt.path).unwrap_or(git::DiffStat {
+        let u = vcs::diff_shortstat_in(&wt.path).unwrap_or(vcs::DiffStat {
             insertions: 0,
             deletions: 0,
         });

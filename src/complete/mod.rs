@@ -15,7 +15,7 @@ pub fn complete_worktrees(current: &OsStr) -> Vec<CompletionCandidate> {
         return vec![];
     };
 
-    let Ok(worktrees) = crate::git::list_worktrees() else {
+    let Ok(worktrees) = crate::vcs::list_worktrees() else {
         return vec![];
     };
 
@@ -35,7 +35,7 @@ pub fn complete_branches(current: &OsStr) -> Vec<CompletionCandidate> {
         return vec![];
     };
 
-    let Ok(branches) = crate::git::local_branches() else {
+    let Ok(branches) = crate::vcs::local_branches() else {
         return vec![];
     };
 

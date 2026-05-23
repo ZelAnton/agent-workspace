@@ -8,7 +8,7 @@ use clap_complete::engine::ArgValueCompleter;
 use crate::cli::{Error, Result};
 use crate::complete;
 use crate::config::{Config, SyncStrategy};
-use crate::git;
+use crate::vcs;
 use crate::meta;
 
 #[derive(Args)]
@@ -32,13 +32,13 @@ pub struct SyncArgs {
 
 pub fn run(args: SyncArgs, config: &Config) -> Result<()> {
     if args.abort {
-        if git::is_rebase_in_progress() {
+        if vcs::is_rebase_in_progress() {
             eprintln!("Aborting rebase...");
-            git::rebase_abort()?;
+            vcs::rebase_abort()?;
             eprintln!("Rebase aborted.");
-        } else if git::is_merge_in_progress() {
+        } else if vcs::is_merge_in_progress() {
             eprintln!("Aborting merge...");
-            git::merge_abort()?;
+            vcs::merge_abort()?;
             eprintln!("Merge aborted.");
         } else {
             return Err(Error::Other("No sync in progress to abort".into()));
@@ -47,13 +47,13 @@ pub fn run(args: SyncArgs, config: &Config) -> Result<()> {
     }
 
     if args.r#continue {
-        if git::is_rebase_in_progress() {
+        if vcs::is_rebase_in_progress() {
             eprintln!("Continuing rebase...");
-            git::rebase_continue()?;
+            vcs::rebase_continue()?;
             eprintln!("Rebase continued.");
-        } else if git::is_merge_in_progress() {
+        } else if vcs::is_merge_in_progress() {
             eprintln!("Continuing merge...");
-            git::merge_continue()?;
+            vcs::merge_continue()?;
             eprintln!("Merge continued.");
         } else {
             return Err(Error::Other("No sync in progress to continue".into()));
@@ -61,10 +61,10 @@ pub fn run(args: SyncArgs, config: &Config) -> Result<()> {
         return Ok(());
     }
 
-    let current = git::current_branch()?;
+    let current = vcs::current_branch()?;
 
     if let Some(ref branch) = args.from {
-        if !git::branch_exists(branch)? {
+        if !vcs::branch_exists(branch)? {
             return Err(Error::Other(format!("Branch '{branch}' does not exist")));
         }
         eprintln!(
@@ -74,13 +74,13 @@ pub fn run(args: SyncArgs, config: &Config) -> Result<()> {
     }
 
     let target = {
-        let workspace_id = git::workspace_id()?;
+        let workspace_id = vcs::workspace_id()?;
         let wt_dir = config.workspaces_dir.join(&workspace_id);
         meta::resolve_effective_target(
             &wt_dir,
             &current,
             args.from.as_deref(),
-            |b| git::branch_exists(b).unwrap_or(false),
+            |b| vcs::branch_exists(b).unwrap_or(false),
             &config.resolve_trunk(),
         )
     };
@@ -95,11 +95,11 @@ pub fn run(args: SyncArgs, config: &Config) -> Result<()> {
 
     match strategy {
         SyncStrategy::Rebase => {
-            git::rebase(&target)?;
+            vcs::rebase(&target)?;
             eprintln!("Rebased onto {target}");
         }
         SyncStrategy::Merge => {
-            git::merge(&target, false, false, None)?;
+            vcs::merge(&target, false, false, None)?;
             eprintln!("Merged {target} into {current}");
         }
     }

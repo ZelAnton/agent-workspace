@@ -10,7 +10,7 @@ use clap_complete::engine::ArgValueCompleter;
 use crate::cli::{write_path_file, write_path_file_lines, Error, Result};
 use crate::complete;
 use crate::config::Config;
-use crate::git;
+use crate::vcs;
 use crate::meta::{self, WorktreeMeta};
 use crate::process;
 use crate::util;
@@ -31,13 +31,13 @@ pub struct NewArgs {
 
 pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<()> {
     // Ensure we're in a git repo
-    let repo_root = git::repo_root()?;
-    let workspace_id = git::workspace_id()?;
+    let repo_root = vcs::repo_root()?;
+    let workspace_id = vcs::workspace_id()?;
     let workspace_dir = config.workspaces_dir.join(&workspace_id);
 
     // Nested snap stacks two loops in the parent shell and breaks cwd tracking
     // when the inner one finishes.
-    if args.snap.is_some() && git::is_cwd_inside(&workspace_dir) {
+    if args.snap.is_some() && vcs::is_cwd_inside(&workspace_dir) {
         return Err(Error::Other(
             "Refusing to start snap mode inside an existing worktree.\n\
              Run 'wt cd' to return to the main repo, then retry."
@@ -51,13 +51,13 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
     // Resolve base branch: --base flag > current branch > trunk.
     // Determines both the checkout starting point and the default merge/sync target.
     let base_branch = if let Some(ref b) = args.base {
-        if !git::branch_exists(b)? {
+        if !vcs::branch_exists(b)? {
             return Err(Error::Other(format!("Branch '{b}' does not exist")));
         }
         b.clone()
     } else {
         // Detached HEAD falls back to trunk.
-        git::current_branch()
+        vcs::current_branch()
             .ok()
             .filter(|b| b != "HEAD")
             .unwrap_or_else(|| trunk.clone())
@@ -65,7 +65,7 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
 
     // Generate or use provided branch name
     let branch = args.branch.unwrap_or_else(|| {
-        util::generate_unique_branch_name(|n| git::branch_exists(n).unwrap_or(false))
+        util::generate_unique_branch_name(|n| vcs::branch_exists(n).unwrap_or(false))
     });
 
     // Worktree path
@@ -75,7 +75,7 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
     // Create workspace directory if needed
     std::fs::create_dir_all(wt_dir).map_err(|e| Error::Other(e.to_string()))?;
 
-    git::create_worktree(&wt_path, &branch, &base_branch)?;
+    vcs::create_worktree(&wt_path, &branch, &base_branch)?;
 
     let meta = WorktreeMeta::new(base_branch);
     let meta_path = meta::meta_path(wt_dir, &branch);
@@ -186,15 +186,14 @@ fn copy_files(from: &Path, to: &Path, config: &Config) -> Result<()> {
             };
             let dest = to.join(rel);
 
-            if let Some(parent) = dest.parent() {
-                if let Err(e) = std::fs::create_dir_all(parent) {
+            if let Some(parent) = dest.parent()
+                && let Err(e) = std::fs::create_dir_all(parent) {
                     eprintln!(
                         "Warning: failed to create directory {}: {e}",
                         parent.display()
                     );
                     continue;
                 }
-            }
 
             if let Err(e) = std::fs::copy(path, &dest) {
                 eprintln!("Warning: failed to copy {}: {e}", rel.display());

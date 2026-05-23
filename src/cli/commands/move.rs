@@ -10,7 +10,7 @@ use clap_complete::engine::ArgValueCompleter;
 use crate::cli::{write_path_file, Error, Result};
 use crate::complete;
 use crate::config::Config;
-use crate::git;
+use crate::vcs;
 
 #[derive(Args)]
 pub struct MoveArgs {
@@ -23,12 +23,12 @@ pub struct MoveArgs {
 }
 
 pub fn run(args: MoveArgs, config: &Config, path_file: Option<&Path>) -> Result<()> {
-    let workspace_id = git::workspace_id()?;
+    let workspace_id = vcs::workspace_id()?;
     let wt_dir = config.workspaces_dir.join(&workspace_id);
 
     // Resolve '.' to current branch
     let old_branch = if args.old_branch == "." {
-        git::current_branch()?
+        vcs::current_branch()?
     } else {
         args.old_branch
     };
@@ -37,23 +37,23 @@ pub fn run(args: MoveArgs, config: &Config, path_file: Option<&Path>) -> Result<
     let new_path = wt_dir.join(&args.new_branch);
 
     if !old_path.exists() {
-        return Err(Error::Git(git::Error::WorktreeNotFound(old_branch.clone())));
+        return Err(Error::Git(vcs::Error::WorktreeNotFound(old_branch.clone())));
     }
 
     if new_path.exists() {
-        return Err(Error::Git(git::Error::WorktreeExists(
+        return Err(Error::Git(vcs::Error::WorktreeExists(
             args.new_branch.clone(),
         )));
     }
 
     // Check if we're inside the worktree being renamed
-    let inside_target = git::is_cwd_inside(&old_path);
+    let inside_target = vcs::is_cwd_inside(&old_path);
 
     // Move worktree to new path (updates git's internal tracking)
-    git::move_worktree(&old_path, &new_path)?;
+    vcs::move_worktree(&old_path, &new_path)?;
 
     // Rename branch
-    git::rename_branch(&old_branch, &args.new_branch)?;
+    vcs::rename_branch(&old_branch, &args.new_branch)?;
 
     // Rename metadata file (find old with fallback, write new format)
     let old_meta = crate::meta::meta_path_with_fallback(&wt_dir, &old_branch);

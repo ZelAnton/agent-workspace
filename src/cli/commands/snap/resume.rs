@@ -12,7 +12,7 @@ pub const EXIT_PRESERVE: i32 = 3;
 
 use crate::cli::{write_path_file, Error, Result};
 use crate::config::Config;
-use crate::git;
+use crate::vcs;
 use crate::meta::{self, WorktreeMeta};
 use crate::process;
 use crate::prompt::{self, SnapExitChoice, SnapMergeChoice};
@@ -63,9 +63,9 @@ pub fn run(config: &Config, path_file: Option<&Path>) -> Result<()> {
 /// Gather context from git state
 pub fn gather_context(config: &Config) -> Result<SnapContext> {
     let cwd = std::env::current_dir().map_err(|e| Error::Other(e.to_string()))?;
-    let branch = git::current_branch()?;
-    let workspace_id = git::workspace_id()?;
-    let repo_root = git::repo_root()?;
+    let branch = vcs::current_branch()?;
+    let workspace_id = vcs::workspace_id()?;
+    let repo_root = vcs::repo_root()?;
 
     // Load metadata to get base_branch (fallback to legacy .status.toml).
     let wt_dir = config.workspaces_dir.join(&workspace_id);
@@ -80,7 +80,7 @@ pub fn gather_context(config: &Config) -> Result<SnapContext> {
     // landing commits on the wrong branch is a worse failure mode than an
     // explicit error that points the user at `wt merge --into <branch>`.
     let merge_target = match loaded_meta.as_ref().map(|m| m.base_branch.as_str()) {
-        Some(bb) if git::branch_exists(bb).unwrap_or(false) => bb.to_string(),
+        Some(bb) if vcs::branch_exists(bb).unwrap_or(false) => bb.to_string(),
         Some(bb) => {
             return Err(Error::Other(format!(
                 "Base branch '{bb}' no longer exists.\n\
@@ -90,8 +90,8 @@ pub fn gather_context(config: &Config) -> Result<SnapContext> {
         None => config.resolve_trunk(),
     };
 
-    let has_uncommitted = git::has_uncommitted_changes().unwrap_or(false);
-    let has_commits_ahead = git::commit_count(&merge_target, "HEAD").unwrap_or(0) > 0;
+    let has_uncommitted = vcs::has_uncommitted_changes().unwrap_or(false);
+    let has_commits_ahead = vcs::commit_count(&merge_target, "HEAD").unwrap_or(0) > 0;
 
     Ok(SnapContext {
         cwd,
@@ -159,11 +159,11 @@ pub fn determine_action_with_choice(
 /// (build artifacts, .env, agent-generated scratch) cause the cleanup to
 /// fail loudly instead of silently deleting work.
 pub fn cleanup_worktree(wt_path: &Path, branch: &str, config: &Config) -> Result<()> {
-    git::remove_worktree(wt_path, false)?;
-    git::delete_branch(branch, true).ok();
+    vcs::remove_worktree(wt_path, false)?;
+    vcs::delete_branch(branch, true).ok();
 
     // Remove metadata
-    if let Ok(workspace_id) = git::workspace_id() {
+    if let Ok(workspace_id) = vcs::workspace_id() {
         let wt_dir = config.workspaces_dir.join(&workspace_id);
         meta::remove_meta(&wt_dir, branch);
     }
@@ -200,10 +200,10 @@ fn execute_action(
             eprintln!("Merging {} into {}...", ctx.branch, ctx.merge_target);
 
             std::env::set_current_dir(&ctx.repo_root).map_err(|e| Error::Other(e.to_string()))?;
-            git::checkout(&ctx.merge_target)?;
+            vcs::checkout(&ctx.merge_target)?;
 
-            if !git::dry_run_merge(&ctx.branch, config.merge_strategy.is_squash())? {
-                git::checkout(&ctx.merge_target).ok();
+            if !vcs::dry_run_merge(&ctx.branch, config.merge_strategy.is_squash())? {
+                vcs::checkout(&ctx.merge_target).ok();
                 let _ = std::env::set_current_dir(&ctx.cwd);
                 super::super::merge::print_conflict_hint();
                 eprintln!();
@@ -220,8 +220,8 @@ fn execute_action(
                 config.merge_strategy,
             ) {
                 eprintln!("Merge failed: {e}");
-                let _ = git::reset_merge();
-                let _ = git::checkout(&ctx.merge_target);
+                let _ = vcs::reset_merge();
+                let _ = vcs::checkout(&ctx.merge_target);
                 let _ = std::env::set_current_dir(&ctx.cwd);
                 eprintln!(
                     "Worktree '{}' preserved. Inspect there and retry.",

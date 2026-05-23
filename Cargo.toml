@@ -1,7 +1,8 @@
 [package]
 name = "agent-workspace"
 version = "0.11.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.91"
 description = "Git worktree workflow tool for AI coding agents"
 license = "MIT"
 repository = "https://github.com/ZelAnton/agent-workspace"
@@ -31,6 +32,11 @@ self-replace = "1"
 tar = "0.4"
 flate2 = "1"
 tempfile = "3"
+vcs-runner = "0.13"
 
 [dev-dependencies]
 filetime = "0.2"
+# vcs-runner re-exports procpilot, but the `testing` feature (MockRunner) is
+# off by default. Pull procpilot directly with `testing` enabled so unit tests
+# in src/vcs/git/ can mock subprocess calls without spawning real git.
+procpilot = { version = "0.8", features = ["testing"] }

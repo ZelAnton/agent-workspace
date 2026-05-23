@@ -10,7 +10,7 @@ use clap_complete::engine::ArgValueCompleter;
 use crate::cli::{write_path_file, Error, Result};
 use crate::complete;
 use crate::config::{Config, MergeStrategy};
-use crate::git;
+use crate::vcs;
 use crate::meta;
 use crate::process;
 
@@ -34,7 +34,7 @@ pub struct MergeArgs {
 }
 
 pub fn run(args: MergeArgs, config: &Config, path_file: Option<&Path>) -> Result<()> {
-    let main_repo = git::repo_root()?;
+    let main_repo = vcs::repo_root()?;
     run_merge(args, config, path_file, &main_repo)
 }
 
@@ -44,8 +44,8 @@ fn run_merge(
     path_file: Option<&Path>,
     main_repo: &Path,
 ) -> Result<()> {
-    let current = git::current_branch()?;
-    let workspace_id = git::workspace_id()?;
+    let current = vcs::current_branch()?;
+    let workspace_id = vcs::workspace_id()?;
     let wt_dir = config.workspaces_dir.join(&workspace_id);
 
     // --into target must exist AND not be checked out elsewhere.
@@ -53,13 +53,13 @@ fn run_merge(
     // the second check, merge would fail mid-flight with a confusing
     // low-level git error instead of a clear upfront message.
     if let Some(ref branch) = args.into {
-        if !git::branch_exists(branch)? {
+        if !vcs::branch_exists(branch)? {
             return Err(Error::Other(format!("Branch '{branch}' does not exist")));
         }
         let main_canon = main_repo
             .canonicalize()
             .unwrap_or_else(|_| main_repo.to_path_buf());
-        let conflict = git::list_worktrees()?.into_iter().find(|wt| {
+        let conflict = vcs::list_worktrees()?.into_iter().find(|wt| {
             wt.branch.as_deref() == Some(branch.as_str())
                 && wt.path.canonicalize().unwrap_or_else(|_| wt.path.clone()) != main_canon
         });
@@ -76,7 +76,7 @@ fn run_merge(
         &wt_dir,
         &current,
         args.into.as_deref(),
-        |b| git::branch_exists(b).unwrap_or(false),
+        |b| vcs::branch_exists(b).unwrap_or(false),
         &config.resolve_trunk(),
     );
 
@@ -84,14 +84,14 @@ fn run_merge(
         return Err(Error::Other(format!("Cannot merge {current} into itself")));
     }
 
-    if git::has_uncommitted_changes()? {
+    if vcs::has_uncommitted_changes()? {
         return Err(Error::Other(format!(
             "Worktree '{current}' has uncommitted changes. Commit or stash first."
         )));
     }
 
     let wt_path = wt_dir.join(&current);
-    let inside_worktree = git::is_cwd_inside(&wt_path);
+    let inside_worktree = vcs::is_cwd_inside(&wt_path);
 
     let strategy = args.strategy.unwrap_or(config.merge_strategy);
 
@@ -102,32 +102,32 @@ fn run_merge(
             .map_err(|e| Error::Other(e.to_string()))?;
     }
 
-    let commit_count = git::commit_count(&target, &current).unwrap_or(0);
+    let commit_count = vcs::commit_count(&target, &current).unwrap_or(0);
     eprintln!("Merging {current} into {target} ({commit_count} commits, {strategy:?})");
 
     std::env::set_current_dir(main_repo).map_err(|e| Error::Other(e.to_string()))?;
 
-    if git::has_uncommitted_changes()? {
+    if vcs::has_uncommitted_changes()? {
         return Err(Error::Other(
             "Main repo has uncommitted changes. Commit or stash before merging.".into(),
         ));
     }
-    if git::is_merge_in_progress() {
+    if vcs::is_merge_in_progress() {
         return Err(Error::Other("Main repo has a merge in progress.".into()));
     }
-    if git::is_rebase_in_progress() {
+    if vcs::is_rebase_in_progress() {
         return Err(Error::Other("Main repo has a rebase in progress.".into()));
     }
 
     // Capture main repo's current branch *before* we move HEAD, so we can
     // restore it if any subsequent step fails.
-    let original_main_branch = git::current_branch().ok();
+    let original_main_branch = vcs::current_branch().ok();
 
-    git::checkout(&target)?;
+    vcs::checkout(&target)?;
 
-    if !git::dry_run_merge(&current, strategy.is_squash())? {
+    if !vcs::dry_run_merge(&current, strategy.is_squash())? {
         if let Some(orig) = &original_main_branch {
-            let _ = git::checkout(orig);
+            let _ = vcs::checkout(orig);
         }
         print_conflict_hint();
         return Err(Error::Other("Merge aborted due to conflicts".into()));
@@ -140,15 +140,15 @@ fn run_merge(
             // effect of the dry-run + checkout sequence; the user didn't
             // ask for it.
             if let Some(orig) = &original_main_branch {
-                let _ = git::checkout(orig);
+                let _ = vcs::checkout(orig);
             }
             return Ok(());
         }
         Err(e) => {
             // Roll back any squash staging, then return HEAD to where it was.
-            let _ = git::reset_merge();
+            let _ = vcs::reset_merge();
             if let Some(orig) = &original_main_branch {
-                let _ = git::checkout(orig);
+                let _ = vcs::checkout(orig);
             }
             return Err(e);
         }
@@ -212,14 +212,14 @@ pub fn build_merge_message(branch: &str, log: &str) -> String {
 ///
 /// Returns true if changes were merged, false if already up to date.
 pub fn execute_merge(branch: &str, trunk: &str, strategy: MergeStrategy) -> Result<bool> {
-    let log = git::log_oneline(trunk, branch).unwrap_or_default();
+    let log = vcs::log_oneline(trunk, branch).unwrap_or_default();
     let msg = build_merge_message(branch, &log);
 
     match strategy {
         MergeStrategy::Squash => {
-            git::merge(branch, true, false, None)?;
-            if git::has_staged_changes()? {
-                git::commit(&msg)?;
+            vcs::merge(branch, true, false, None)?;
+            if vcs::has_staged_changes()? {
+                vcs::commit(&msg)?;
                 Ok(true)
             } else {
                 Ok(false)
@@ -232,10 +232,10 @@ pub fn execute_merge(branch: &str, trunk: &str, strategy: MergeStrategy) -> Resu
             // case would print "Merge complete" and (with -d) cleanup a
             // worktree even though nothing happened — caller relies on the
             // bool to know whether to proceed.
-            if git::commit_count(trunk, branch)? == 0 {
+            if vcs::commit_count(trunk, branch)? == 0 {
                 return Ok(false);
             }
-            git::merge(branch, false, true, Some(&msg))?;
+            vcs::merge(branch, false, true, Some(&msg))?;
             Ok(true)
         }
     }
@@ -243,17 +243,17 @@ pub fn execute_merge(branch: &str, trunk: &str, strategy: MergeStrategy) -> Resu
 
 /// Clean up worktree after successful merge
 pub fn cleanup_worktree(branch: &str, config: &Config) -> Result<()> {
-    let workspace_id = git::workspace_id()?;
+    let workspace_id = vcs::workspace_id()?;
     let wt_dir = config.workspaces_dir.join(&workspace_id);
     let wt_path = wt_dir.join(branch);
 
     eprintln!("Cleaning up worktree: {branch}");
 
-    git::remove_worktree(&wt_path, false).ok();
+    vcs::remove_worktree(&wt_path, false).ok();
 
     // Force delete: squash merge rewrites history so -d thinks
     // the branch is "not fully merged" even though changes are in trunk
-    git::delete_branch(branch, true).ok();
+    vcs::delete_branch(branch, true).ok();
 
     crate::meta::remove_meta(&wt_dir, branch);
 

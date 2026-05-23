@@ -10,7 +10,7 @@ use clap_complete::engine::ArgValueCompleter;
 use crate::cli::{Error, Result};
 use crate::complete;
 use crate::config::{MergeStrategy, ProjectConfig, SyncStrategy};
-use crate::git;
+use crate::vcs;
 
 #[derive(Args)]
 pub struct InitArgs {
@@ -41,7 +41,7 @@ pub fn run(args: InitArgs) -> Result<()> {
     // Detect trunk if not specified
     let trunk = args
         .trunk
-        .or_else(|| git::detect_trunk().ok())
+        .or_else(|| vcs::detect_trunk().ok())
         .unwrap_or_else(|| "main".into());
 
     let mut config = ProjectConfig::default();

@@ -14,6 +14,10 @@ AI coding agents work best with isolated environments:
 - **Clean separation**: Each feature gets its own working directory
 - **Snap mode**: "Use and discard" workflow — create worktree, run agent, merge, cleanup
 
+### Fork notes
+
+This is a fork of [`nekocode/agent-worktree`](https://github.com/nekocode/agent-worktree). The primary goal of the fork is native [Jujutsu (`jj`)](https://jj-vcs.github.io/jj/) repository support alongside git. The implementation lives behind `src/vcs/` with `GitBackend` complete and `JjBackend` filled in incrementally; for now jj-only and colocated repos resolve to the jj backend and surface `operation not yet supported by this backend: jj: <op>` for unimplemented ops. Override with `--vcs=git` (or `[general] vcs = "git"` in `.agent-workspace.toml`) to force the git backend in a colocated repo. See [`AGENTS.md`](AGENTS.md) → "VCS backend compatibility" for status and contributor guidance.
+
 ## Install
 
 ### Quick install (no Node.js required)

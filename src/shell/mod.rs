@@ -33,7 +33,7 @@ impl Shell {
         // Windows: default to PowerShell
         #[cfg(windows)]
         {
-            return Some(Shell::PowerShell);
+            Some(Shell::PowerShell)
         }
 
         // Unix: check $SHELL

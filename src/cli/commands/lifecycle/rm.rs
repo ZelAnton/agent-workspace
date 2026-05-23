@@ -10,7 +10,7 @@ use clap_complete::engine::ArgValueCompleter;
 use crate::cli::{write_path_file, Error, Result};
 use crate::complete;
 use crate::config::Config;
-use crate::git;
+use crate::vcs;
 
 #[derive(Args)]
 pub struct RmArgs {
@@ -25,13 +25,13 @@ pub struct RmArgs {
 
 pub fn run(args: RmArgs, config: &Config, path_file: Option<&Path>) -> Result<()> {
     // Get main repo path BEFORE any destructive operations
-    let main_path = git::repo_root()?;
-    let workspace_id = git::workspace_id()?;
+    let main_path = vcs::repo_root()?;
+    let workspace_id = vcs::workspace_id()?;
     let wt_dir = config.workspaces_dir.join(&workspace_id);
 
     // Resolve '.' to current branch
     let branch = if args.branch == "." {
-        git::current_branch()?
+        vcs::current_branch()?
     } else {
         args.branch
     };
@@ -39,11 +39,11 @@ pub fn run(args: RmArgs, config: &Config, path_file: Option<&Path>) -> Result<()
     let wt_path = wt_dir.join(&branch);
 
     if !wt_path.exists() {
-        return Err(Error::Git(git::Error::WorktreeNotFound(branch.clone())));
+        return Err(Error::Git(vcs::Error::WorktreeNotFound(branch.clone())));
     }
 
     // Check if we're inside the worktree being removed
-    let inside_target = git::is_cwd_inside(&wt_path);
+    let inside_target = vcs::is_cwd_inside(&wt_path);
 
     // Without the shell wrapper, removing the current worktree leaves the
     // parent shell stranded in a deleted directory (every subsequent `pwd`
@@ -65,13 +65,13 @@ pub fn run(args: RmArgs, config: &Config, path_file: Option<&Path>) -> Result<()
     }
 
     // Remove worktree
-    git::remove_worktree(&wt_path, args.force)?;
+    vcs::remove_worktree(&wt_path, args.force)?;
 
     // Switch to main repo before deleting branch (avoid "not in repo" error)
     std::env::set_current_dir(&main_path).ok();
 
     // Delete branch — best-effort, failure doesn't block worktree cleanup
-    let _ = git::delete_branch(&branch, args.force);
+    let _ = vcs::delete_branch(&branch, args.force);
 
     // Remove metadata
     crate::meta::remove_meta(&wt_dir, &branch);

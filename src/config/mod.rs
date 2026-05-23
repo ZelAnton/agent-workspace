@@ -60,6 +60,11 @@ pub struct GeneralConfig {
 
     #[serde(default)]
     pub copy_files: Vec<String>,
+
+    /// Optional VCS-backend override (`"auto"`, `"git"`, or `"jj"`). Absent
+    /// or `"auto"` falls through to the detection step. See
+    /// [`crate::vcs::resolve_backend`].
+    pub vcs: Option<crate::vcs::VcsChoice>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -72,6 +77,10 @@ pub struct ProjectGeneralConfig {
 
     #[serde(default)]
     pub copy_files: Vec<String>,
+
+    /// Optional VCS-backend override scoped to this repo. Overrides the
+    /// global `[general] vcs`. See [`crate::vcs::resolve_backend`].
+    pub vcs: Option<crate::vcs::VcsChoice>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -121,6 +130,14 @@ pub struct Config {
     pub copy_files: Vec<String>,
     pub hooks: HooksConfig,
     pub trunk: Option<String>,
+    /// VCS backend choice from project config (preferred) or global config.
+    /// `None` means "no explicit choice" — auto-detect at the
+    /// [`crate::vcs::resolve_backend`] level.
+    pub vcs: Option<crate::vcs::VcsChoice>,
+    /// VCS choice resolved separately from project vs global config — kept
+    /// split because `resolve_backend` honours project-over-global
+    /// precedence and needs to see both layers.
+    pub vcs_global: Option<crate::vcs::VcsChoice>,
 }
 
 impl Config {
@@ -166,6 +183,8 @@ impl Config {
             copy_files,
             hooks,
             trunk: project.general.trunk,
+            vcs: project.general.vcs,
+            vcs_global: global.general.vcs,
         })
     }
 
@@ -173,7 +192,7 @@ impl Config {
     pub fn resolve_trunk(&self) -> String {
         self.trunk
             .clone()
-            .unwrap_or_else(|| crate::git::detect_trunk().unwrap_or_else(|_| "main".into()))
+            .unwrap_or_else(|| crate::vcs::detect_trunk().unwrap_or_else(|_| "main".into()))
     }
 
     pub fn base_dir() -> Result<PathBuf> {
@@ -206,7 +225,7 @@ impl Config {
         // CWD-relative would silently miss the file inside worktrees.
         // Outside any git repo, fall back to default — non-git commands
         // (setup/update) must still load.
-        let path = match crate::git::repo_root() {
+        let path = match crate::vcs::repo_root() {
             Ok(root) => root.join(".agent-workspace.toml"),
             Err(_) => return Ok(ProjectConfig::default()),
         };
@@ -239,11 +258,10 @@ pub(crate) fn strip_verbatim_prefix(p: PathBuf) -> PathBuf {
     #[cfg(windows)]
     {
         let s = p.to_string_lossy();
-        if let Some(rest) = s.strip_prefix(r"\\?\") {
-            if !rest.starts_with("UNC\\") {
+        if let Some(rest) = s.strip_prefix(r"\\?\")
+            && !rest.starts_with("UNC\\") {
                 return PathBuf::from(rest.to_string());
             }
-        }
     }
     p
 }
@@ -429,6 +447,7 @@ post_merge = ["git push", "notify-team"]
                 merge_strategy: MergeStrategy::Merge,
                 sync_strategy: SyncStrategy::default(),
                 copy_files: vec![".env".to_string()],
+                vcs: None,
             },
             hooks: HooksConfig {
                 post_create: vec!["npm install".to_string()],
@@ -500,6 +519,7 @@ trunk = "develop"
                 merge_strategy: None,
                 sync_strategy: None,
                 copy_files: vec![".env.local".to_string()],
+                vcs: None,
             },
             hooks: HooksConfig::default(),
         };

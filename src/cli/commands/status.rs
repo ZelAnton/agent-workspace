@@ -4,12 +4,12 @@
 
 use crate::cli::{Error, Result};
 use crate::config::Config;
-use crate::git;
+use crate::vcs;
 use crate::meta::{self, WorktreeMeta};
 
 pub fn run(config: &Config) -> Result<()> {
-    let current = git::current_branch()?;
-    let workspace_id = git::workspace_id()?;
+    let current = vcs::current_branch()?;
+    let workspace_id = vcs::workspace_id()?;
     let wt_dir = config.workspaces_dir.join(&workspace_id);
     let wt_path = wt_dir.join(&current);
 
@@ -28,18 +28,18 @@ pub fn run(config: &Config) -> Result<()> {
     let effective_target = meta::resolve_target_branch(
         None,
         base_branch,
-        |b| git::branch_exists(b).unwrap_or(false),
+        |b| vcs::branch_exists(b).unwrap_or(false),
         &trunk,
     );
 
-    let uncommitted = git::uncommitted_count_in(&wt_path).unwrap_or(0);
-    let commits = git::commit_count(&effective_target, &current).unwrap_or(0);
+    let uncommitted = vcs::uncommitted_count_in(&wt_path).unwrap_or(0);
+    let commits = vcs::commit_count(&effective_target, &current).unwrap_or(0);
 
-    let diff = git::diff_shortstat(&effective_target, &current).unwrap_or(git::DiffStat {
+    let diff = vcs::diff_shortstat(&effective_target, &current).unwrap_or(vcs::DiffStat {
         insertions: 0,
         deletions: 0,
     });
-    let unstaged = git::diff_shortstat_in(&wt_path).unwrap_or(git::DiffStat {
+    let unstaged = vcs::diff_shortstat_in(&wt_path).unwrap_or(vcs::DiffStat {
         insertions: 0,
         deletions: 0,
     });
@@ -81,12 +81,12 @@ pub fn run(config: &Config) -> Result<()> {
 
 /// Detect and display sync in-progress state
 fn print_in_progress_state() {
-    if git::is_rebase_in_progress() {
+    if vcs::is_rebase_in_progress() {
         println!();
         println!("State:        REBASE IN PROGRESS (sync)");
         println!("  Resolve conflicts, then: wt sync --continue");
         println!("  Or abort: wt sync --abort");
-    } else if git::is_merge_in_progress() {
+    } else if vcs::is_merge_in_progress() {
         println!();
         println!("State:        MERGE IN PROGRESS (sync)");
         println!("  Resolve conflicts, then: wt sync --continue");

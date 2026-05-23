@@ -1,17 +1,24 @@
+mod mock_runner;
 mod ops;
 
-use super::*;
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 use std::sync::Mutex;
+
 use tempfile::tempdir;
 
-// Global mutex for tests that change cwd
+use super::*;
+use crate::vcs::backend::VcsBackend;
+use crate::vcs::error::Error;
+
+// Global mutex for tests that change cwd. Same role as the pre-refactor
+// CWD_MUTEX in src/git/tests — `std::env::current_dir()` is process-global,
+// so any test that mutates it must hold the mutex for its duration.
 pub(super) static CWD_MUTEX: Mutex<()> = Mutex::new(());
 
-// ===========================================================================
+// ---------------------------------------------------------------------------
 // Helper: Setup a minimal git repo for testing
-// ===========================================================================
+// ---------------------------------------------------------------------------
 pub(super) fn setup_test_repo() -> tempfile::TempDir {
     let dir = tempdir().unwrap();
     let path = dir.path();
@@ -57,7 +64,7 @@ pub(super) fn setup_test_repo() -> tempfile::TempDir {
     dir
 }
 
-/// Run a test that requires changing cwd, with proper locking
+/// Run a test that mutates cwd, with proper locking.
 pub(super) fn with_cwd<F, T>(path: &Path, f: F) -> T
 where
     F: FnOnce() -> T,
@@ -70,9 +77,16 @@ where
     result
 }
 
-// ===========================================================================
-// Parse worktree list tests (pure functions, no cwd issues)
-// ===========================================================================
+/// Construct a fresh `GitBackend` for tests. Uses `DefaultRunner` so the
+/// test exercises real git, matching the project's "validate against the
+/// real binary" testing philosophy.
+fn backend() -> GitBackend {
+    GitBackend::new()
+}
+
+// ---------------------------------------------------------------------------
+// Pure parser tests — no cwd dependency
+// ---------------------------------------------------------------------------
 #[test]
 fn test_parse_worktree_list_empty() {
     let result = parse_worktree_list("");
@@ -126,13 +140,15 @@ bare
     assert!(result[0].branch.is_none());
 }
 
-// ===========================================================================
-// Error display tests (pure functions)
-// ===========================================================================
+// ---------------------------------------------------------------------------
+// Error display tests
+// ---------------------------------------------------------------------------
 #[test]
 fn test_error_display() {
     let err = Error::NotInRepo;
-    assert_eq!(err.to_string(), "not in a git repository");
+    // Message changed from "not in a git repository" — the new wording
+    // covers future jj-only repositories without lying about the backend.
+    assert_eq!(err.to_string(), "not in a version-controlled repository");
 
     let err = Error::WorktreeNotFound("feature".to_string());
     assert_eq!(err.to_string(), "worktree 'feature' not found");
@@ -145,11 +161,17 @@ fn test_error_display() {
 
     let err = Error::Command("something failed".to_string());
     assert_eq!(err.to_string(), "something failed");
+
+    let err = Error::Unsupported("jj: merge".to_string());
+    assert_eq!(
+        err.to_string(),
+        "operation not yet supported by this backend: jj: merge"
+    );
 }
 
-// ===========================================================================
+// ---------------------------------------------------------------------------
 // clean_git_error tests
-// ===========================================================================
+// ---------------------------------------------------------------------------
 #[test]
 fn test_clean_git_error_fatal_prefix() {
     let msg = clean_git_error("fatal: invalid reference: xxx");
@@ -167,10 +189,7 @@ fn test_clean_git_error_worktree_uncommitted() {
     let msg = clean_git_error(
         "fatal: '/Users/foo/.agent-workspace/workspaces/proj/branch' contains modified or untracked files, use --force to delete it",
     );
-    assert_eq!(
-        msg,
-        "worktree 'branch' has uncommitted changes, use --force"
-    );
+    assert_eq!(msg, "worktree 'branch' has uncommitted changes, use --force");
 }
 
 #[test]
@@ -179,45 +198,32 @@ fn test_clean_git_error_no_prefix() {
     assert_eq!(msg, "some plain message");
 }
 
-// ===========================================================================
-// extract_error tests
-// ===========================================================================
+// ---------------------------------------------------------------------------
+// extract_message tests (signature changed: now takes split stderr/stdout
+// to match vcs_runner::RunError shape)
+// ---------------------------------------------------------------------------
 #[test]
-fn test_extract_error_prefers_stderr() {
-    let output = std::process::Output {
-        status: std::process::ExitStatus::default(),
-        stdout: b"stdout info".to_vec(),
-        stderr: b"fatal: something broke".to_vec(),
-    };
-    let err = extract_error(&output);
-    assert_eq!(err, "something broke");
+fn test_extract_message_prefers_stderr() {
+    let msg = super::errmap::extract_message("fatal: something broke", b"stdout info");
+    assert_eq!(msg, "something broke");
 }
 
 #[test]
-fn test_extract_error_falls_back_to_stdout() {
-    let output = std::process::Output {
-        status: std::process::ExitStatus::default(),
-        stdout: b"CONFLICT (content): Merge conflict in file.txt\n".to_vec(),
-        stderr: b"".to_vec(),
-    };
-    let err = extract_error(&output);
-    assert!(err.contains("CONFLICT"));
+fn test_extract_message_falls_back_to_stdout() {
+    // Load-bearing case — `git merge` puts CONFLICT messages on stdout.
+    let msg = super::errmap::extract_message("", b"CONFLICT (content): Merge conflict in file.txt\n");
+    assert!(msg.contains("CONFLICT"));
 }
 
 #[test]
-fn test_extract_error_whitespace_only_stderr() {
-    let output = std::process::Output {
-        status: std::process::ExitStatus::default(),
-        stdout: b"nothing to commit, working tree clean".to_vec(),
-        stderr: b"  \n  ".to_vec(),
-    };
-    let err = extract_error(&output);
-    assert!(err.contains("nothing to commit"));
+fn test_extract_message_whitespace_only_stderr() {
+    let msg = super::errmap::extract_message("  \n  ", b"nothing to commit, working tree clean");
+    assert!(msg.contains("nothing to commit"));
 }
 
-// ===========================================================================
-// is_cwd_inside tests
-// ===========================================================================
+// ---------------------------------------------------------------------------
+// is_cwd_inside tests (pure filesystem helper)
+// ---------------------------------------------------------------------------
 #[test]
 fn test_is_cwd_inside_current_dir() {
     let cwd = std::env::current_dir().unwrap();
@@ -229,15 +235,15 @@ fn test_is_cwd_inside_nonexistent() {
     assert!(!is_cwd_inside(Path::new("/nonexistent/path/12345")));
 }
 
-// ===========================================================================
-// Git module function tests (require changing cwd, use mutex)
-// ===========================================================================
+// ---------------------------------------------------------------------------
+// GitBackend method tests (require changing cwd, use mutex)
+// ---------------------------------------------------------------------------
 
 #[test]
 fn test_repo_root() {
     let dir = setup_test_repo();
     with_cwd(dir.path(), || {
-        let root = repo_root();
+        let root = backend().repo_root();
         assert!(root.is_ok());
         let root_path = root.unwrap();
         assert!(root_path.exists());
@@ -249,7 +255,7 @@ fn test_repo_root() {
 fn test_repo_root_not_in_repo() {
     let dir = tempdir().unwrap();
     with_cwd(dir.path(), || {
-        let root = repo_root();
+        let root = backend().repo_root();
         assert!(root.is_err());
         assert!(matches!(root.unwrap_err(), Error::NotInRepo));
     });
@@ -259,7 +265,7 @@ fn test_repo_root_not_in_repo() {
 fn test_repo_name() {
     let dir = setup_test_repo();
     with_cwd(dir.path(), || {
-        let name = repo_name();
+        let name = backend().repo_name();
         assert!(name.is_ok());
         assert!(!name.unwrap().is_empty());
     });
@@ -269,11 +275,10 @@ fn test_repo_name() {
 fn test_workspace_id_format() {
     let dir = setup_test_repo();
     with_cwd(dir.path(), || {
-        let id = workspace_id().unwrap();
-        // Format: {repo_name}-{hash[0:6]}
+        let id = backend().workspace_id().unwrap();
         let parts: Vec<&str> = id.rsplitn(2, '-').collect();
         assert_eq!(parts.len(), 2);
-        assert_eq!(parts[0].len(), 6); // hash suffix
+        assert_eq!(parts[0].len(), 6);
         assert!(parts[0].chars().all(|c: char| c.is_ascii_hexdigit()));
     });
 }
@@ -282,8 +287,9 @@ fn test_workspace_id_format() {
 fn test_workspace_id_deterministic() {
     let dir = setup_test_repo();
     with_cwd(dir.path(), || {
-        let id1 = workspace_id().unwrap();
-        let id2 = workspace_id().unwrap();
+        let b = backend();
+        let id1 = b.workspace_id().unwrap();
+        let id2 = b.workspace_id().unwrap();
         assert_eq!(id1, id2);
     });
 }
@@ -293,11 +299,9 @@ fn test_workspace_id_unique_for_different_paths() {
     let dir1 = setup_test_repo();
     let dir2 = setup_test_repo();
 
-    let id1 = with_cwd(dir1.path(), || workspace_id().unwrap());
-    let id2 = with_cwd(dir2.path(), || workspace_id().unwrap());
+    let id1 = with_cwd(dir1.path(), || backend().workspace_id().unwrap());
+    let id2 = with_cwd(dir2.path(), || backend().workspace_id().unwrap());
 
-    // Same repo name (both are random tempdir names), but different paths
-    // Hash suffix should differ
     assert_ne!(id1, id2);
 }
 
@@ -305,7 +309,7 @@ fn test_workspace_id_unique_for_different_paths() {
 fn test_current_branch() {
     let dir = setup_test_repo();
     with_cwd(dir.path(), || {
-        let branch = current_branch();
+        let branch = backend().current_branch();
         assert!(branch.is_ok());
         assert_eq!(branch.unwrap(), "main");
     });
@@ -315,7 +319,7 @@ fn test_current_branch() {
 fn test_detect_trunk() {
     let dir = setup_test_repo();
     with_cwd(dir.path(), || {
-        let trunk = detect_trunk();
+        let trunk = backend().detect_trunk();
         assert!(trunk.is_ok());
         assert_eq!(trunk.unwrap(), "main");
     });
@@ -325,7 +329,7 @@ fn test_detect_trunk() {
 fn test_branch_exists_true() {
     let dir = setup_test_repo();
     with_cwd(dir.path(), || {
-        let exists = branch_exists("main");
+        let exists = backend().branch_exists("main");
         assert!(exists.is_ok());
         assert!(exists.unwrap());
     });
@@ -335,7 +339,7 @@ fn test_branch_exists_true() {
 fn test_branch_exists_false() {
     let dir = setup_test_repo();
     with_cwd(dir.path(), || {
-        let exists = branch_exists("nonexistent-branch-12345");
+        let exists = backend().branch_exists("nonexistent-branch-12345");
         assert!(exists.is_ok());
         assert!(!exists.unwrap());
     });
@@ -345,47 +349,47 @@ fn test_branch_exists_false() {
 fn test_current_commit() {
     let dir = setup_test_repo();
     with_cwd(dir.path(), || {
-        let commit = current_commit();
+        let commit = backend().current_commit();
         assert!(commit.is_ok());
         let hash = commit.unwrap();
         assert_eq!(hash.len(), 40);
     });
 }
 
-// ===========================================================================
+// ---------------------------------------------------------------------------
 // parse_shortstat tests (pure function)
-// ===========================================================================
+// ---------------------------------------------------------------------------
 #[test]
 fn test_parse_shortstat_full() {
-    let stat = branch::parse_shortstat(" 3 files changed, 120 insertions(+), 30 deletions(-)");
+    let stat = parse_shortstat(" 3 files changed, 120 insertions(+), 30 deletions(-)");
     assert_eq!(stat.insertions, 120);
     assert_eq!(stat.deletions, 30);
 }
 
 #[test]
 fn test_parse_shortstat_insertions_only() {
-    let stat = branch::parse_shortstat(" 1 file changed, 5 insertions(+)");
+    let stat = parse_shortstat(" 1 file changed, 5 insertions(+)");
     assert_eq!(stat.insertions, 5);
     assert_eq!(stat.deletions, 0);
 }
 
 #[test]
 fn test_parse_shortstat_deletions_only() {
-    let stat = branch::parse_shortstat(" 2 files changed, 10 deletions(-)");
+    let stat = parse_shortstat(" 2 files changed, 10 deletions(-)");
     assert_eq!(stat.insertions, 0);
     assert_eq!(stat.deletions, 10);
 }
 
 #[test]
 fn test_parse_shortstat_empty() {
-    let stat = branch::parse_shortstat("");
+    let stat = parse_shortstat("");
     assert_eq!(stat.insertions, 0);
     assert_eq!(stat.deletions, 0);
 }
 
 #[test]
 fn test_parse_shortstat_single_change() {
-    let stat = branch::parse_shortstat(" 1 file changed, 1 insertion(+), 1 deletion(-)");
+    let stat = parse_shortstat(" 1 file changed, 1 insertion(+), 1 deletion(-)");
     assert_eq!(stat.insertions, 1);
     assert_eq!(stat.deletions, 1);
 }

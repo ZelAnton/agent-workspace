@@ -1,0 +1,189 @@
+// ===========================================================================
+// vcs/git/repo - Repository identity (root, name, branch, commit, trunk)
+// ===========================================================================
+
+use std::path::PathBuf;
+
+use vcs_runner::{Cmd, RunError, Runner};
+
+use super::errmap::map_run_err;
+use crate::vcs::error::{Error, Result};
+
+/// Get the root directory of the main git repository (not worktree).
+///
+/// Uses `--git-common-dir` to handle worktrees correctly — it returns the
+/// main repo's `.git` regardless of which worktree the caller is sitting
+/// in. Note: this is **not** equivalent to `vcs_runner::detect_vcs`, which
+/// finds the nearest `.git`/`.jj` ancestor and would point at the worktree's
+/// own gitdir instead.
+pub(super) fn repo_root(runner: &dyn Runner) -> Result<PathBuf> {
+    let cwd = std::env::current_dir()?;
+    let out = runner
+        .run(Cmd::new("git").in_dir(&cwd).args(["rev-parse", "--git-common-dir"]))
+        .map_err(|e| match e {
+            // Outside-a-repo is the most common failure here; collapse it to
+            // the friendly NotInRepo variant rather than the raw git stderr.
+            RunError::NonZeroExit { .. } => Error::NotInRepo,
+            other => map_run_err(other),
+        })?;
+
+    let git_dir = PathBuf::from(out.stdout_lossy().trim());
+
+    let git_dir = if git_dir.is_absolute() {
+        git_dir
+    } else {
+        std::env::current_dir()?.join(&git_dir)
+    };
+
+    let git_dir = git_dir.canonicalize().map_err(|_| Error::NotInRepo)?;
+
+    // Walk up to find `.git`. For worktrees, --git-common-dir returns the
+    // main repo's `.git/` directly; for worktree-internal queries it may
+    // return `.git/worktrees/<branch>` — both paths converge at `.git`.
+    let git_dir = if git_dir.ends_with(".git") {
+        git_dir
+    } else {
+        let mut current = git_dir.as_path();
+        loop {
+            if current.ends_with(".git") {
+                break;
+            }
+            current = current.parent().ok_or(Error::NotInRepo)?;
+        }
+        current.to_path_buf()
+    };
+
+    git_dir
+        .parent()
+        .map(|p| p.to_path_buf())
+        .ok_or(Error::NotInRepo)
+}
+
+/// Get the directory name of the current repository.
+pub(super) fn repo_name(runner: &dyn Runner) -> Result<String> {
+    let root = repo_root(runner)?;
+    root.file_name()
+        .and_then(|n| n.to_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| Error::Command("cannot determine repo name".into()))
+}
+
+/// Get the unique workspace ID for the current repository.
+///
+/// Format: `{repo_name}-{hash[0:6]}` where hash is derived from the
+/// absolute repo path. Ensures repos with the same directory name living
+/// in different absolute locations get distinct workspace directories.
+pub(super) fn workspace_id(runner: &dyn Runner) -> Result<String> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let root = repo_root(runner)?;
+    let name = repo_name(runner)?;
+
+    let mut hasher = DefaultHasher::new();
+    root.hash(&mut hasher);
+    let hash = hasher.finish();
+
+    Ok(format!("{}-{:06x}", name, hash & 0xFFFFFF))
+}
+
+/// Get the current branch name (`HEAD` symbolic ref).
+pub(super) fn current_branch(runner: &dyn Runner) -> Result<String> {
+    let cwd = std::env::current_dir()?;
+    runner
+        .run(Cmd::new("git").in_dir(&cwd).args(["rev-parse", "--abbrev-ref", "HEAD"]))
+        .map(|out| out.stdout_lossy().trim().to_string())
+        .map_err(|e| match e {
+            RunError::NonZeroExit { .. } => Error::NotInRepo,
+            other => map_run_err(other),
+        })
+}
+
+/// Get the current HEAD commit hash.
+pub(super) fn current_commit(runner: &dyn Runner) -> Result<String> {
+    let cwd = std::env::current_dir()?;
+    runner
+        .run(Cmd::new("git").in_dir(&cwd).args(["rev-parse", "HEAD"]))
+        .map(|out| out.stdout_lossy().trim().to_string())
+        .map_err(|e| match e {
+            RunError::NonZeroExit { .. } => Error::NotInRepo,
+            other => map_run_err(other),
+        })
+}
+
+/// Detect the trunk branch.
+///
+/// Priority: `origin/HEAD` (remote-authoritative) > `main` > `master` > `"main"`.
+///
+/// `origin/HEAD` wins because it reflects the upstream's actual default
+/// branch — avoids silently picking `main` when the real trunk is `master`
+/// (or vice versa) just because both happen to exist locally.
+pub(super) fn detect_trunk(runner: &dyn Runner) -> Result<String> {
+    let cwd = std::env::current_dir()?;
+    if let Ok(out) = runner.run(
+        Cmd::new("git")
+            .in_dir(&cwd)
+            .args(["symbolic-ref", "refs/remotes/origin/HEAD"]),
+    ) {
+        let full = out.stdout_lossy().trim().to_string();
+        if let Some(branch) = full.strip_prefix("refs/remotes/origin/") {
+            return Ok(branch.to_string());
+        }
+    }
+
+    for branch in ["main", "master"] {
+        if branch_exists(runner, branch)? {
+            return Ok(branch.to_string());
+        }
+    }
+
+    Ok("main".to_string())
+}
+
+/// List all local branch names. One subprocess instead of N `branch_exists` calls.
+pub(super) fn local_branches(runner: &dyn Runner) -> Result<Vec<String>> {
+    let cwd = std::env::current_dir()?;
+    match runner.run(Cmd::new("git").in_dir(&cwd).args([
+        "for-each-ref",
+        "--format=%(refname:short)",
+        "refs/heads/",
+    ])) {
+        Ok(out) => Ok(out
+            .stdout_lossy()
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| l.to_string())
+            .collect()),
+        // Outside a repo: return empty rather than error, matching the
+        // original code which returned `Ok(Vec::new())` on non-success.
+        Err(RunError::NonZeroExit { .. }) => Ok(Vec::new()),
+        Err(e) => Err(map_run_err(e)),
+    }
+}
+
+/// Check whether a local branch exists. Uses `show-ref --verify --quiet`
+/// — non-zero exit means "no", and we map that to `Ok(false)` rather than
+/// surfacing an error.
+pub(super) fn branch_exists(runner: &dyn Runner, name: &str) -> Result<bool> {
+    let cwd = std::env::current_dir()?;
+    let refname = format!("refs/heads/{name}");
+    match runner.run(
+        Cmd::new("git")
+            .in_dir(&cwd)
+            .args(["show-ref", "--verify", "--quiet", &refname]),
+    ) {
+        Ok(_) => Ok(true),
+        Err(RunError::NonZeroExit { .. }) => Ok(false),
+        Err(e) => Err(map_run_err(e)),
+    }
+}
+
+/// Whether `cwd` is inside `path` (after canonicalizing both). Pure
+/// filesystem helper; no subprocess.
+pub fn is_cwd_inside(path: &std::path::Path) -> bool {
+    std::env::current_dir()
+        .ok()
+        .and_then(|cwd| cwd.canonicalize().ok())
+        .and_then(|cwd| path.canonicalize().ok().map(|p| cwd.starts_with(p)))
+        .unwrap_or(false)
+}

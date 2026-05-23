@@ -139,11 +139,10 @@ pub fn resolve_target_branch(
     if let Some(target) = cli_override {
         return target.to_string();
     }
-    if let Some(bb) = base_branch {
-        if branch_exists(bb) {
+    if let Some(bb) = base_branch
+        && branch_exists(bb) {
             return bb.to_string();
         }
-    }
     trunk.to_string()
 }
 

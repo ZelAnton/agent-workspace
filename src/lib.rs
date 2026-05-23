@@ -5,12 +5,12 @@
 pub mod cli;
 pub mod complete;
 pub mod config;
-pub mod git;
 pub mod meta;
 pub mod process;
 pub mod prompt;
 pub mod shell;
 pub mod update;
 pub mod util;
+pub mod vcs;
 
 pub use config::Config;

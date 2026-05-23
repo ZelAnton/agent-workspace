@@ -36,7 +36,7 @@ pub enum Error {
     Config(#[from] crate::config::Error),
 
     #[error("{0}")]
-    Git(#[from] crate::git::Error),
+    Git(#[from] crate::vcs::Error),
 
     #[error("not in a git repository")]
     NotInRepo,
@@ -59,6 +59,13 @@ pub struct Cli {
     /// Write target path to file (for shell integration)
     #[arg(long, global = true, hide = true, value_name = "FILE")]
     path_file: Option<std::path::PathBuf>,
+
+    /// Force a specific VCS backend (overrides config and auto-detection).
+    /// `auto` (default) detects from `.git`/`.jj` presence — colocated
+    /// repos prefer jj. Hidden from short help; rarely needed outside
+    /// debugging.
+    #[arg(long, global = true, hide_short_help = true, value_enum, default_value = "auto")]
+    vcs: crate::vcs::VcsChoice,
 }
 
 #[derive(Subcommand)]
@@ -113,6 +120,15 @@ impl Cli {
     pub fn run(self) -> Result<()> {
         let config = Config::load()?;
         let path_file = self.path_file.as_deref();
+
+        // Install the VCS backend once, before any command dispatches.
+        // Precedence: CLI flag > project config > global config > detect.
+        // Subsequent calls to `crate::vcs::*` resolve through the thread-local.
+        crate::vcs::set_backend(crate::vcs::resolve_backend(
+            self.vcs,
+            config.vcs,
+            config.vcs_global,
+        ));
 
         match self.command {
             Command::New(args) => commands::lifecycle::new::run(args, &config, path_file),

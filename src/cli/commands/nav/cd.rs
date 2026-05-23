@@ -10,7 +10,7 @@ use clap_complete::engine::ArgValueCompleter;
 use crate::cli::{write_path_file, Error, Result};
 use crate::complete;
 use crate::config::Config;
-use crate::git;
+use crate::vcs;
 
 #[derive(Args)]
 pub struct CdArgs {
@@ -31,17 +31,17 @@ pub fn run(args: CdArgs, config: &Config, path_file: Option<&Path>) -> Result<()
     }
 
     let Some(branch) = args.branch else {
-        let repo_root = git::repo_root()?;
+        let repo_root = vcs::repo_root()?;
         write_path_file(path_file, &repo_root)?;
         return Ok(());
     };
 
-    let workspace_id = git::workspace_id()?;
+    let workspace_id = vcs::workspace_id()?;
     let wt_dir = config.workspaces_dir.join(&workspace_id);
     let wt_path = wt_dir.join(&branch);
 
     if !wt_path.exists() {
-        return Err(Error::Git(git::Error::WorktreeNotFound(branch)));
+        return Err(Error::Git(vcs::Error::WorktreeNotFound(branch)));
     }
 
     write_path_file(path_file, &wt_path)?;
