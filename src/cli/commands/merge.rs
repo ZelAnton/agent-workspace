@@ -215,30 +215,31 @@ pub fn execute_merge(branch: &str, trunk: &str, strategy: MergeStrategy) -> Resu
     let log = vcs::log_oneline(trunk, branch).unwrap_or_default();
     let msg = build_merge_message(branch, &log);
 
+    // Both strategies use the same pattern post-refactor:
+    //   1. Pre-check `commit_count` for "already up to date" (returning
+    //      false means cleanup paths know nothing actually happened).
+    //   2. Single `vcs::merge(...)` call with `message=Some(_)` — the
+    //      backend handles both the merge mechanic and the resulting
+    //      commit description (git: stage + commit; jj: atomic).
+    //
+    // The pre-Phase-F `has_staged_changes()` gate was git-specific
+    // (jj has no staging area). After F-3, jj's has_staged_changes is
+    // hardcoded to false — so the gate became git-only anyway. Replacing
+    // it with a backend-agnostic commit_count pre-check makes both paths
+    // symmetric and removes the last leak of git's staging concept into
+    // command-layer code.
+    if vcs::commit_count(trunk, branch)? == 0 {
+        return Ok(false);
+    }
     match strategy {
         MergeStrategy::Squash => {
-            vcs::merge(branch, true, false, None)?;
-            if vcs::has_staged_changes()? {
-                vcs::commit(&msg)?;
-                Ok(true)
-            } else {
-                Ok(false)
-            }
+            vcs::merge(branch, true, false, Some(&msg))?;
         }
         MergeStrategy::Merge => {
-            // Detect "already up to date" before invoking git: when there
-            // are no commits ahead, `git merge --no-ff` succeeds silently
-            // without producing a merge commit. Returning Ok(true) in that
-            // case would print "Merge complete" and (with -d) cleanup a
-            // worktree even though nothing happened — caller relies on the
-            // bool to know whether to proceed.
-            if vcs::commit_count(trunk, branch)? == 0 {
-                return Ok(false);
-            }
             vcs::merge(branch, false, true, Some(&msg))?;
-            Ok(true)
         }
     }
+    Ok(true)
 }
 
 /// Clean up worktree after successful merge

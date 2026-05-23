@@ -8,6 +8,15 @@ use super::errmap::map_run_err;
 use crate::vcs::error::Result;
 
 /// Run `git merge` with the configured strategy.
+///
+/// **Squash + message handling**: `git merge --squash` stages but doesn't
+/// commit, and the `-m` flag is incompatible with `--squash`. When called
+/// with `squash=true` AND `message=Some(_)`, this function does both steps
+/// atomically: stage via `git merge --squash`, then `git commit -m msg`
+/// (skipped if nothing was actually staged, matching "already up to date"
+/// semantics). This lets the caller `vcs::merge(...)` produce a finished
+/// squash commit in one trait call — same shape as jj's atomic merge —
+/// instead of needing a follow-up `has_staged_changes() + commit()` dance.
 pub(super) fn merge(
     runner: &dyn Runner,
     branch: &str,
@@ -15,10 +24,30 @@ pub(super) fn merge(
     no_ff: bool,
     message: Option<&str>,
 ) -> Result<()> {
-    let mut args: Vec<&str> = vec!["merge"];
     if squash {
-        args.push("--squash");
+        super::exec(runner, &["merge", "--squash", branch])?;
+        // If a message is provided, finalise the squash with a real commit.
+        // The post-squash index may be empty when the branch was already
+        // merged ("already up to date") — `git commit` would error with
+        // "nothing to commit" in that case, so probe the index first.
+        if let Some(msg) = message {
+            let cwd = std::env::current_dir()?;
+            let has_staged = match runner.run(
+                Cmd::new("git").in_dir(&cwd).args(["diff", "--cached", "--quiet"]),
+            ) {
+                Ok(_) => false,
+                Err(RunError::NonZeroExit { status, .. }) if status.code() == Some(1) => true,
+                Err(e) => return Err(map_run_err(e)),
+            };
+            if has_staged {
+                super::exec(runner, &["commit", "-m", msg])?;
+            }
+        }
+        return Ok(());
     }
+
+    // Non-squash path. `-m` is valid alongside `--no-ff`.
+    let mut args: Vec<&str> = vec!["merge"];
     if no_ff {
         args.push("--no-ff");
     }

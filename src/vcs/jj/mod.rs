@@ -1,32 +1,52 @@
 // ===========================================================================
-// vcs/jj - jj backend (stub)
+// vcs/jj - Jujutsu backend
 // ===========================================================================
 //
-// **Every** method of `VcsBackend` is mirrored here as `unimplemented!()`.
-// The stub is mandatory — it makes the trait surface explicitly visible
-// for the future jj implementation and prevents `GitBackend` from drifting
-// ahead of jj by adding methods that have no jj equivalent.
+// Mirrors the structure of `src/vcs/git/`. Implementation lives in
+// submodules (`repo`, ...) — `mod.rs` is just struct + trait-impl assembly.
 //
-// When a method gets a real jj implementation, replace the
-// `unimplemented!()` body in place; the method name + signature must stay
-// identical to the trait. The stub message must include the op name so
-// users hitting it via `wt <cmd>` in a jj repo today get a clear "this op
-// is not yet supported by the jj backend" message instead of a generic
-// panic.
+// **Implementation status** (track against AGENTS.md's "VCS backend
+// compatibility" section):
+//   - F-1 (identity + bookmarks): implemented
+//   - F-2 (workspaces): stubs
+//   - F-3 (state + diff): stubs
+//   - F-4 (mutations + atomic_merge): stubs
+//   - F-5 (sync hints): N/A — handled at caller level
+//
+// Methods that are intentionally `unimplemented!()` per locked semantic
+// decisions surface as `Error::Unsupported("jj: <op> — <hint>")` once F-2..F-4
+// land. Until then, the catch-all `nyi()` helper produces the same shape.
+
+mod branch;
+mod errmap;
+mod ops;
+mod repo;
+mod worktree;
+
+pub use branch::parse_jj_stat_footer;
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use vcs_runner::{Cmd, DefaultRunner, Runner};
 
 use super::backend::VcsBackend;
 use super::common::{DiffStat, WorktreeInfo};
 use super::error::{Error, Result};
 
-/// jj-backed [`VcsBackend`] — currently every method returns
-/// `Error::Unsupported`. See module docs for the stub-policy rationale.
-pub struct JjBackend;
+/// jj-backed [`VcsBackend`]. Stores the subprocess runner so tests can
+/// swap in a `MockRunner` (parser-heavy tests) or `DefaultRunner` (e2e).
+pub struct JjBackend {
+    runner: Arc<dyn Runner>,
+}
 
 impl JjBackend {
     pub fn new() -> Self {
-        Self
+        Self { runner: Arc::new(DefaultRunner) }
+    }
+
+    pub fn with_runner(runner: Arc<dyn Runner>) -> Self {
+        Self { runner }
     }
 }
 
@@ -36,85 +56,155 @@ impl Default for JjBackend {
     }
 }
 
-/// Build the standard "jj backend: <op> not yet implemented" error.
-#[inline]
-fn nyi(op: &str) -> Error {
-    Error::Unsupported(format!("jj: {op}"))
+/// Run a void jj command (no output parsing). Mirrors `git::exec` from the
+/// git backend. Used by simple mutating ops that only need exit status.
+pub(super) fn exec(runner: &dyn Runner, args: &[&str]) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    runner
+        .run(Cmd::new("jj").in_dir(&cwd).args(args))
+        .map(|_| ())
+        .map_err(errmap::map_run_err)
 }
+
+// All F-1..F-5 methods are implemented. The previous `nyi(...)` helper
+// for stubs has been retired now that no `unimplemented!`-style returns
+// remain. Methods that genuinely have no jj equivalent (locked semantic
+// decisions: `move_worktree`, `*_abort/*_continue`) return inline
+// `Error::Unsupported(...)` with a hint message.
 
 impl VcsBackend for JjBackend {
     fn name(&self) -> &'static str { "jj" }
 
-    // ----- Identity -------------------------------------------------------
-    fn repo_root(&self) -> Result<PathBuf> { Err(nyi("repo_root")) }
-    fn repo_name(&self) -> Result<String> { Err(nyi("repo_name")) }
-    fn workspace_id(&self) -> Result<String> { Err(nyi("workspace_id")) }
-    fn current_branch(&self) -> Result<String> { Err(nyi("current_branch")) }
-    fn current_commit(&self) -> Result<String> { Err(nyi("current_commit")) }
-    fn detect_trunk(&self) -> Result<String> { Err(nyi("detect_trunk")) }
+    // ===================================================================
+    // F-1: Identity + bookmarks — IMPLEMENTED
+    // ===================================================================
+    fn repo_root(&self) -> Result<PathBuf> { repo::repo_root(self.runner.as_ref()) }
+    fn repo_name(&self) -> Result<String> { repo::repo_name(self.runner.as_ref()) }
+    fn workspace_id(&self) -> Result<String> { repo::workspace_id(self.runner.as_ref()) }
+    fn current_branch(&self) -> Result<String> { repo::current_branch(self.runner.as_ref()) }
+    fn current_commit(&self) -> Result<String> { repo::current_commit(self.runner.as_ref()) }
+    fn detect_trunk(&self) -> Result<String> { repo::detect_trunk(self.runner.as_ref()) }
 
-    // ----- Branches -------------------------------------------------------
-    fn local_branches(&self) -> Result<Vec<String>> { Err(nyi("local_branches")) }
-    fn branch_exists(&self, _name: &str) -> Result<bool> { Err(nyi("branch_exists")) }
-    fn is_merged(&self, _branch: &str, _target: &str) -> Result<bool> { Err(nyi("is_merged")) }
-    fn has_diff_from(&self, _branch: &str, _target: &str) -> Result<bool> {
-        Err(nyi("has_diff_from"))
+    fn local_branches(&self) -> Result<Vec<String>> { repo::local_branches(self.runner.as_ref()) }
+    fn branch_exists(&self, name: &str) -> Result<bool> {
+        repo::branch_exists(self.runner.as_ref(), name)
     }
-    fn delete_branch(&self, _name: &str, _force: bool) -> Result<()> { Err(nyi("delete_branch")) }
-    fn rename_branch(&self, _old: &str, _new: &str) -> Result<()> { Err(nyi("rename_branch")) }
-    fn log_oneline(&self, _from: &str, _to: &str) -> Result<String> { Err(nyi("log_oneline")) }
-    fn commit_count(&self, _from: &str, _to: &str) -> Result<usize> { Err(nyi("commit_count")) }
-    fn diff_shortstat(&self, _from: &str, _to: &str) -> Result<DiffStat> {
-        Err(nyi("diff_shortstat"))
+    fn rename_branch(&self, old: &str, new: &str) -> Result<()> {
+        repo::rename_branch(self.runner.as_ref(), old, new)
     }
-    fn diff_shortstat_in(&self, _path: &Path) -> Result<DiffStat> { Err(nyi("diff_shortstat_in")) }
+    fn delete_branch(&self, name: &str, force: bool) -> Result<()> {
+        repo::delete_branch(self.runner.as_ref(), name, force)
+    }
 
-    // ----- Working-copy state --------------------------------------------
-    fn has_uncommitted_changes(&self) -> Result<bool> { Err(nyi("has_uncommitted_changes")) }
-    fn uncommitted_count_in(&self, _path: &Path) -> Result<usize> {
-        Err(nyi("uncommitted_count_in"))
+    // ===================================================================
+    // F-2: Workspaces — IMPLEMENTED
+    // ===================================================================
+    fn list_worktrees(&self) -> Result<Vec<WorktreeInfo>> {
+        worktree::list_worktrees(self.runner.as_ref())
     }
-    fn has_staged_changes(&self) -> Result<bool> { Err(nyi("has_staged_changes")) }
-    fn has_changes_from_trunk(&self, _trunk: &str) -> Result<bool> {
-        Err(nyi("has_changes_from_trunk"))
+    fn create_worktree(&self, path: &Path, branch: &str, base: &str) -> Result<()> {
+        worktree::create_worktree(self.runner.as_ref(), path, branch, base)
     }
-    // State probes are infallible by trait — return false until jj impls land.
-    // (jj has no "rebase in progress" or "merge in progress" state in the
-    // same shape as git; the future jj impl will check `jj st` for
-    // unresolved conflicts.)
+    fn remove_worktree(&self, path: &Path, force: bool) -> Result<()> {
+        worktree::remove_worktree(self.runner.as_ref(), path, force)
+    }
+    /// **Per locked decision**: `wt mv` on jj workspaces is not supported.
+    /// jj has no `workspace move` primitive; the manual recipe is "remove
+    /// and re-create the workspace" — surface that to the user as an error.
+    fn move_worktree(&self, _old: &Path, _new: &Path) -> Result<()> {
+        Err(Error::Unsupported(
+            "jj: move_worktree — remove and re-create the workspace".into(),
+        ))
+    }
+
+    // ===================================================================
+    // F-3: Working-copy state + diff — IMPLEMENTED
+    // ===================================================================
+    fn is_merged(&self, branch: &str, target: &str) -> Result<bool> {
+        branch::is_merged(self.runner.as_ref(), branch, target)
+    }
+    fn has_diff_from(&self, branch: &str, target: &str) -> Result<bool> {
+        branch::has_diff_from(self.runner.as_ref(), branch, target)
+    }
+    fn log_oneline(&self, from: &str, to: &str) -> Result<String> {
+        branch::log_oneline(self.runner.as_ref(), from, to)
+    }
+    fn commit_count(&self, from: &str, to: &str) -> Result<usize> {
+        branch::commit_count(self.runner.as_ref(), from, to)
+    }
+    fn diff_shortstat(&self, from: &str, to: &str) -> Result<DiffStat> {
+        branch::diff_shortstat(self.runner.as_ref(), from, to)
+    }
+    fn diff_shortstat_in(&self, path: &Path) -> Result<DiffStat> {
+        branch::diff_shortstat_in(self.runner.as_ref(), path)
+    }
+    fn has_uncommitted_changes(&self) -> Result<bool> {
+        branch::has_uncommitted_changes(self.runner.as_ref())
+    }
+    fn uncommitted_count_in(&self, path: &Path) -> Result<usize> {
+        branch::uncommitted_count_in(self.runner.as_ref(), path)
+    }
+    fn has_changes_from_trunk(&self, trunk: &str) -> Result<bool> {
+        branch::has_changes_from_trunk(self.runner.as_ref(), trunk)
+    }
+    /// **Per locked decision**: jj operations are atomic; there is no
+    /// "rebase in progress" state. Always false.
     fn is_rebase_in_progress(&self) -> bool { false }
-    fn is_merge_in_progress(&self) -> bool { false }
+    /// **Per locked decision**: jj treats conflicts as committed state.
+    /// Implemented by scanning `jj st` for the unresolved-conflicts marker.
+    fn is_merge_in_progress(&self) -> bool {
+        branch::is_merge_in_progress(self.runner.as_ref())
+    }
 
-    // ----- Mutations ------------------------------------------------------
+    // ===================================================================
+    // F-4: Mutations — IMPLEMENTED
+    // ===================================================================
     fn merge(
         &self,
-        _branch: &str,
-        _squash: bool,
-        _no_ff: bool,
-        _message: Option<&str>,
+        branch: &str,
+        squash: bool,
+        no_ff: bool,
+        message: Option<&str>,
     ) -> Result<()> {
-        Err(nyi("merge"))
+        ops::merge(self.runner.as_ref(), branch, squash, no_ff, message)
     }
-    fn dry_run_merge(&self, _branch: &str, _squash: bool) -> Result<bool> {
-        Err(nyi("dry_run_merge"))
+    fn dry_run_merge(&self, branch: &str, squash: bool) -> Result<bool> {
+        ops::dry_run_merge(self.runner.as_ref(), branch, squash)
     }
-    fn rebase(&self, _onto: &str) -> Result<()> { Err(nyi("rebase")) }
-    fn checkout(&self, _branch: &str) -> Result<()> { Err(nyi("checkout")) }
-    fn commit(&self, _message: &str) -> Result<()> { Err(nyi("commit")) }
-    fn fetch(&self) -> Result<()> { Err(nyi("fetch")) }
-    fn rebase_abort(&self) -> Result<()> { Err(nyi("rebase_abort")) }
-    fn rebase_continue(&self) -> Result<()> { Err(nyi("rebase_continue")) }
-    fn merge_abort(&self) -> Result<()> { Err(nyi("merge_abort")) }
-    fn merge_continue(&self) -> Result<()> { Err(nyi("merge_continue")) }
-    fn reset_merge(&self) -> Result<()> { Err(nyi("reset_merge")) }
+    fn rebase(&self, onto: &str) -> Result<()> { ops::rebase(self.runner.as_ref(), onto) }
+    fn checkout(&self, branch: &str) -> Result<()> {
+        ops::checkout(self.runner.as_ref(), branch)
+    }
+    fn commit(&self, message: &str) -> Result<()> {
+        ops::commit(self.runner.as_ref(), message)
+    }
+    fn fetch(&self) -> Result<()> { ops::fetch(self.runner.as_ref()) }
 
-    // ----- Worktrees ------------------------------------------------------
-    fn list_worktrees(&self) -> Result<Vec<WorktreeInfo>> { Err(nyi("list_worktrees")) }
-    fn create_worktree(&self, _path: &Path, _branch: &str, _base: &str) -> Result<()> {
-        Err(nyi("create_worktree"))
+    /// **Per locked decision**: jj has no in-progress state. Return
+    /// `Unsupported` with a guidance message; `wt sync` will surface this
+    /// directly until F-5 adds backend-aware hints at the caller layer.
+    fn rebase_abort(&self) -> Result<()> {
+        Err(Error::Unsupported(
+            "jj: rebase_abort — jj records conflicts in commits; resolve files and re-run".into(),
+        ))
     }
-    fn remove_worktree(&self, _path: &Path, _force: bool) -> Result<()> {
-        Err(nyi("remove_worktree"))
+    fn rebase_continue(&self) -> Result<()> {
+        Err(Error::Unsupported(
+            "jj: rebase_continue — jj records conflicts in commits; resolve files and re-run".into(),
+        ))
     }
-    fn move_worktree(&self, _old: &Path, _new: &Path) -> Result<()> { Err(nyi("move_worktree")) }
+    fn merge_abort(&self) -> Result<()> {
+        Err(Error::Unsupported(
+            "jj: merge_abort — jj records conflicts in commits; resolve files and re-run".into(),
+        ))
+    }
+    fn merge_continue(&self) -> Result<()> {
+        Err(Error::Unsupported(
+            "jj: merge_continue — jj records conflicts in commits; resolve files and re-run".into(),
+        ))
+    }
+    fn reset_merge(&self) -> Result<()> { ops::reset_merge(self.runner.as_ref()) }
 }
+
+#[cfg(test)]
+mod tests;

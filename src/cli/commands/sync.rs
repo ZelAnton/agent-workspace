@@ -31,15 +31,37 @@ pub struct SyncArgs {
 }
 
 pub fn run(args: SyncArgs, config: &Config) -> Result<()> {
+    // jj has no "in progress" state — conflicts are recorded into commits
+    // and resolved by editing files directly. --abort / --continue have no
+    // direct analog. We detect "conflicts present" via is_merge_in_progress
+    // (which jj implements as "jj st shows unresolved conflicts") and
+    // surface a clear hint instead of silently failing.
+    let is_jj = vcs::backend_name() == "jj";
+
     if args.abort {
         if vcs::is_rebase_in_progress() {
             eprintln!("Aborting rebase...");
             vcs::rebase_abort()?;
             eprintln!("Rebase aborted.");
         } else if vcs::is_merge_in_progress() {
+            if is_jj {
+                return Err(Error::Other(
+                    "jj records conflicts in commits — there's no in-progress merge to abort.\n\
+                     Resolve the conflict markers in your files, then re-run `wt sync` if needed.\n\
+                     To discard the conflicted change entirely, use `jj abandon @` (advanced)."
+                        .into(),
+                ));
+            }
             eprintln!("Aborting merge...");
             vcs::merge_abort()?;
             eprintln!("Merge aborted.");
+        } else if is_jj {
+            return Err(Error::Other(
+                "No conflicted commit to abort. jj records conflicts in commits — \
+                 if you expected a rebase to be in progress, jj's rebase is atomic and \
+                 either succeeded or recorded conflicts into the resulting commit."
+                    .into(),
+            ));
         } else {
             return Err(Error::Other("No sync in progress to abort".into()));
         }
@@ -52,9 +74,22 @@ pub fn run(args: SyncArgs, config: &Config) -> Result<()> {
             vcs::rebase_continue()?;
             eprintln!("Rebase continued.");
         } else if vcs::is_merge_in_progress() {
+            if is_jj {
+                return Err(Error::Other(
+                    "jj records conflicts in commits — there's no in-progress merge to continue.\n\
+                     Resolve the conflict markers in your files; jj snapshots the resolution \
+                     into `@` on the next command. No explicit `--continue` is needed.".into(),
+                ));
+            }
             eprintln!("Continuing merge...");
             vcs::merge_continue()?;
             eprintln!("Merge continued.");
+        } else if is_jj {
+            return Err(Error::Other(
+                "No conflicted commit to continue from. jj operations are atomic; \
+                 conflicts are recorded into commits and resolved by editing files directly."
+                    .into(),
+            ));
         } else {
             return Err(Error::Other("No sync in progress to continue".into()));
         }

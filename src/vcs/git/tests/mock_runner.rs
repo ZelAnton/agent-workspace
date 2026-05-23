@@ -45,17 +45,36 @@ fn current_branch_maps_nonzero_to_not_in_repo() {
 }
 
 #[test]
-fn merge_emits_squash_args_when_squash_true() {
-    // Asserts the exact arg vector merge() builds — proves the trait method
-    // doesn't quietly drop or reorder flags. The mock matches on the
-    // display string (program + args joined as shell-style).
-    // Cmd's display uses single quotes for whitespace-containing args.
-    let mock = MockRunner::new().expect(
-        "git merge --squash --no-ff -m 'my msg' feature",
-        ok_str(""),
-    );
+fn merge_emits_squash_then_commit_when_squash_true_with_message() {
+    // After F-4 refactor, `merge(squash=true, msg=Some(_))` is a two-step
+    // op: `git merge --squash branch` (stages), then if anything was
+    // staged, `git commit -m msg`. The `no_ff` flag is ignored under
+    // squash (git rejects `--no-ff` with `--squash`).
+    let mock = MockRunner::new()
+        .expect("git merge --squash feature", ok_str(""))
+        // diff --cached --quiet exits non-zero (1) when staged changes
+        // exist — our impl interprets that as "yes, do the commit".
+        .expect(
+            "git diff --cached --quiet",
+            procpilot::testing::nonzero(1, ""),
+        )
+        .expect("git commit -m 'my msg'", ok_str(""));
     let backend = GitBackend::with_runner(Arc::new(mock));
     backend.merge("feature", true, true, Some("my msg")).unwrap();
+}
+
+#[test]
+fn merge_squash_skips_commit_when_nothing_staged() {
+    // "Already up to date" path: merge --squash succeeded but produced no
+    // staged content. The commit step must be skipped — git would error
+    // otherwise with "nothing to commit".
+    let mock = MockRunner::new()
+        .expect("git merge --squash feature", ok_str(""))
+        // diff --cached --quiet exits 0 → no staged changes.
+        .expect("git diff --cached --quiet", ok_str(""));
+    let backend = GitBackend::with_runner(Arc::new(mock));
+    // Should succeed without invoking commit.
+    backend.merge("feature", true, false, Some("my msg")).unwrap();
 }
 
 #[test]
@@ -67,14 +86,8 @@ fn fetch_silently_swallows_nonzero_exit() {
     assert!(backend.fetch().is_ok());
 }
 
-#[test]
-fn has_staged_changes_treats_exit_1_as_true() {
-    // `git diff --cached --quiet` uses exit 1 as the "has diff" signal,
-    // not an error. Confirm GitBackend translates that correctly.
-    let mock = MockRunner::new().expect("git diff --cached --quiet", nonzero(1, ""));
-    let backend = GitBackend::with_runner(Arc::new(mock));
-    assert!(backend.has_staged_changes().unwrap());
-}
+// has_staged_changes was removed in F-7 after merge.rs stopped using it.
+// The test that pinned its exit-code-1 behavior is no longer relevant.
 
 // ---------------------------------------------------------------------------
 // is_transient_fetch_err predicate — pure-function tests, no MockRunner

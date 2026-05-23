@@ -123,9 +123,6 @@ impl VcsBackend for GitBackend {
     fn uncommitted_count_in(&self, path: &Path) -> Result<usize> {
         branch::uncommitted_count_in(self.runner.as_ref(), path)
     }
-    fn has_staged_changes(&self) -> Result<bool> {
-        branch::has_staged_changes(self.runner.as_ref())
-    }
     fn has_changes_from_trunk(&self, trunk: &str) -> Result<bool> {
         branch::has_changes_from_trunk(self.runner.as_ref(), trunk)
     }

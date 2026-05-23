@@ -141,6 +141,18 @@ pub fn set_backend(b: Box<dyn VcsBackend>) {
     });
 }
 
+/// Short identifier of the active backend — `"git"` or `"jj"`.
+///
+/// Intended for **UI-only branching** of help text and hint messages
+/// (e.g. `wt status` prints a jj-specific "conflicts in commits" line
+/// instead of git's "merge in progress"). Don't use this for behavioural
+/// switches in command logic — the trait abstraction is the right place
+/// for those. The free function is a deliberate, narrow leak of the
+/// backend tag for human-readable output.
+pub fn backend_name() -> &'static str {
+    with_backend(|b| b.name())
+}
+
 /// Run a closure against the active backend.
 ///
 /// **Lazy default**: if no backend has been installed on this thread,
@@ -210,7 +222,6 @@ pub fn has_uncommitted_changes() -> Result<bool> { with_backend(|b| b.has_uncomm
 pub fn uncommitted_count_in(path: &Path) -> Result<usize> {
     with_backend(|b| b.uncommitted_count_in(path))
 }
-pub fn has_staged_changes() -> Result<bool> { with_backend(|b| b.has_staged_changes()) }
 pub fn has_changes_from_trunk(trunk: &str) -> Result<bool> {
     with_backend(|b| b.has_changes_from_trunk(trunk))
 }
@@ -245,6 +256,15 @@ pub fn remove_worktree(path: &Path, force: bool) -> Result<()> {
 pub fn move_worktree(old: &Path, new: &Path) -> Result<()> {
     with_backend(|b| b.move_worktree(old, new))
 }
+
+/// Shared cwd-serialization mutex for backend test suites.
+///
+/// `std::env::current_dir()` is process-global; any test that calls
+/// `set_current_dir` must hold this mutex for the duration. Both
+/// `src/vcs/git/tests` and `src/vcs/jj/tests` lock the **same** mutex so
+/// concurrent jj + git tests don't trample each other.
+#[cfg(test)]
+pub(crate) static CWD_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod resolve_tests {

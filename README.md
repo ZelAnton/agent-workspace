@@ -16,7 +16,7 @@ AI coding agents work best with isolated environments:
 
 ### Fork notes
 
-This is a fork of [`nekocode/agent-worktree`](https://github.com/nekocode/agent-worktree). The primary goal of the fork is native [Jujutsu (`jj`)](https://jj-vcs.github.io/jj/) repository support alongside git. The implementation lives behind `src/vcs/` with `GitBackend` complete and `JjBackend` filled in incrementally; for now jj-only and colocated repos resolve to the jj backend and surface `operation not yet supported by this backend: jj: <op>` for unimplemented ops. Override with `--vcs=git` (or `[general] vcs = "git"` in `.agent-workspace.toml`) to force the git backend in a colocated repo. See [`AGENTS.md`](AGENTS.md) → "VCS backend compatibility" for status and contributor guidance.
+This is a fork of [`nekocode/agent-worktree`](https://github.com/nekocode/agent-worktree). The primary goal of the fork is native [Jujutsu (`jj`)](https://jj-vcs.github.io/jj/) repository support alongside git. Both backends are feature-complete for `wt`'s happy-path workflows (new / ls / cd / rm / clean / merge / sync / status / mv). The implementation lives behind `src/vcs/` with `GitBackend` and `JjBackend` as separate impls of a common trait. In colocated repos (both `.git/` and `.jj/` present) the jj backend is the default — override with `--vcs=git` or `[general] vcs = "git"` in `.agent-workspace.toml`. A few git-shaped operations have no clean jj analogue and surface `Error::Unsupported` with a hint: `wt mv` (jj has no workspace move — `wt rm` + `wt new`) and `wt sync --abort`/`--continue` (jj records conflicts in commits — resolve files and re-run). See [`AGENTS.md`](AGENTS.md) → "VCS backend compatibility" for the full semantic-delta table.
 
 ## Install
 

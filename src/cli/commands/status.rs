@@ -79,17 +79,31 @@ pub fn run(config: &Config) -> Result<()> {
     Ok(())
 }
 
-/// Detect and display sync in-progress state
+/// Detect and display sync in-progress state.
+///
+/// jj has no "in progress" transient state — conflicts are recorded into
+/// commits. When the active backend is jj and `is_merge_in_progress` is
+/// true, that means `jj st` shows unresolved conflicts in the working
+/// copy commit. The guidance is different: edit the files; jj snapshots
+/// the resolution automatically. No `--continue`/`--abort` apply.
 fn print_in_progress_state() {
     if vcs::is_rebase_in_progress() {
+        // Only reachable on git — jj always returns false here.
         println!();
         println!("State:        REBASE IN PROGRESS (sync)");
         println!("  Resolve conflicts, then: wt sync --continue");
         println!("  Or abort: wt sync --abort");
     } else if vcs::is_merge_in_progress() {
         println!();
-        println!("State:        MERGE IN PROGRESS (sync)");
-        println!("  Resolve conflicts, then: wt sync --continue");
-        println!("  Or abort: wt sync --abort");
+        if vcs::backend_name() == "jj" {
+            println!("State:        CONFLICTS IN COMMIT");
+            println!("  jj records conflicts in `@`. Resolve the markers in your files;");
+            println!("  jj snapshots the resolution into `@` on the next command.");
+            println!("  (No `wt sync --continue/--abort` — those are git-only.)");
+        } else {
+            println!("State:        MERGE IN PROGRESS (sync)");
+            println!("  Resolve conflicts, then: wt sync --continue");
+            println!("  Or abort: wt sync --abort");
+        }
     }
 }

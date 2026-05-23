@@ -127,19 +127,6 @@ pub(super) fn has_changes_from_trunk(runner: &dyn Runner, trunk: &str) -> Result
     Ok(commit_count(runner, trunk, "HEAD")? > 0)
 }
 
-/// True if any changes are staged.
-///
-/// `git diff --cached --quiet` exits 0 if no diff, 1 if diff — the non-zero
-/// is the answer, not an error.
-pub(super) fn has_staged_changes(runner: &dyn Runner) -> Result<bool> {
-    let cwd = std::env::current_dir()?;
-    match runner.run(Cmd::new("git").in_dir(&cwd).args(["diff", "--cached", "--quiet"])) {
-        Ok(_) => Ok(false),
-        Err(RunError::NonZeroExit { status, .. }) if status.code() == Some(1) => Ok(true),
-        Err(e) => Err(map_run_err(e)),
-    }
-}
-
 /// Rename a branch in place.
 pub(super) fn rename_branch(runner: &dyn Runner, old: &str, new: &str) -> Result<()> {
     super::exec(runner, &["branch", "-m", old, new])

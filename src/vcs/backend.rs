@@ -60,7 +60,6 @@ pub trait VcsBackend: Send + Sync {
     // -------------------------------------------------------------------
     fn has_uncommitted_changes(&self) -> Result<bool>;
     fn uncommitted_count_in(&self, path: &Path) -> Result<usize>;
-    fn has_staged_changes(&self) -> Result<bool>;
     fn has_changes_from_trunk(&self, trunk: &str) -> Result<bool>;
 
     /// True iff a rebase is currently in progress (git: `.git/rebase-*`).

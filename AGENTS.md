@@ -142,16 +142,23 @@ The repo uses [jujutsu (`jj`)](https://jj-vcs.github.io/jj/) (colocated with git
 This fork's primary goal is native `jj` backend support alongside `git`. All VCS-touching code lives under `src/vcs/`:
 
 - `src/vcs/backend.rs` — the `VcsBackend` trait. **Every public VCS operation is a trait method, no exceptions.**
-- `src/vcs/git/` — `GitBackend`, the only complete implementation. Each method goes through `vcs_runner::Cmd::new("git").in_dir(cwd).args(...)` via an `Arc<dyn procpilot::Runner>` so tests can swap in `MockRunner`.
-- `src/vcs/jj/` — `JjBackend`, currently `unimplemented!()` stubs returning `Error::Unsupported("jj: <op>")`. Operations are filled in incrementally; each method that becomes real ships in its own commit.
-- `src/vcs/mod.rs` — facade `vcs::foo()` free functions backed by a thread-local backend. Production code in `src/cli/commands/` calls `crate::vcs::repo_root()` etc. — no `Box<dyn VcsBackend>` ever leaks out of this module. Backend resolution lives in `resolve_backend(cli, project, global)`, called once from `Cli::run`.
+- `src/vcs/git/` — `GitBackend`. Each method goes through `vcs_runner::Cmd::new("git").in_dir(cwd).args(...)` via an `Arc<dyn procpilot::Runner>` so tests can swap in `MockRunner`.
+- `src/vcs/jj/` — `JjBackend`. Implemented for `wt`'s happy-path workflows (identity, bookmarks, workspaces, state probes, diff, merge/rebase/checkout/commit/fetch). The locked-decision methods that have no jj analogue surface `Error::Unsupported`: `move_worktree` (use `jj workspace forget` + manual move) and `*_abort`/`*_continue` (jj records conflicts in commits — resolve and re-run).
+- `src/vcs/mod.rs` — facade `vcs::foo()` free functions backed by a thread-local backend. Production code in `src/cli/commands/` calls `crate::vcs::repo_root()` etc. — no `Box<dyn VcsBackend>` ever leaks out of this module. Backend resolution lives in `resolve_backend(cli, project, global)`, called once from `Cli::run`. The `vcs::backend_name()` accessor is the only intentional leak of the active-backend tag (for UI hint branching in `wt sync`/`wt status` — never use it for behavioural switches).
+
+**Semantic deltas (jj vs git)** worth knowing when reading the trait impls:
+
+- **No staging area.** jj snapshots the working copy into `@` on every command, so "uncommitted" means "`@` differs from `@-`". `has_staged_changes` was removed from the trait in F-7 (git's only consumer, `merge.rs::execute_merge`, was refactored to drop the staging gate).
+- **No in-progress merge/rebase state.** jj operations are atomic; conflicts record into the resulting commit. `is_rebase_in_progress` is always `false`. `is_merge_in_progress` checks `jj st` for the `"unresolved conflicts"` marker (jj ≥ 0.16 wording — fall back to a regex if a future jj rev changes the string).
+- **Bookmarks ≠ branches.** jj bookmarks don't auto-follow `@`. The `merge()` impl explicitly advances the target bookmark via `jj bookmark move <name> --to <revset> --allow-backwards` after the squash/merge. **`wt new` always creates a bookmark on the new workspace's `@`** — `current_branch()` errors otherwise with the message "no bookmark on @; run wt new or jj bookmark create".
+- **Dry-run merge** in jj uses `jj op log` to capture the operation id, then materialises the merge via `jj new`, checks the resulting commit's `conflict` flag, and `jj op restore <pre-op-id>` to roll back. There's a ~10ms window where a concurrent reader sees the merge commit on `@`. Acceptable per the locked decision; documented inline in `src/vcs/jj/ops.rs::dry_run_merge`.
 
 **When adding a new VCS operation, in order**:
 1. Add the trait method to `VcsBackend` (signature + doc comment).
-2. Implement it on `GitBackend` (helper function in the appropriate `src/vcs/git/*.rs` submodule + delegation in `src/vcs/git/mod.rs`). Prefer the `runner.run(Cmd::new("git").in_dir(&cwd).args(...))` pattern; pull a `vcs-runner` parser only if the output shape genuinely matches (don't force-fit `parse_diff_summary` onto `--shortstat`, etc. — see the rejection table in `src/vcs/git/branch.rs` and `worktree.rs`).
-3. Add the stub to `JjBackend` with `Err(nyi("<opname>"))`. **The stub is mandatory** — it prevents the two backends drifting in API surface and gives users a clear error message when they hit an unimplemented op in a jj repo today.
+2. Implement it on `GitBackend` (helper function in the appropriate `src/vcs/git/*.rs` submodule + delegation in `src/vcs/git/mod.rs`). Prefer the `runner.run(Cmd::new("git").in_dir(&cwd).args(...))` pattern; pull a `vcs-runner` parser only if the output shape genuinely matches (don't force-fit `parse_diff_summary` onto `--shortstat`, etc.).
+3. Implement it on `JjBackend` (helper function in the appropriate `src/vcs/jj/*.rs` submodule). If the op has no clean jj analogue, return `Error::Unsupported("jj: <opname> — <hint>")` inline rather than a panic — users hitting the path get a clear message.
 4. Add the facade free function in `src/vcs/mod.rs`.
-5. Test against `MockRunner` if the logic is parser-heavy (see `src/vcs/git/tests/mock_runner.rs`); against a real repo (`setup_test_repo` + `with_cwd` from `src/vcs/git/tests/mod.rs`) otherwise.
+5. Test against `MockRunner` if the logic is parser-heavy (see `src/vcs/{git,jj}/tests/mock_runner.rs`); against a real repo (`setup_test_repo` / `jj_repo` + `with_cwd`) otherwise. The shared `CWD_MUTEX` (in `src/vcs/mod.rs`) serializes both test suites — they run in the same lib test binary.
 
 **Backend selection**:
 
@@ -159,6 +166,6 @@ This fork's primary goal is native `jj` backend support alongside `git`. All VCS
 - **Colocated repos default to jj** (`.git/` + `.jj/` both present → `JjBackend`). The user installed jj for a reason; respect that. Override with `--vcs=git` or `vcs = "git"` in `.agent-workspace.toml`.
 - `--vcs=jj` in a git-only checkout, or `--vcs=git` in a jj-only checkout, are both honored — they install the requested backend, which will surface real errors when methods are called. We don't pre-validate.
 
-**Network ops retry; local ops don't**. `fetch()` uses a custom transient predicate (`is_transient_fetch_err` in `src/vcs/git/ops.rs`) matching DNS / connection / EOF stderr patterns — `RetryPolicy::default()` from vcs-runner matches `"stale"`/`".lock"` only, which is the wrong shape for network failures. Other ops bubble errors directly; adding retry to a non-idempotent op is a bug.
+**Network ops retry; local ops don't**. Git's `fetch()` uses a custom transient predicate (`is_transient_fetch_err` in `src/vcs/git/ops.rs`) matching DNS / connection / EOF stderr patterns. Jj's `fetch()` uses `vcs_runner::is_transient_error` directly (jj's stderr shapes match procpilot's default). `RetryPolicy::default()` matches `"stale"`/`".lock"` only — wrong shape for network failures.
 
 **Edition / MSRV**: this crate is on `edition = "2024"`, `rust-version = "1.91"` (matches `vcs-runner` MSRV).

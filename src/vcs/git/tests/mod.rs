@@ -3,7 +3,6 @@ mod ops;
 
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
-use std::sync::Mutex;
 
 use tempfile::tempdir;
 
@@ -11,10 +10,9 @@ use super::*;
 use crate::vcs::backend::VcsBackend;
 use crate::vcs::error::Error;
 
-// Global mutex for tests that change cwd. Same role as the pre-refactor
-// CWD_MUTEX in src/git/tests — `std::env::current_dir()` is process-global,
-// so any test that mutates it must hold the mutex for its duration.
-pub(super) static CWD_MUTEX: Mutex<()> = Mutex::new(());
+// CWD_MUTEX moved to `crate::vcs::CWD_MUTEX` so both git and jj test
+// suites lock the same mutex — `std::env::current_dir()` is process-global.
+use crate::vcs::CWD_MUTEX;
 
 // ---------------------------------------------------------------------------
 // Helper: Setup a minimal git repo for testing
