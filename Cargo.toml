@@ -33,6 +33,14 @@ tar = "0.4"
 flate2 = "1"
 tempfile = "3"
 vcs-runner = "0.13"
+reflink-copy = "0.1"
+
+[target.'cfg(windows)'.dependencies]
+# Volume-serial-number lookup for the CoW same-volume probe.
+# `std::os::windows::fs::MetadataExt::volume_serial_number` is nightly-only
+# (#63010); winapi-util wraps `GetFileInformationByHandle` on stable.
+# Already in our dep tree transitively via `ignore` → `walkdir`.
+winapi-util = "0.1"
 
 [dev-dependencies]
 filetime = "0.2"

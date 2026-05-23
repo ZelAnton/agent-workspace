@@ -96,7 +96,12 @@ pub trait VcsBackend: Send + Sync {
     // Worktrees / workspaces
     // -------------------------------------------------------------------
     fn list_worktrees(&self) -> Result<Vec<WorktreeInfo>>;
-    fn create_worktree(&self, path: &Path, branch: &str, base: &str) -> Result<()>;
+    fn create_worktree(
+        &self,
+        path: &Path,
+        branch: &str,
+        base: &str,
+    ) -> Result<crate::vcs::common::CreateOutcome>;
     fn remove_worktree(&self, path: &Path, force: bool) -> Result<()>;
     fn move_worktree(&self, old: &Path, new: &Path) -> Result<()>;
 }

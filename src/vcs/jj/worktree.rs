@@ -81,7 +81,7 @@ pub(super) fn create_worktree(
     path: &Path,
     branch: &str,
     base: &str,
-) -> Result<()> {
+) -> Result<crate::vcs::common::CreateOutcome> {
     if super::repo::branch_exists(runner, branch)? {
         return Err(Error::WorktreeExists(branch.to_string()));
     }
@@ -99,7 +99,11 @@ pub(super) fn create_worktree(
     // `<workspace-name>@` revset which always resolves to that workspace's
     // working-copy commit regardless of where we're running from.
     let revset = format!("{ws_name}@");
-    super::exec(runner, &["bookmark", "create", branch, "-r", &revset])
+    super::exec(runner, &["bookmark", "create", branch, "-r", &revset])?;
+
+    // jj path doesn't use reflink — `jj workspace add` materialises files
+    // itself with no opt-out. CoW for jj is tracked as future work.
+    Ok(crate::vcs::common::CreateOutcome::Plain)
 }
 
 /// Remove a workspace + delete the on-disk directory.

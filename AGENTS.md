@@ -47,6 +47,28 @@ On Windows the spawned tab MUST run PowerShell (per design); the binary spawn us
 
 User overrides: `--in-new-tab` / `--no-tab` flags on `wt new`; `[ui] open_in_new_tab = false` (project or global) to disable by default.
 
+### Worktree creation uses Copy-on-Write when the filesystem supports it
+
+On filesystems with block cloning (Windows ReFS / DevDrive, Linux Btrfs / XFS, macOS APFS), `wt new` creates worktrees via reflink instead of git's standard checkout. The result is near-instant creation and minimal disk usage even for large monorepos — only the diff occupies physical space until either side mutates.
+
+**Git workflow** (`src/vcs/git/worktree.rs::create_worktree_cow`):
+1. Capture `current_branch()` and `has_uncommitted_changes()`.
+2. If dirty, `git stash push -u -m "wt-cow-create-<pid>"`.
+3. If `current_branch != base`, `git checkout <base>`.
+4. `git worktree add --no-checkout <path> <branch>` — creates only the `.git` gitlink file.
+5. `cow::try_clone_dir_except(repo_root, path, &[".git"])` — reflink-copies every file/dir except `.git/`. Uses `reflink-copy` crate (single API for ReFS / Btrfs / XFS / APFS; per-file fallback to plain copy when reflink is rejected).
+6. Restore source repo: `git checkout <orig_branch>` then `git stash pop`. Both wrapped in error-tolerant warnings — stash pop conflict surfaces a clear message directing the user to `git stash list`.
+
+**Rollback**: if step 4 or 5 fails, the partial worktree directory is removed and `git worktree prune` clears git's registry. Step 6 still runs to restore source state. The original error then propagates.
+
+**CoW eligibility**: `cow::can_clone(src_dir, dst_parent)` does a real sentinel reflink probe at the destination's parent dir (not just a volume-serial check — NTFS shares serials but doesn't support reflinks). Cached implicitly by the per-call probe.
+
+**Skip when CoW used**: the `copy_files` (`[general] copy_files`) step in `src/cli/commands/lifecycle/new.rs::run` is **redundant** after a successful CoW clone — every file from source is already in the new worktree. The caller switches on `CreateOutcome::CowCloned` vs `CreateOutcome::Plain` returned from `vcs::create_worktree` to decide.
+
+**Jj backend**: not yet supported. `jj workspace add` materialises files itself with no `--no-checkout` equivalent; an empirical investigation is needed to determine if jj is smart enough to skip writes when target dir already contains matching files. For now `JjBackend::create_worktree` always returns `CreateOutcome::Plain`.
+
+**User overrides**: `--no-cow` flag on `wt new`; `[create] use_cow = false` (project or global) to disable by default. Sets the `WT_DISABLE_COW` env var which the dispatcher in `vcs::git::worktree` checks.
+
 ### Merge is atomic — no continue/abort
 
 `wt merge` records the main repo's current branch, dry-runs the merge with `--squash --no-commit` or `--no-ff --no-commit` (matching the real strategy), and only proceeds if the dry-run is conflict-free. On any failure: `reset_merge` + checkout original branch. There is intentionally no `wt merge --continue/--abort` — the recovery path for conflicts is `wt sync` inside the worktree, then re-run `wt merge`. Don't add intermediate-state handling; preserve the atomic property.

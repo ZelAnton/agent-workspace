@@ -38,6 +38,14 @@ pub struct NewArgs {
     /// terminal that supports tabs and `[ui] open_in_new_tab` is true.
     #[arg(long, conflicts_with = "in_new_tab")]
     no_tab: bool,
+
+    /// Disable Copy-on-Write worktree creation even on filesystems that
+    /// support it (ReFS / DevDrive / Btrfs / XFS / APFS). Falls back to
+    /// plain `git worktree add` with full checkout. Useful for debugging
+    /// or when something unusual about the source repo makes the
+    /// stash-checkout-restore dance undesirable.
+    #[arg(long)]
+    no_cow: bool,
 }
 
 pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<()> {
@@ -48,6 +56,21 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
     // skips this branch — actual creation runs there.
     if should_open_new_tab(&args, config) && let Some(terminal) = crate::terminal::detect() {
         return spawn_in_new_tab(&args, terminal.as_ref());
+    }
+
+    // CoW toggle resolution. The dispatcher in `vcs::create_worktree`
+    // reads `WT_DISABLE_COW` from the env (set here when CoW is
+    // explicitly disabled by flag or config). The dispatcher always
+    // probes filesystem support and gracefully falls back to plain
+    // `git worktree add` when CoW isn't actually possible.
+    if !should_use_cow(&args, config) {
+        // SAFETY: env vars are process-global. We set this before
+        // any subprocess spawns and never unset it; child processes
+        // (post_create hooks etc) inherit it but it has no effect on
+        // them (only `vcs::create_worktree` reads it).
+        unsafe {
+            std::env::set_var("WT_DISABLE_COW", "1");
+        }
     }
 
     // Ensure we're in a git repo
@@ -124,15 +147,24 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
     // Create workspace directory if needed
     std::fs::create_dir_all(wt_dir).map_err(|e| Error::Other(e.to_string()))?;
 
-    vcs::create_worktree(&wt_path, &branch, &base_branch)?;
+    let create_outcome = vcs::create_worktree(&wt_path, &branch, &base_branch)?;
 
     let meta = WorktreeMeta::new(base_branch);
     let meta_path = meta::meta_path(wt_dir, &branch);
     meta.save(&meta_path)
         .map_err(|e| Error::Other(e.to_string()))?;
 
-    // Copy files from main repo
-    copy_files(&repo_root, &wt_path, config)?;
+    // Copy `[general] copy_files` patterns from main repo into the
+    // new worktree — `.env`, `.env.local`, etc. that aren't tracked by
+    // git but the user wants present in every worktree.
+    //
+    // **Skipped when CoW was used**: the reflink copy already populated
+    // every file from the source repo, so these specific patterns are
+    // already in `wt_path`. Running copy_files again would be redundant
+    // work (and would overwrite identical files).
+    if matches!(create_outcome, vcs::CreateOutcome::Plain) {
+        copy_files(&repo_root, &wt_path, config)?;
+    }
 
     // Run post_create hooks. On failure, leave the worktree in place — the
     // user usually wants to fix the hook (e.g. install missing tool) and
@@ -267,6 +299,21 @@ fn copy_files(from: &Path, to: &Path, config: &Config) -> Result<()> {
 /// Terminal-detection still happens at the call site — even if this
 /// returns true, [`crate::terminal::detect()`] may return `None` and we
 /// fall through to in-place creation.
+/// Decide whether `wt new` should use the Copy-on-Write creation path.
+/// The actual filesystem-capability probe happens later in the VCS
+/// dispatcher (`vcs::create_worktree`). This function ONLY decides
+/// whether to even attempt CoW.
+///
+/// Precedence:
+///   1. `--no-cow` flag → false (user explicitly disabled)
+///   2. `[create] use_cow` config (project over global) → that value
+fn should_use_cow(args: &NewArgs, config: &Config) -> bool {
+    if args.no_cow {
+        return false;
+    }
+    config.use_cow
+}
+
 fn should_open_new_tab(args: &NewArgs, config: &Config) -> bool {
     if args.no_tab {
         return false;

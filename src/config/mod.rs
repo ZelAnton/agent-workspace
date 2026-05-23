@@ -38,6 +38,42 @@ pub struct GlobalConfig {
 
     #[serde(default)]
     pub ui: UiConfig,
+
+    #[serde(default)]
+    pub create: CreateConfig,
+}
+
+/// Worktree-creation tunables. Today only the CoW toggle lives here;
+/// future creation knobs (parallelism, ignore-pattern overrides) can join
+/// without breaking config compatibility.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateConfig {
+    /// Use Copy-on-Write (reflink) when the filesystem supports it. On
+    /// ReFS/DevDrive (Windows), Btrfs/XFS (Linux), or APFS (macOS) and
+    /// same-volume worktrees, this dramatically speeds up `wt new` for
+    /// large monorepos. Falls back to plain `git worktree add` silently
+    /// when not possible. Default: `true`.
+    #[serde(default = "default_use_cow")]
+    pub use_cow: bool,
+}
+
+impl Default for CreateConfig {
+    fn default() -> Self {
+        Self {
+            use_cow: default_use_cow(),
+        }
+    }
+}
+
+fn default_use_cow() -> bool {
+    true
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct ProjectCreateConfig {
+    /// Override the global `use_cow` for this project. `None` =
+    /// inherit global.
+    pub use_cow: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,6 +114,11 @@ pub struct ProjectConfig {
     /// global `[ui]` table.
     #[serde(default)]
     pub ui: ProjectUiConfig,
+
+    /// Project-level worktree-creation overrides. Project values take
+    /// precedence over the global `[create]` table.
+    #[serde(default)]
+    pub create: ProjectCreateConfig,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -178,6 +219,9 @@ pub struct Config {
     /// Resolved `[ui] open_in_new_tab` (project over global). See
     /// [`UiConfig::open_in_new_tab`].
     pub open_in_new_tab: bool,
+    /// Resolved `[create] use_cow` (project over global). See
+    /// [`CreateConfig::use_cow`].
+    pub use_cow: bool,
 }
 
 impl Config {
@@ -216,6 +260,7 @@ impl Config {
         };
 
         let open_in_new_tab = project.ui.open_in_new_tab.unwrap_or(global.ui.open_in_new_tab);
+        let use_cow = project.create.use_cow.unwrap_or(global.create.use_cow);
 
         Ok(Self {
             base_dir,
@@ -228,6 +273,7 @@ impl Config {
             vcs: project.general.vcs,
             vcs_global: global.general.vcs,
             open_in_new_tab,
+            use_cow,
         })
     }
 
@@ -564,6 +610,7 @@ post_merge = ["git push", "notify-team"]
                 post_merge: vec![],
             },
             ui: UiConfig::default(),
+            create: CreateConfig::default(),
         };
         let serialized = toml::to_string(&config).unwrap();
         assert!(serialized.contains("merge"));
@@ -633,6 +680,7 @@ trunk = "develop"
             },
             hooks: HooksConfig::default(),
             ui: ProjectUiConfig::default(),
+            create: ProjectCreateConfig::default(),
         };
         let serialized = toml::to_string(&config).unwrap();
         assert!(serialized.contains("develop"));

@@ -102,7 +102,12 @@ impl VcsBackend for JjBackend {
     fn list_worktrees(&self) -> Result<Vec<WorktreeInfo>> {
         worktree::list_worktrees(self.runner.as_ref())
     }
-    fn create_worktree(&self, path: &Path, branch: &str, base: &str) -> Result<()> {
+    fn create_worktree(
+        &self,
+        path: &Path,
+        branch: &str,
+        base: &str,
+    ) -> Result<crate::vcs::common::CreateOutcome> {
         worktree::create_worktree(self.runner.as_ref(), path, branch, base)
     }
     fn remove_worktree(&self, path: &Path, force: bool) -> Result<()> {

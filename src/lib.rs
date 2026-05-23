@@ -5,6 +5,7 @@
 pub mod cli;
 pub mod complete;
 pub mod config;
+pub mod cow;
 pub mod meta;
 pub mod process;
 pub mod prompt;

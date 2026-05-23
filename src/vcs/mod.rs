@@ -29,7 +29,7 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 pub use backend::VcsBackend;
-pub use common::{path_str, DiffStat, WorktreeInfo};
+pub use common::{path_str, CreateOutcome, DiffStat, WorktreeInfo};
 pub use error::{Error, Result};
 // Pure git helpers re-exported at this level so call sites can write
 // `vcs::is_cwd_inside(...)`, `vcs::parse_worktree_list(...)`, etc. without
@@ -247,7 +247,7 @@ pub fn reset_merge() -> Result<()> { with_backend(|b| b.reset_merge()) }
 
 // ----- Worktrees ----------------------------------------------------------
 pub fn list_worktrees() -> Result<Vec<WorktreeInfo>> { with_backend(|b| b.list_worktrees()) }
-pub fn create_worktree(path: &Path, branch: &str, base: &str) -> Result<()> {
+pub fn create_worktree(path: &Path, branch: &str, base: &str) -> Result<CreateOutcome> {
     with_backend(|b| b.create_worktree(path, branch, base))
 }
 pub fn remove_worktree(path: &Path, force: bool) -> Result<()> {

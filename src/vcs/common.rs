@@ -31,6 +31,26 @@ pub struct DiffStat {
     pub deletions: usize,
 }
 
+/// How `create_worktree` materialised the new worktree's contents.
+///
+/// Some downstream steps (notably the per-file `copy_files` patterns from
+/// `[general] copy_files`) are redundant when the worktree was cloned in
+/// bulk via reflink — the source repo's files are already there. The
+/// caller in `src/cli/commands/lifecycle/new.rs` switches on this to
+/// avoid duplicate work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreateOutcome {
+    /// Standard backend creation (git's `worktree add` checkout, or jj's
+    /// `workspace add` materialisation). Caller must still run
+    /// `copy_files` for any patterns specified in config.
+    Plain,
+    /// Worktree was created via `--no-checkout` and the source repo's
+    /// files were cloned in bulk via reflink. `copy_files` is redundant
+    /// — every file the source repo had (sans `.git/`) is already in the
+    /// new worktree.
+    CowCloned,
+}
+
 /// Safely convert a [`Path`] to `&str`, surfacing the bad path via
 /// [`Error::Command`] instead of panicking on `to_str().unwrap()`.
 ///

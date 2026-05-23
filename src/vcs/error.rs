@@ -40,4 +40,11 @@ pub enum Error {
 
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// Copy-on-Write worktree creation failed during the reflink walk
+    /// step. Preserves the structured `cow::Error` so callers and tests
+    /// can match the underlying cause (io, walker) rather than parsing
+    /// the formatted display string.
+    #[error("cow copy: {0}")]
+    Cow(#[from] crate::cow::Error),
 }

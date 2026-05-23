@@ -7,30 +7,178 @@ use std::path::{Path, PathBuf};
 use vcs_runner::{Cmd, RunError, Runner};
 
 use super::errmap::map_run_err;
-use crate::vcs::common::{path_str, WorktreeInfo};
+use crate::vcs::common::{path_str, CreateOutcome, WorktreeInfo};
 use crate::vcs::error::{Error, Result};
 
-/// Create a new worktree.
+/// Create a new git worktree.
 ///
-/// If `branch` already exists locally, check it out into the new worktree;
-/// otherwise create the branch from `base` and check it out.
+/// Dispatches between two strategies:
+///
+///   - **Plain** (default fallback): `git worktree add` with normal
+///     checkout. Single-step, slow on large repos (full file I/O).
+///   - **CoW** (when filesystem supports block cloning and same-volume):
+///     stash → checkout base → `worktree add --no-checkout` → reflink-copy
+///     repo contents → restore source repo. The reflink step is near-
+///     instant on ReFS / Btrfs / XFS / APFS.
+///
+/// CoW eligibility is decided by [`crate::cow::can_clone`] (which does a
+/// real sentinel reflink at the destination's parent). When CoW isn't
+/// possible we silently fall back to plain — no warnings, no errors.
 pub(super) fn create_worktree(
     runner: &dyn Runner,
     path: &Path,
     branch: &str,
     base: &str,
-) -> Result<()> {
-    let path_arg = path_str(path)?;
-
-    if super::repo::branch_exists(runner, branch)? {
+) -> Result<CreateOutcome> {
+    // Pre-flight `WorktreeExists` check applies to BOTH paths.
+    let branch_already_exists = super::repo::branch_exists(runner, branch)?;
+    if branch_already_exists {
         let worktrees = list_worktrees(runner)?;
         if worktrees.iter().any(|wt| wt.branch.as_deref() == Some(branch)) {
             return Err(Error::WorktreeExists(branch.to_string()));
         }
-        super::exec(runner, &["worktree", "add", path_arg, branch])
-    } else {
-        super::exec(runner, &["worktree", "add", "-b", branch, path_arg, base])
     }
+
+    // CoW probe — requires both the repo root and `path`'s parent to be on
+    // the same reflink-capable volume. The parent dir must already exist
+    // (caller in `new.rs` calls `create_dir_all` on `workspace_dir` before
+    // dispatching here).
+    let parent = path.parent().unwrap_or(path);
+    if std::env::var("WT_DISABLE_COW").is_err()
+        && let Ok(repo_root) = super::repo::repo_root(runner)
+        && parent.exists()
+        && crate::cow::can_clone(&repo_root, parent)
+    {
+        return create_worktree_cow(runner, &repo_root, path, branch, base, branch_already_exists);
+    }
+
+    create_worktree_plain(runner, path, branch, base, branch_already_exists)
+}
+
+/// Standard `git worktree add` — git materialises the working copy.
+fn create_worktree_plain(
+    runner: &dyn Runner,
+    path: &Path,
+    branch: &str,
+    base: &str,
+    branch_already_exists: bool,
+) -> Result<CreateOutcome> {
+    let path_arg = path_str(path)?;
+    if branch_already_exists {
+        super::exec(runner, &["worktree", "add", path_arg, branch])?;
+    } else {
+        super::exec(runner, &["worktree", "add", "-b", branch, path_arg, base])?;
+    }
+    Ok(CreateOutcome::Plain)
+}
+
+/// CoW creation: stash → checkout base → `worktree add --no-checkout`
+/// → reflink-copy → restore. See module docstring for the rationale.
+///
+/// On any failure between stash and pop the source repo is restored to its
+/// original state before the error propagates. The half-created worktree
+/// (if any) is deleted and `git worktree prune` clears git's registry.
+fn create_worktree_cow(
+    runner: &dyn Runner,
+    repo_root: &Path,
+    path: &Path,
+    branch: &str,
+    base: &str,
+    branch_already_exists: bool,
+) -> Result<CreateOutcome> {
+    let path_arg = path_str(path)?;
+
+    // 1. Capture source state. Both the branch name AND the commit hash:
+    // when the branch name is "HEAD" the repo is in detached state, and
+    // `git checkout HEAD` is a no-op (does not restore the original
+    // commit after we move HEAD to `base`). Restore via the captured
+    // commit hash in that case.
+    let orig_branch = super::repo::current_branch(runner)?;
+    let orig_commit = super::repo::current_commit(runner)?;
+    let is_detached = orig_branch == "HEAD";
+    let needs_stash = super::branch::has_uncommitted_changes(runner)?;
+
+    // 2. Stash if dirty. `-u` includes untracked.
+    //
+    // The stash message includes both PID and a nanosecond timestamp so
+    // multiple failed runs in the same shell session leave distinguishable
+    // entries in `git stash list` — without the timestamp, a user who
+    // hits two consecutive CoW failures would see two stashes with
+    // identical names and have to drop them by index alone.
+    let stash_message = format!(
+        "wt-cow-create-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    if needs_stash {
+        super::exec(runner, &["stash", "push", "-u", "-m", &stash_message])?;
+    }
+
+    // The inner closure handles steps 3-5 with explicit rollback on any
+    // error. We always restore the source repo (step 6) afterwards, even
+    // on success — current_branch may have differed from base.
+    let inner: Result<()> = (|| {
+        // 3. Checkout base if not already there.
+        if orig_branch != base {
+            super::exec(runner, &["checkout", base])?;
+        }
+
+        // 4. Create worktree with --no-checkout. git creates the `.git`
+        // gitlink file at `path` and registers the worktree, but doesn't
+        // write any working-tree files.
+        let add_result = if branch_already_exists {
+            super::exec(runner, &["worktree", "add", "--no-checkout", path_arg, branch])
+        } else {
+            super::exec(
+                runner,
+                &["worktree", "add", "--no-checkout", "-b", branch, path_arg, base],
+            )
+        };
+        add_result?;
+
+        // 5. Reflink-copy every file/dir from repo root to `path`, except
+        // `.git/` (which `--no-checkout` already created as a gitlink).
+        if let Err(e) = crate::cow::try_clone_dir_except(repo_root, path, &[".git"]) {
+            // CoW failed mid-walk. Remove the half-populated worktree dir
+            // and run `git worktree prune` so git's registry stays clean.
+            // Preserve the structured `cow::Error` via `Error::Cow` so
+            // callers/tests can match the underlying cause.
+            let _ = std::fs::remove_dir_all(path);
+            let _ = super::exec(runner, &["worktree", "prune"]);
+            return Err(Error::Cow(e));
+        }
+
+        Ok(())
+    })();
+
+    // 6. Restore source repo. Order matters: checkout BEFORE stash pop so
+    // pop applies to the right branch.
+    //
+    // Detached HEAD: `git checkout HEAD` would be a no-op (leaving us on
+    // `base`). Use the captured commit hash to restore the actual
+    // detached state. Skip when we're already on the right commit
+    // (orig_branch == base case is already filtered out below).
+    let restore_target = if is_detached { &orig_commit } else { &orig_branch };
+    if (is_detached || orig_branch != base)
+        && let Err(e) = super::exec(runner, &["checkout", restore_target])
+    {
+        eprintln!("Warning: failed to restore '{restore_target}': {e}");
+    }
+    if needs_stash
+        && let Err(e) = super::exec(runner, &["stash", "pop"]) {
+            // Stash pop conflict is the worst-case: user's changes are
+            // safe in `git stash list` but require manual resolution.
+            eprintln!(
+                "Warning: 'git stash pop' failed: {e}\n\
+                 Your changes are saved in 'git stash list'; resolve manually."
+            );
+        }
+
+    inner?;
+    Ok(CreateOutcome::CowCloned)
 }
 
 /// Remove a worktree.
