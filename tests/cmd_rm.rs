@@ -16,6 +16,7 @@ fn test_rm_nonexistent() {
     setup_git_repo(dir.path());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["rm", "nonexistent-branch"])
         .current_dir(dir.path())
         .output()
@@ -32,6 +33,7 @@ fn test_rm_with_force() {
     setup_git_repo(dir.path());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["rm", "nonexistent", "--force"])
         .current_dir(dir.path())
         .output()
@@ -46,6 +48,7 @@ fn test_rm_force_dirty_worktree() {
 
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "rm-dirty",
@@ -69,6 +72,7 @@ fn test_rm_force_dirty_worktree() {
     std::fs::write(PathBuf::from(&wt_path).join("dirty.txt"), "uncommitted").unwrap();
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["rm", "rm-dirty", "--force"])
         .current_dir(&repo)
         .env("HOME", &home)
@@ -88,6 +92,7 @@ fn test_rm_dot_without_wrapper_is_rejected() {
 
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "rm-dot-stranded",
@@ -104,6 +109,7 @@ fn test_rm_dot_without_wrapper_is_rejected() {
 
     // From inside the worktree, `wt rm .` without --path-file must be refused
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["rm", "."])
         .current_dir(&wt_path)
         .env("HOME", &home)
@@ -131,6 +137,7 @@ fn test_rm_dot_with_wrapper_works() {
 
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "rm-dot-ok",
@@ -149,6 +156,7 @@ fn test_rm_dot_with_wrapper_works() {
     let rm_path_file = rm_path_file.with_file_name(".wt-path-rm");
     std::fs::write(&rm_path_file, "").unwrap();
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["rm", ".", "--path-file", rm_path_file.to_str().unwrap()])
         .current_dir(&wt_path)
         .env("HOME", &home)

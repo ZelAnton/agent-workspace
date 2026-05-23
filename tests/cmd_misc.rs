@@ -14,6 +14,7 @@ fn test_not_in_git_repo() {
     let dir = tempdir().unwrap();
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("ls")
         .current_dir(dir.path())
         .output()
@@ -27,6 +28,7 @@ fn test_not_in_git_repo() {
 #[test]
 fn test_unknown_command() {
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("unknown-command")
         .output()
         .expect("Failed to execute wt unknown-command");
@@ -37,6 +39,7 @@ fn test_unknown_command() {
 #[test]
 fn test_version_output() {
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("--version")
         .output()
         .expect("wt --version failed");

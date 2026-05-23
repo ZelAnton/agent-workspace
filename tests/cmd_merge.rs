@@ -16,6 +16,7 @@ fn test_merge_on_trunk_fails() {
     setup_git_repo(dir.path());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("merge")
         .current_dir(dir.path())
         .output()
@@ -32,6 +33,7 @@ fn test_merge_from_feature_branch() {
 
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "merge-feature",
@@ -65,6 +67,7 @@ fn test_merge_from_feature_branch() {
         .unwrap();
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["merge", "--strategy", "squash"])
         .current_dir(&wt_path)
         .env("HOME", &home)
@@ -82,6 +85,7 @@ fn test_merge_with_changes() {
 
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "merge-changes",
@@ -115,6 +119,7 @@ fn test_merge_with_changes() {
         .unwrap();
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["merge"])
         .current_dir(&wt_path)
         .env("HOME", &home)
@@ -133,6 +138,7 @@ fn test_merge_delete_removes_worktree() {
 
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "merge-delete",
@@ -165,6 +171,7 @@ fn test_merge_delete_removes_worktree() {
         .unwrap();
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["merge", "--delete"])
         .current_dir(&wt_path)
         .env("HOME", &home)
@@ -188,6 +195,7 @@ fn test_merge_conflict_rejected() {
 
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "merge-conflict",
@@ -233,6 +241,7 @@ fn test_merge_conflict_rejected() {
         .unwrap();
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["merge"])
         .current_dir(&wt_path)
         .env("HOME", &home)
@@ -262,6 +271,7 @@ fn test_merge_into_nonexistent_branch_fails() {
 
     let path_file = create_path_file(repo.parent().unwrap());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "merge-into-test",
@@ -278,6 +288,7 @@ fn test_merge_into_nonexistent_branch_fails() {
     let wt_path = PathBuf::from(read_path_file(&path_file).trim());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["merge", "--into", "nonexistent-branch-xyz"])
         .current_dir(&wt_path)
         .env("HOME", &home)
@@ -303,6 +314,7 @@ fn test_merge_into_branch_held_by_another_worktree_fails() {
     // Create source worktree
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "merge-into-busy-src",
@@ -335,6 +347,7 @@ fn test_merge_into_branch_held_by_another_worktree_fails() {
     let target_path_file = path_file2.with_extension("2");
     std::fs::write(&target_path_file, "").unwrap();
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "busy-target",
@@ -350,6 +363,7 @@ fn test_merge_into_branch_held_by_another_worktree_fails() {
 
     // Try to merge src into busy-target — should fail upfront
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["merge", "--into", "busy-target"])
         .current_dir(&src_wt)
         .env("HOME", &home)
@@ -377,6 +391,7 @@ fn test_merge_already_up_to_date_with_merge_strategy() {
 
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "noop-merge",
@@ -394,6 +409,7 @@ fn test_merge_already_up_to_date_with_merge_strategy() {
 
     // Don't add any commits to wt_path. Merge strategy=Merge, expect "Nothing to merge".
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["merge", "--strategy", "merge", "-d"])
         .current_dir(&wt_path)
         .env("HOME", &home)

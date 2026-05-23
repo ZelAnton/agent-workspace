@@ -15,6 +15,7 @@ fn test_clean_no_worktrees() {
     setup_git_repo(dir.path());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("clean")
         .current_dir(dir.path())
         .output()
@@ -32,6 +33,7 @@ fn test_clean_with_path_file() {
 
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["clean", "--path-file", path_file.to_str().unwrap()])
         .current_dir(dir.path())
         .output()
@@ -45,6 +47,7 @@ fn test_clean_after_merge() {
     let (_dir, repo, home) = setup_worktree_test_env();
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["new", "clean-test"])
         .current_dir(&repo)
         .env("HOME", &home)
@@ -65,6 +68,7 @@ fn test_clean_after_merge() {
         .ok();
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("clean")
         .current_dir(&repo)
         .env("HOME", &home)
@@ -80,6 +84,7 @@ fn test_clean_remvs_merged_worktree() {
     let (_dir, repo, home) = setup_worktree_test_env();
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["new", "clean-merged"])
         .current_dir(&repo)
         .env("HOME", &home)
@@ -100,6 +105,7 @@ fn test_clean_remvs_merged_worktree() {
         .ok();
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("clean")
         .current_dir(&repo)
         .env("HOME", &home)
@@ -122,6 +128,7 @@ fn test_clean_dry_run() {
 
     // Create a worktree with no changes (will match trunk)
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["new", "clean-dry"])
         .current_dir(&repo)
         .env("HOME", &home)
@@ -132,6 +139,7 @@ fn test_clean_dry_run() {
 
     // dry-run should not remove anything
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["clean", "--dry-run"])
         .current_dir(&repo)
         .env("HOME", &home)
@@ -144,6 +152,7 @@ fn test_clean_dry_run() {
 
     // Worktree should still exist after dry-run
     let ls_output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("ls")
         .current_dir(&repo)
         .env("HOME", &home)
@@ -171,6 +180,7 @@ fn test_clean_skips_dirty_worktree() {
     // detection).
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "dirty-clean",
@@ -188,6 +198,7 @@ fn test_clean_skips_dirty_worktree() {
 
     // Dry-run should report the dirty skip, not "Would clean"
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["clean", "--dry-run"])
         .current_dir(&repo)
         .env("HOME", &home)

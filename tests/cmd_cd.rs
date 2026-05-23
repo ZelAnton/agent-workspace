@@ -15,6 +15,7 @@ fn test_cd_nonexistent() {
     setup_git_repo(dir.path());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["cd", "nonexistent-branch"])
         .current_dir(dir.path())
         .output()
@@ -31,6 +32,7 @@ fn test_cd_without_print_path() {
     setup_git_repo(dir.path());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["cd", "nonexistent"])
         .current_dir(dir.path())
         .output()
@@ -44,6 +46,7 @@ fn test_cd_to_existing_worktree() {
     let (dir, repo, home) = setup_worktree_test_env();
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["new", "cd-target"])
         .current_dir(&repo)
         .env("HOME", &home)
@@ -59,6 +62,7 @@ fn test_cd_to_existing_worktree() {
 
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "cd",
             "cd-target",
@@ -83,6 +87,7 @@ fn test_cd_returns_correct_path() {
 
     let path_file = create_path_file(dir.path());
     let new_output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "cd-check",
@@ -105,6 +110,7 @@ fn test_cd_returns_correct_path() {
 
     let cd_path_file = dir.path().join(".wt-cd-path");
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "cd",
             "cd-check",

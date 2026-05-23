@@ -16,6 +16,7 @@ fn test_status_on_trunk_fails() {
     setup_git_repo(dir.path());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("status")
         .current_dir(dir.path())
         .output()
@@ -32,6 +33,7 @@ fn test_status_in_worktree() {
 
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "status-test",
@@ -48,6 +50,7 @@ fn test_status_in_worktree() {
     let wt_path = PathBuf::from(read_path_file(&path_file).trim());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("status")
         .current_dir(&wt_path)
         .env("HOME", &home)
@@ -85,6 +88,7 @@ fn test_status_with_commits() {
 
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "status-commits",
@@ -114,6 +118,7 @@ fn test_status_with_commits() {
         .unwrap();
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("status")
         .current_dir(&wt_path)
         .env("HOME", &home)
@@ -148,6 +153,7 @@ fn test_status_with_base_branch() {
 
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "status-base",
@@ -166,6 +172,7 @@ fn test_status_with_base_branch() {
     let wt_path = PathBuf::from(read_path_file(&path_file).trim());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("status")
         .current_dir(&wt_path)
         .env("HOME", &home)

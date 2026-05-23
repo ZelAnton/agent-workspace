@@ -16,6 +16,7 @@ fn test_new_with_branch_name() {
 
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "test-feature",
@@ -40,6 +41,7 @@ fn test_new_with_base() {
     let home = setup_git_repo_with_home(&repo);
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["new", "feature-from-main", "--base", "main"])
         .current_dir(&repo)
         .env("HOME", &home)
@@ -57,6 +59,7 @@ fn test_new_with_invalid_base() {
     setup_git_repo(dir.path());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["new", "feature", "--base", "nonexistent-base-12345"])
         .current_dir(dir.path())
         .output()
@@ -71,6 +74,7 @@ fn test_new_generates_random_name() {
 
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["new", "--path-file", path_file.to_str().unwrap()])
         .current_dir(&repo)
         .env("HOME", &home)
@@ -90,6 +94,7 @@ fn test_new_creates_metadata_file() {
     let (_dir, repo, home) = setup_worktree_test_env();
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["new", "meta-test"])
         .current_dir(&repo)
         .env("HOME", &home)
@@ -123,6 +128,7 @@ fn test_worktree_lifecycle_new_ls_rm() {
 
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "feature-test",
@@ -142,6 +148,7 @@ fn test_worktree_lifecycle_new_ls_rm() {
         assert!(wt_path.contains("feature-test"));
 
         let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
             .arg("ls")
             .current_dir(&repo)
             .env("HOME", &home)
@@ -155,6 +162,7 @@ fn test_worktree_lifecycle_new_ls_rm() {
         assert!(stdout.contains("feature-test") || stderr.contains("feature-test"));
 
         let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
             .args(["rm", "feature-test", "--force"])
             .current_dir(&repo)
             .env("HOME", &home)
@@ -173,6 +181,7 @@ fn test_full_worktree_lifecycle() {
 
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "feature-lifecycle",
@@ -196,6 +205,7 @@ fn test_full_worktree_lifecycle() {
     assert!(wt_path.contains("feature-lifecycle"));
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("ls")
         .current_dir(&repo)
         .env("HOME", &home)
@@ -210,6 +220,7 @@ fn test_full_worktree_lifecycle() {
     assert!(combined.contains("feature-lifecycle"));
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["rm", "feature-lifecycle", "--force"])
         .current_dir(&repo)
         .env("HOME", &home)
@@ -232,6 +243,7 @@ fn test_nested_snap_is_rejected() {
     // Outer worktree
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "outer-snap",
@@ -251,6 +263,7 @@ fn test_nested_snap_is_rejected() {
     let inner_path_file = dir.path().join(".wt-path-inner");
     std::fs::write(&inner_path_file, "").unwrap();
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "-s",

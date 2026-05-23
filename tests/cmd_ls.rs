@@ -15,6 +15,7 @@ fn test_ls_empty() {
     setup_git_repo(dir.path());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("ls")
         .current_dir(dir.path())
         .output()
@@ -33,6 +34,7 @@ fn test_ls_in_subdirectory() {
     std::fs::create_dir_all(&sub).unwrap();
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("ls")
         .current_dir(&sub)
         .output()
@@ -48,6 +50,7 @@ fn test_ls_shows_worktree_details() {
     let (_dir, repo, home) = setup_worktree_test_env();
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["new", "ls-test-branch"])
         .current_dir(&repo)
         .env("HOME", &home)
@@ -62,6 +65,7 @@ fn test_ls_shows_worktree_details() {
     );
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("ls")
         .current_dir(&repo)
         .env("HOME", &home)
@@ -82,6 +86,7 @@ fn test_ls_with_multiple_worktrees() {
 
     for name in &["multi-ls-1", "multi-ls-2"] {
         let _ = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
             .args(["new", name])
             .current_dir(&repo)
             .env("HOME", &home)
@@ -90,6 +95,7 @@ fn test_ls_with_multiple_worktrees() {
     }
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("ls")
         .current_dir(&repo)
         .env("HOME", &home)

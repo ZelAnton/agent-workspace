@@ -25,6 +25,14 @@ pub fn wt_command(home: &Path) -> Command {
     let mut cmd = Command::new(wt_binary());
     cmd.env("HOME", home);
     cmd.env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"));
+    // Hard-disable the new-tab feature in integration tests. Without
+    // this, running `cargo test` from inside Windows Terminal (or
+    // iTerm2 / GNOME Terminal) inherits `WT_SESSION` etc. into the
+    // child process, `terminal::detect()` returns Some, and `wt new`
+    // attempts to spawn a tab — which hangs or pollutes the developer's
+    // window. Setting the recursion guard short-circuits the spawn
+    // dispatch regardless of which terminal env vars leaked in.
+    cmd.env("WT_SPAWNED_IN_TAB", "1");
     cmd
 }
 

@@ -18,6 +18,7 @@ fn test_new_with_snap_outputs_two_lines() {
 
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "snap-test",
@@ -40,6 +41,7 @@ fn test_new_with_snap_outputs_two_lines() {
     assert_eq!(lines[1], "echo hello");
 
     let _ = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["rm", "snap-test", "-f"])
         .current_dir(&repo)
         .env("HOME", &home)
@@ -56,6 +58,7 @@ fn test_new_with_snap_creates_metadata() {
 
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "snap-meta-test",
@@ -88,6 +91,7 @@ fn test_new_with_snap_creates_metadata() {
     assert!(!content.contains("snap_command"));
 
     let _ = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["rm", "snap-meta-test", "-f"])
         .current_dir(&repo)
         .env("HOME", &home)
@@ -101,6 +105,7 @@ fn test_snap_continue_not_in_worktree() {
     setup_git_repo(dir.path());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["snap-continue"])
         .current_dir(dir.path())
         .output()

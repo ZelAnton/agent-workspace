@@ -15,6 +15,7 @@ fn test_mv_nonexistent() {
     setup_git_repo(dir.path());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["mv", "old-branch", "new-branch"])
         .current_dir(dir.path())
         .output()
@@ -37,6 +38,7 @@ fn test_mv_with_same_name() {
         .unwrap();
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["mv", "feature-x", "feature-x"])
         .current_dir(dir.path())
         .output()
@@ -51,6 +53,7 @@ fn test_mv_existing_branch() {
     let (_dir, repo, home) = setup_worktree_test_env();
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["new", "mv-old-name"])
         .current_dir(&repo)
         .env("HOME", &home)
@@ -65,6 +68,7 @@ fn test_mv_existing_branch() {
     );
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["mv", "mv-old-name", "mv-new-name"])
         .current_dir(&repo)
         .env("HOME", &home)
@@ -81,6 +85,7 @@ fn test_mv_renames_worktree() {
     let (_dir, repo, home) = setup_worktree_test_env();
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["new", "mv-src"])
         .current_dir(&repo)
         .env("HOME", &home)
@@ -95,6 +100,7 @@ fn test_mv_renames_worktree() {
     );
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["mv", "mv-src", "mv-dst"])
         .current_dir(&repo)
         .env("HOME", &home)

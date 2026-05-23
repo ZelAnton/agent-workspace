@@ -16,6 +16,7 @@ fn test_sync_on_trunk_fails() {
     setup_git_repo(dir.path());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("sync")
         .current_dir(dir.path())
         .output()
@@ -38,6 +39,7 @@ fn test_sync_abort_no_rebase() {
         .unwrap();
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["sync", "--abort"])
         .current_dir(dir.path())
         .output()
@@ -59,6 +61,7 @@ fn test_sync_continue_no_rebase() {
         .unwrap();
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["sync", "--continue"])
         .current_dir(dir.path())
         .output()
@@ -74,6 +77,7 @@ fn test_sync_on_feature_branch() {
 
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "sync-feature",
@@ -95,6 +99,7 @@ fn test_sync_on_feature_branch() {
     let wt_path = read_path_file(&path_file).trim().to_string();
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("sync")
         .current_dir(&wt_path)
         .env("HOME", &home)
@@ -112,6 +117,7 @@ fn test_sync_on_feature_with_updates() {
 
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "sync-updates",
@@ -145,6 +151,7 @@ fn test_sync_on_feature_with_updates() {
         .unwrap();
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("sync")
         .current_dir(&wt_path)
         .env("HOME", &home)
@@ -162,6 +169,7 @@ fn test_sync_from_nonexistent_branch_fails() {
 
     let path_file = create_path_file(repo.parent().unwrap());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "sync-from-test",
@@ -178,6 +186,7 @@ fn test_sync_from_nonexistent_branch_fails() {
     let wt_path = PathBuf::from(read_path_file(&path_file).trim());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["sync", "--from", "nonexistent-branch-xyz"])
         .current_dir(&wt_path)
         .env("HOME", &home)
@@ -215,6 +224,7 @@ fn test_sync_uses_project_config_strategy() {
 
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "sync-cfg",
@@ -243,6 +253,7 @@ fn test_sync_uses_project_config_strategy() {
         .unwrap();
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("sync")
         .current_dir(&wt_path)
         .env("HOME", &home)
@@ -288,6 +299,7 @@ fn test_sync_from_specific_branch() {
     // Create worktree
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "sync-from-src",
@@ -305,6 +317,7 @@ fn test_sync_from_specific_branch() {
 
     // Sync from source-branch instead of trunk
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["sync", "--from", "source-branch", "--strategy", "merge"])
         .current_dir(&wt_path)
         .env("HOME", &home)

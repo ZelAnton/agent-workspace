@@ -35,6 +35,31 @@ pub struct GlobalConfig {
 
     #[serde(default)]
     pub hooks: HooksConfig,
+
+    #[serde(default)]
+    pub ui: UiConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiConfig {
+    /// Open `wt new` in a new terminal tab when running inside a
+    /// supported terminal (Windows Terminal, iTerm2, GNOME Terminal).
+    /// Default: `true`. Disable via `[ui] open_in_new_tab = false` or
+    /// per-call via `wt new --no-tab`.
+    #[serde(default = "default_open_in_new_tab")]
+    pub open_in_new_tab: bool,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            open_in_new_tab: default_open_in_new_tab(),
+        }
+    }
+}
+
+fn default_open_in_new_tab() -> bool {
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -48,6 +73,18 @@ pub struct ProjectConfig {
 
     #[serde(default)]
     pub hooks: HooksConfig,
+
+    /// Project-level UI overrides. Project values take precedence over the
+    /// global `[ui]` table.
+    #[serde(default)]
+    pub ui: ProjectUiConfig,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct ProjectUiConfig {
+    /// Override the global `open_in_new_tab` for this project. `None` =
+    /// inherit global.
+    pub open_in_new_tab: Option<bool>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -138,6 +175,9 @@ pub struct Config {
     /// split because `resolve_backend` honours project-over-global
     /// precedence and needs to see both layers.
     pub vcs_global: Option<crate::vcs::VcsChoice>,
+    /// Resolved `[ui] open_in_new_tab` (project over global). See
+    /// [`UiConfig::open_in_new_tab`].
+    pub open_in_new_tab: bool,
 }
 
 impl Config {
@@ -175,6 +215,8 @@ impl Config {
             post_merge: merge_hooks(&global.hooks.post_merge, &project.hooks.post_merge),
         };
 
+        let open_in_new_tab = project.ui.open_in_new_tab.unwrap_or(global.ui.open_in_new_tab);
+
         Ok(Self {
             base_dir,
             workspaces_dir,
@@ -185,6 +227,7 @@ impl Config {
             trunk: project.general.trunk,
             vcs: project.general.vcs,
             vcs_global: global.general.vcs,
+            open_in_new_tab,
         })
     }
 
@@ -520,6 +563,7 @@ post_merge = ["git push", "notify-team"]
                 pre_merge: vec![],
                 post_merge: vec![],
             },
+            ui: UiConfig::default(),
         };
         let serialized = toml::to_string(&config).unwrap();
         assert!(serialized.contains("merge"));
@@ -588,6 +632,7 @@ trunk = "develop"
                 vcs: None,
             },
             hooks: HooksConfig::default(),
+            ui: ProjectUiConfig::default(),
         };
         let serialized = toml::to_string(&config).unwrap();
         assert!(serialized.contains("develop"));

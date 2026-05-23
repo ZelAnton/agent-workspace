@@ -35,7 +35,17 @@ These aren't obvious from reading individual files — they constrain how featur
 
 ### Snap mode exit codes are a wire protocol with the shell wrapper
 
-`src/cli/commands/snap/resume.rs` exports `EXIT_DONE = 0`, `EXIT_REOPEN = 2`, `EXIT_PRESERVE = 3`. The bash/zsh/fish/PowerShell wrapper scripts in `src/shell/mod.rs` switch on these to either loop the agent, drop the user into the worktree, or `cd` back to the main repo. **Changing these constants requires updating every wrapper template in lockstep.** Nested snap (`wt new -s` from inside a worktree) is refused for the same reason — two snap loops in one parent shell break the cwd tracking.
+`src/cli/commands/snap/resume.rs` exports `EXIT_DONE = 0`, `EXIT_REOPEN = 2`, `EXIT_PRESERVE = 3`. The bash/zsh/fish/PowerShell wrapper scripts in `src/shell/mod.rs` switch on these to either loop the agent, drop the user into the worktree, or `cd` back to the main repo. **Changing these constants requires updating every wrapper template in lockstep.** The same exit codes are interpreted by the spawned-tab script generated in `src/terminal/script.rs` when `wt new --snap` opens a new terminal tab — keep that script's `case`/`if` block in sync too. Nested snap (`wt new -s` from inside a worktree) is refused for the same reason — two snap loops in one parent shell break the cwd tracking.
+
+### Terminal-tab integration changes the spawn point for `wt new`
+
+When `wt new` runs inside a supported terminal (Windows Terminal, iTerm2, GNOME Terminal — detection via `WT_SESSION`, `TERM_PROGRAM=iTerm.app`, `GNOME_TERMINAL_SERVICE`/`GNOME_TERMINAL_SCREEN`) and `[ui] open_in_new_tab` is enabled (default), the creation flow does NOT run in the originating shell. Instead `src/terminal/` opens a fresh tab titled with the branch name and re-invokes `wt new <args>` there with `WT_SPAWNED_IN_TAB=1` set. The originating shell prints `Opened in new tab: <branch>` and exits cleanly without writing the `--path-file` (so its shell wrapper stays put).
+
+The recursion guard (`WT_SPAWNED_IN_TAB` env var) is critical — without it, every re-entry would open another tab. The spawned tab's embedded script (PowerShell on Windows, POSIX shell on macOS/Linux) handles both the simple cd-after-create flow and the snap-mode resume loop natively, mirroring the exit-code wire protocol from the shell wrappers.
+
+On Windows the spawned tab MUST run PowerShell (per design); the binary spawn uses `wt.exe new-tab pwsh -NoExit -Command ...` and locates `wt.exe` via PATH-walking that skips our own binary (both `wt.exe` names collide on Windows — see `src/terminal/windows_terminal.rs::locate_wt_binary`).
+
+User overrides: `--in-new-tab` / `--no-tab` flags on `wt new`; `[ui] open_in_new_tab = false` (project or global) to disable by default.
 
 ### Merge is atomic — no continue/abort
 

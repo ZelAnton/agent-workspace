@@ -16,6 +16,7 @@ fn test_cd_no_args_returns_repo_root() {
 
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["cd", "--path-file", path_file.to_str().unwrap()])
         .current_dir(dir.path())
         .output()
@@ -37,6 +38,7 @@ fn test_cd_no_args_without_path_file_is_rejected() {
     setup_git_repo(dir.path());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("cd")
         .current_dir(dir.path())
         .output()
@@ -60,6 +62,7 @@ fn test_cd_no_args_from_subdirectory() {
 
     let path_file = create_path_file(dir.path());
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["cd", "--path-file", path_file.to_str().unwrap()])
         .current_dir(&sub)
         .output()

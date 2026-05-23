@@ -9,6 +9,7 @@ pub mod meta;
 pub mod process;
 pub mod prompt;
 pub mod shell;
+pub mod terminal;
 pub mod update;
 pub mod util;
 pub mod vcs;

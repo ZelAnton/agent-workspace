@@ -15,6 +15,7 @@ fn test_init_creates_config() {
     setup_git_repo(dir.path());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["init", "--trunk", "develop"])
         .current_dir(dir.path())
         .output()
@@ -36,12 +37,14 @@ fn test_init_already_exists() {
     setup_git_repo(dir.path());
 
     Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("init")
         .current_dir(dir.path())
         .output()
         .expect("Failed to execute wt init");
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("init")
         .current_dir(dir.path())
         .output()
@@ -58,6 +61,7 @@ fn test_init_with_default_trunk() {
     setup_git_repo(dir.path());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .arg("init")
         .current_dir(dir.path())
         .output()
@@ -78,6 +82,7 @@ fn test_init_with_custom_trunk() {
     setup_git_repo(dir.path());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["init", "--trunk", "develop"])
         .current_dir(dir.path())
         .output()
@@ -95,6 +100,7 @@ fn test_init_multiple_options() {
     setup_git_repo(dir.path());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["init", "--trunk", "master"])
         .current_dir(dir.path())
         .output()
@@ -112,6 +118,7 @@ fn test_init_with_merge_strategy() {
     setup_git_repo(dir.path());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["init", "--merge-strategy", "merge"])
         .current_dir(dir.path())
         .output()
@@ -132,6 +139,7 @@ fn test_init_with_copy_files() {
     setup_git_repo(dir.path());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["init", "--copy-files", ".env", "--copy-files", ".env.*"])
         .current_dir(dir.path())
         .output()
@@ -152,6 +160,7 @@ fn test_init_with_all_options() {
     setup_git_repo(dir.path());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args([
             "init",
             "--trunk",
@@ -182,6 +191,7 @@ fn test_init_with_sync_strategy() {
     setup_git_repo(dir.path());
 
     let output = Command::new(wt_binary())
+        .env("WT_SPAWNED_IN_TAB", "1")
         .args(["init", "--sync-strategy", "merge"])
         .current_dir(dir.path())
         .output()

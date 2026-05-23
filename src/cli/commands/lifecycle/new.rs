@@ -27,9 +27,29 @@ pub struct NewArgs {
     /// Run command in snap mode: create -> run -> merge -> cleanup
     #[arg(short, long, value_name = "CMD")]
     snap: Option<String>,
+
+    /// Force opening creation in a new terminal tab (Windows Terminal /
+    /// iTerm2 / GNOME Terminal). Useful to bypass `[ui] open_in_new_tab
+    /// = false` per-call. No effect if no supported terminal is detected.
+    #[arg(long, conflicts_with = "no_tab")]
+    in_new_tab: bool,
+
+    /// Force creation in the current shell, even when running inside a
+    /// terminal that supports tabs and `[ui] open_in_new_tab` is true.
+    #[arg(long, conflicts_with = "in_new_tab")]
+    no_tab: bool,
 }
 
 pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<()> {
+    // Terminal-tab dispatch happens FIRST, before any VCS work, so the
+    // user sees the new tab open immediately instead of after the
+    // (sometimes slow) workspace-id hash + repo discovery. The spawned
+    // tab then re-enters `wt new` with `WT_SPAWNED_IN_TAB=1` set and
+    // skips this branch — actual creation runs there.
+    if should_open_new_tab(&args, config) && let Some(terminal) = crate::terminal::detect() {
+        return spawn_in_new_tab(&args, terminal.as_ref());
+    }
+
     // Ensure we're in a git repo
     let repo_root = vcs::repo_root()?;
     let workspace_id = vcs::workspace_id()?;
@@ -67,6 +87,35 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
     let branch = args.branch.unwrap_or_else(|| {
         util::generate_unique_branch_name(|n| vcs::branch_exists(n).unwrap_or(false))
     });
+
+    // If we're running inside a spawned terminal tab, update the tab
+    // title to match the *real* branch name. Critical when the user ran
+    // `wt new` without a branch arg — the spawn fires before the random
+    // branch is generated, so the tab opens with the "wt-new" placeholder
+    // title in [`spawn_in_new_tab`]. This OSC 0 escape fixes that.
+    //
+    // The escape is also harmless on terminals that don't interpret it
+    // (the bytes are printed and consumed by the terminal driver if
+    // supported; ignored otherwise). We gate on the recursion-guard env
+    // var so the originating shell's tab title isn't mutated.
+    if crate::terminal::is_spawned_in_tab() {
+        // Defense-in-depth: strip control chars from the branch name
+        // before embedding in the OSC sequence. The OSC 0 control
+        // sequence is terminated by BEL (\x07) or ST (\x1b\\). A branch
+        // name containing either could close the sequence early and
+        // inject subsequent bytes as a different terminal command.
+        // Git/jj ref validation already rejects most control chars, but
+        // we don't trust the upstream layer — sanitize at the use site.
+        let safe_title: String = branch
+            .chars()
+            .filter(|c| !c.is_control())
+            .collect();
+        // OSC 0 ; <title> BEL — sets both window title and tab title.
+        // \x1b is ESC; \x07 is BEL. printed to stderr so it doesn't
+        // mingle with structured stdout output (path-file etc).
+        use std::io::Write as _;
+        let _ = write!(std::io::stderr(), "\x1b]0;{safe_title}\x07");
+    }
 
     // Worktree path
     let wt_dir = &workspace_dir;
@@ -201,6 +250,92 @@ fn copy_files(from: &Path, to: &Path, config: &Config) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Terminal-tab dispatch helpers
+// ---------------------------------------------------------------------------
+
+/// Decide whether `wt new` should open a new terminal tab instead of
+/// running the creation inline. Precedence:
+///   1. `--no-tab` flag → always false (user explicitly disabled)
+///   2. `--in-new-tab` flag → true (user explicitly enabled)
+///   3. Already running inside a spawned tab → false (recursion guard)
+///   4. `[ui] open_in_new_tab` config (project over global) → that value
+///
+/// Terminal-detection still happens at the call site — even if this
+/// returns true, [`crate::terminal::detect()`] may return `None` and we
+/// fall through to in-place creation.
+fn should_open_new_tab(args: &NewArgs, config: &Config) -> bool {
+    if args.no_tab {
+        return false;
+    }
+    if args.in_new_tab {
+        return true;
+    }
+    if crate::terminal::is_spawned_in_tab() {
+        return false;
+    }
+    config.open_in_new_tab
+}
+
+/// Spawn the new tab and return immediately. The caller (originating
+/// shell) sees a clean exit — does NOT write any `--path-file`, so the
+/// outer shell wrapper doesn't `cd` and stays put. The new tab runs the
+/// re-entrant `wt new <args>` with `WT_SPAWNED_IN_TAB=1` set.
+fn spawn_in_new_tab(
+    args: &NewArgs,
+    terminal: &dyn crate::terminal::TerminalIntegration,
+) -> Result<()> {
+    use std::path::PathBuf;
+
+    // Title: prefer the explicit branch; fall back to a placeholder.
+    // The actual branch may be auto-generated downstream; the placeholder
+    // is just for the brief window before creation finishes.
+    let title = args.branch.clone().unwrap_or_else(|| "wt-new".into());
+
+    let cwd = std::env::current_dir()
+        .map_err(|e| Error::Other(format!("cannot read current directory: {e}")))?;
+
+    // Use the absolute path to OUR binary. On Windows, `wt` on PATH may
+    // resolve to Microsoft Store's Windows Terminal binary (also named
+    // `wt.exe`); the spawned tab MUST run our binary.
+    let binary = std::env::current_exe()
+        .map_err(|e| Error::Other(format!("cannot resolve own binary path: {e}")))?;
+    let binary: PathBuf = binary.canonicalize().unwrap_or(binary);
+    let binary = crate::config::strip_verbatim_prefix(binary);
+
+    // Reconstruct argv for the new tab's `wt new ...` invocation. Keep
+    // tab-control flags (`--in-new-tab` / `--no-tab`) OUT of the re-entry
+    // — they were resolved here; the spawned process would just confuse
+    // itself with them (plus the recursion guard short-circuits anyway).
+    let mut new_args = Vec::new();
+    if let Some(b) = &args.branch {
+        new_args.push(b.clone());
+    }
+    if let Some(base) = &args.base {
+        new_args.push("--base".into());
+        new_args.push(base.clone());
+    }
+    if let Some(snap_cmd) = &args.snap {
+        new_args.push("--snap".into());
+        new_args.push(snap_cmd.clone());
+    }
+
+    let spec = crate::terminal::TabSpec {
+        title: title.clone(),
+        cwd,
+        binary,
+        args: new_args,
+        is_snap: args.snap.is_some(),
+    };
+
+    terminal
+        .open_tab(&spec)
+        .map_err(|e| Error::Other(format!("failed to open new tab: {e}")))?;
+
+    eprintln!("Opened in new tab: {title} (terminal: {})", terminal.name());
     Ok(())
 }
 
