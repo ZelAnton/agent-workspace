@@ -183,6 +183,18 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
+      # Node 20 ships with npm 10.x. OIDC Trusted Publishing (publish
+      # without a long-lived token, verified via GitHub's OIDC ID token)
+      # requires npm CLI >= 11.5.1 — the feature went GA in May 2025.
+      # Without this upgrade, npm falls back to token auth, finds no
+      # token, and the registry returns 404 (auth failures are masked as
+      # "not found" by design). Provenance signing still works on older
+      # npm, so the sigstore step succeeds before the PUT fails.
+      - name: Upgrade npm to >=11.5.1 (required for OIDC Trusted Publishing)
+        run: |
+          npm install -g npm@latest
+          npm --version
+
       - name: Resolve version
         id: version
         shell: bash
