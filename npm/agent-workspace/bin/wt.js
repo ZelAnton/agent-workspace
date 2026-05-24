@@ -8,10 +8,10 @@ const { join } = require("path");
 // ============================================================
 
 const PLATFORMS = {
-  "darwin-arm64": "@ZelAnton/agent-workspace-darwin-arm64",
-  "darwin-x64": "@ZelAnton/agent-workspace-darwin-x64",
-  "linux-x64": "@ZelAnton/agent-workspace-linux-x64",
-  "win32-x64": "@ZelAnton/agent-workspace-win32-x64",
+  "darwin-arm64": "@zelanton/agent-workspace-darwin-arm64",
+  "darwin-x64": "@zelanton/agent-workspace-darwin-x64",
+  "linux-x64": "@zelanton/agent-workspace-linux-x64",
+  "win32-x64": "@zelanton/agent-workspace-win32-x64",
 };
 
 function getPlatformPackage() {
@@ -37,7 +37,7 @@ function getBinaryPath() {
     return join(pkgPath, "..", "bin", exe);
   } catch {
     console.error(`Platform package not found: ${pkg}`);
-    console.error("Try reinstalling: npm install -g agent-workspace");
+    console.error("Try reinstalling: npm install -g @zelanton/agent-workspace");
     process.exit(1);
   }
 }
@@ -57,7 +57,7 @@ try {
   }
   if (err.code === "ENOENT") {
     console.error(`Binary not found: ${binary}`);
-    console.error("Try reinstalling: npm install -g agent-workspace");
+    console.error("Try reinstalling: npm install -g @zelanton/agent-workspace");
     process.exit(1);
   }
   if (err.code === "EACCES") {

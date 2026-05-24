@@ -1,5 +1,5 @@
 {
-  "name": "@ZelAnton/agent-workspace-linux-x64",
+  "name": "@zelanton/agent-workspace-linux-x64",
   "version": "0.11.0",
   "description": "agent-workspace binary for Linux x64",
   "license": "MIT",

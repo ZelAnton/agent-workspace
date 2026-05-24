@@ -2,7 +2,7 @@
 // Postinstall: Verify Platform Package & Setup Shell Integration
 // ============================================================
 //
-// Runs after `npm install -g agent-workspace`. Responsibilities:
+// Runs after `npm install -g @zelanton/agent-workspace`. Responsibilities:
 //   1. Resolve the platform-specific binary that npm installed as an
 //      optional dependency.
 //   2. Invoke `wt setup` to install shell-wrapper functions in the user's
@@ -17,10 +17,10 @@ const fs = require("fs");
 const os = require("os");
 
 const PLATFORMS = {
-  "darwin-arm64": "@ZelAnton/agent-workspace-darwin-arm64",
-  "darwin-x64": "@ZelAnton/agent-workspace-darwin-x64",
-  "linux-x64": "@ZelAnton/agent-workspace-linux-x64",
-  "win32-x64": "@ZelAnton/agent-workspace-win32-x64",
+  "darwin-arm64": "@zelanton/agent-workspace-darwin-arm64",
+  "darwin-x64": "@zelanton/agent-workspace-darwin-x64",
+  "linux-x64": "@zelanton/agent-workspace-linux-x64",
+  "win32-x64": "@zelanton/agent-workspace-win32-x64",
 };
 
 const key = `${process.platform}-${process.arch}`;

@@ -109,7 +109,7 @@ sync_versions "$VERSION"
 # Publish platform packages first (main package depends on them)
 for platform in darwin-arm64 darwin-x64 linux-x64 win32-x64; do
     pkg_dir="$NPM_DIR/agent-workspace-$platform"
-    pkg_name="@ZelAnton/agent-workspace-$platform"
+    pkg_name="@zelanton/agent-workspace-$platform"
     # Windows uses .exe extension
     if [[ "$platform" == "win32-x64" ]]; then
         binary="$pkg_dir/bin/wt.exe"
@@ -124,6 +124,6 @@ for platform in darwin-arm64 darwin-x64 linux-x64 win32-x64; do
 done
 
 # Publish main package last
-publish_package "$NPM_DIR/agent-workspace" "agent-workspace" "$VERSION" "$DRY_RUN"
+publish_package "$NPM_DIR/agent-workspace" "@zelanton/agent-workspace" "$VERSION" "$DRY_RUN"
 
 log "Publish complete!"

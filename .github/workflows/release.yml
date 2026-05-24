@@ -1,13 +1,26 @@
 name: Release
 
-# Triggered by pushing a tag like `v0.11.0`. Produces a GitHub Release with
-# prebuilt binaries for all four supported platforms plus the install scripts,
-# which the shell installer (install.sh / install.ps1) downloads.
+# Triggered by pushing a tag like `v0.11.0` OR manually via the Actions
+# UI ("Run workflow" button) for the first-time setup and emergency
+# reruns. Produces a GitHub Release with prebuilt binaries for all four
+# supported platforms plus the install scripts (consumed by install.sh /
+# install.ps1), and publishes the npm packages.
 
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g. 0.11.0). Required for manual runs.'
+        required: true
+        type: string
+      publish_npm:
+        description: 'Publish to npm registry'
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write  # required by softprops/action-gh-release
@@ -57,7 +70,14 @@ jobs:
       - name: Resolve version
         id: version
         shell: bash
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: |
+          # On tag push: derive from GITHUB_REF_NAME (e.g. "v0.11.0" → "0.11.0").
+          # On manual dispatch: use the workflow input.
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
 
       # Package the single binary as tar.gz. Windows 10 1803+ ships bsdtar, so
       # using tar.gz for all platforms keeps `wt update` and install scripts
@@ -119,7 +139,20 @@ jobs:
       - name: List artifacts
         run: ls -la dist/
 
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish GitHub Release
+        # Only run on tag pushes; for manual dispatch, skip the GH release
+        # step (use case is npm-republish without re-tagging).
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -128,3 +161,63 @@ jobs:
             install.ps1
           generate_release_notes: true
           fail_on_unmatched_files: true
+
+  publish-npm:
+    name: Publish to npm
+    needs: build
+    runs-on: ubuntu-latest
+    # Skip when the manual dispatcher unchecked the publish_npm flag.
+    # Tag pushes always publish (workflow_dispatch.inputs is null on push).
+    if: github.event_name == 'push' || inputs.publish_npm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: false   # keep per-platform dirs so we can stage them
+
+      - name: Stage binaries into npm/<platform>/bin
+        shell: bash
+        run: |
+          set -eu
+          VERSION="${{ steps.version.outputs.version }}"
+          for platform in darwin-arm64 darwin-x64 linux-x64 win32-x64; do
+            archive="dist/agent-workspace-${platform}/agent-workspace-${VERSION}-${platform}.tar.gz"
+            if [[ ! -f "$archive" ]]; then
+              echo "::error::Archive not found: $archive"
+              exit 1
+            fi
+            target="npm/agent-workspace-${platform}/bin"
+            mkdir -p "$target"
+            tar -xzf "$archive" -C "$target"
+            # Ensure the unix binaries are executable post-extract.
+            if [[ "$platform" != "win32-x64" ]]; then
+              chmod +x "$target/wt"
+            fi
+            echo "Staged $platform → $target"
+            ls -la "$target"
+          done
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: bash scripts/publish-npm.sh "${{ steps.version.outputs.version }}"

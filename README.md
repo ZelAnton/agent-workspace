@@ -43,7 +43,7 @@ Installs `wt` to `~/.agent-workspace/bin`, adds it to your PATH, and runs `wt se
 ### Via npm
 
 ```bash
-npm install -g agent-workspace
+npm install -g @zelanton/agent-workspace
 ```
 
 ### Update

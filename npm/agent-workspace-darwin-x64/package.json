@@ -1,5 +1,5 @@
 {
-  "name": "@ZelAnton/agent-workspace-darwin-x64",
+  "name": "@zelanton/agent-workspace-darwin-x64",
   "version": "0.11.0",
   "description": "agent-workspace binary for macOS x64",
   "license": "MIT",
