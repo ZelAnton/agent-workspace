@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use vcs_runner::{Cmd, RunError, Runner};
 
 use super::errmap::map_run_err;
-use crate::vcs::common::{path_str, WorktreeInfo};
+use crate::vcs::common::{path_str, CreateOutcome, WorktreeInfo};
 use crate::vcs::error::{Error, Result};
 
 /// jj workspace-list template: one line per workspace, tab-separated.
@@ -81,11 +81,34 @@ pub(super) fn create_worktree(
     path: &Path,
     branch: &str,
     base: &str,
-) -> Result<crate::vcs::common::CreateOutcome> {
+) -> Result<CreateOutcome> {
+    // Pre-flight `WorktreeExists` check applies to BOTH paths.
     if super::repo::branch_exists(runner, branch)? {
         return Err(Error::WorktreeExists(branch.to_string()));
     }
 
+    // CoW probe — requires both the repo root and `path`'s parent to be
+    // on the same reflink-capable volume. Mirrors the git dispatcher's
+    // shape exactly so behaviour is consistent across backends.
+    let parent = path.parent().unwrap_or(path);
+    if std::env::var(crate::cow::DISABLE_COW_ENV).is_err()
+        && let Ok(repo_root) = super::repo::repo_root(runner)
+        && parent.exists()
+        && crate::cow::can_clone(&repo_root, parent)
+    {
+        return create_worktree_cow(runner, &repo_root, path, branch, base);
+    }
+
+    create_worktree_plain(runner, path, branch, base)
+}
+
+/// Standard `jj workspace add` — jj materialises the working copy itself.
+fn create_worktree_plain(
+    runner: &dyn Runner,
+    path: &Path,
+    branch: &str,
+    base: &str,
+) -> Result<CreateOutcome> {
     let ws_name = workspace_name_for(branch);
     let path_arg = path_str(path)?;
 
@@ -101,9 +124,174 @@ pub(super) fn create_worktree(
     let revset = format!("{ws_name}@");
     super::exec(runner, &["bookmark", "create", branch, "-r", &revset])?;
 
-    // jj path doesn't use reflink — `jj workspace add` materialises files
-    // itself with no opt-out. CoW for jj is tracked as future work.
-    Ok(crate::vcs::common::CreateOutcome::Plain)
+    Ok(CreateOutcome::Plain)
+}
+
+/// CoW creation: edit source to base → `jj workspace add --sparse-patterns
+/// empty` → reflink-copy → restore patterns → bookmark → restore source @.
+///
+/// jj's `--sparse-patterns empty` is the analogue of git's `--no-checkout`:
+/// the new workspace is registered and `@` is set to a fresh empty change
+/// above `<base>`, but no files are materialised. We then CoW-copy the
+/// source workspace's working-copy contents (which we just moved to base)
+/// into the new workspace path, restore the sparse-pattern set to "all
+/// files", and snapshot to make jj's `@` tree equal to base's tree
+/// (effectively an empty change above base — same observable state as
+/// `jj workspace add -r <base>` would produce, just via reflink).
+///
+/// **Rollback** via `jj op restore <pre_op>` on internal failure plus
+/// `fs::remove_dir_all(path)` to clean any half-materialised workspace
+/// directory.
+fn create_worktree_cow(
+    runner: &dyn Runner,
+    repo_root: &Path,
+    path: &Path,
+    branch: &str,
+    base: &str,
+) -> Result<CreateOutcome> {
+    let ws_name = workspace_name_for(branch);
+    let path_arg = path_str(path)?;
+
+    // 1. Capture pre-op for precise op-log rollback.
+    let pre_op = super::ops::capture_op_id(runner)?;
+
+    // 2. Capture source @ change-id (NOT commit-id — change-id survives
+    //    snapshot rewrites, so a later `jj edit <change_id>` lands on
+    //    whatever the same logical change has become).
+    let orig_change_id = super::repo::current_change_id(runner)?;
+
+    // 3. Resolve `base` to a concrete commit-id BEFORE moving. `base`
+    //    may be a local bookmark, remote ref (`origin/main`), revset, or
+    //    commit hash. `jj edit` accepts commit-ids unambiguously; remote
+    //    refs and complex revsets work as `-r` to `jj log` here even if
+    //    they wouldn't pass to `jj edit` directly. Resolving up-front
+    //    also lets us compare against `orig_change_id` correctly (a
+    //    name-vs-commit-id compare in the previous version always
+    //    differed, so we always moved even when at base).
+    //
+    // **Ambiguous revsets**: if `base` is a revset matching multiple
+    // commits (e.g. `ancestors(main)`), `--limit 1` silently picks the
+    // first by jj's evaluation order. Acceptable for the typical case
+    // (user passes bookmark name or commit hash); document the edge
+    // case rather than over-engineer rejection logic that misfires on
+    // legitimate single-commit revsets.
+    let base_commit = runner
+        .run(
+            Cmd::new("jj")
+                .in_dir(&std::env::current_dir()?)
+                .args(["log", "-r", base, "-T", "commit_id", "--no-graph", "--limit", "1"]),
+        )
+        .map(|out| out.stdout_lossy().trim().to_string())
+        .map_err(map_run_err)?;
+    if base_commit.is_empty() {
+        return Err(Error::Command(format!(
+            "jj: base revision '{base}' resolved to empty commit-id"
+        )));
+    }
+
+    // 4. Move source workspace to base. Skip if @ already there
+    //    (commit-id equality means @ is on base's commit).
+    let orig_commit = super::repo::current_commit(runner)?;
+    let needs_move = orig_commit != base_commit;
+    if needs_move {
+        super::exec(runner, &["edit", &base_commit])?;
+    }
+
+    let inner: Result<()> = (|| {
+        // 5. Create the empty workspace.
+        super::exec(
+            runner,
+            &[
+                "workspace",
+                "add",
+                "--name",
+                &ws_name,
+                "-r",
+                &base_commit,
+                "--sparse-patterns",
+                "empty",
+                path_arg,
+            ],
+        )?;
+
+        // 6. Reflink-copy source workspace's files (matching base's tree)
+        //    into the new workspace. Skip BOTH `.jj/` (jj's metadata that
+        //    new workspace already set up) AND `.git/` (colocated repos
+        //    have it too; new workspace doesn't need a copy).
+        crate::cow::try_clone_dir_except(repo_root, path, &[".jj", ".git"])
+            .map_err(Error::from)?;
+
+        // 7. Restore sparse-pattern set to "all files" in the new
+        //    workspace and trigger a snapshot. After this, jj's view of
+        //    `@`'s working copy matches base's tree — an empty change
+        //    above base, same as if `jj workspace add -r <base>` had
+        //    materialised it directly.
+        //
+        // `.in_dir(path)` sets the child's cwd; the parent process's cwd
+        // is untouched, so no save/restore needed here.
+        runner
+            .run(
+                Cmd::new("jj")
+                    .in_dir(path)
+                    .args(["sparse", "set", "--pattern", "."]),
+            )
+            .map(|_| ())
+            .map_err(map_run_err)?;
+        // `jj status` is the cheapest command that forces a working-copy
+        // snapshot. Errors here are non-fatal (worst case: stale @ tree
+        // until next jj command in the new workspace).
+        let _ = runner.run(Cmd::new("jj").in_dir(path).args(["status"]));
+
+        // 8. Attach the bookmark to the new workspace's @.
+        let revset = format!("{ws_name}@");
+        super::exec(runner, &["bookmark", "create", branch, "-r", &revset])?;
+
+        Ok(())
+    })();
+
+    // 9. Cleanup paths.
+    //
+    // On SUCCESS: restore source @ via `jj edit <orig_change_id>`. The
+    // change-id survives snapshot rewrites that may have happened
+    // during inner ops, so this lands on whatever the same logical
+    // change is now.
+    //
+    // On FAILURE: skip the per-step source restore — `jj op restore`
+    // below rolls back to pre_op which includes step 4's edit AND every
+    // mutation since, restoring source state in one shot. Running an
+    // extra `jj edit` here would just be undone by op restore and clutter
+    // the op log.
+    match &inner {
+        Ok(_) => {
+            if needs_move
+                && let Err(e) = super::exec(runner, &["edit", &orig_change_id])
+            {
+                eprintln!(
+                    "Warning: failed to restore source workspace @ '{orig_change_id}': {e}"
+                );
+            }
+        }
+        Err(_) => {
+            let _ = super::exec(runner, &["op", "restore", &pre_op]);
+            // Filesystem cleanup may fail on Windows when files are held
+            // open by background indexers / antivirus. Logging the
+            // failure beats silently leaving an orphan dir that the
+            // next `wt new <same-branch>` would trip over with a
+            // confusing "path exists" error.
+            if path.exists()
+                && let Err(rm_err) = std::fs::remove_dir_all(path)
+            {
+                eprintln!(
+                    "Warning: failed to clean up partial workspace at {}: {rm_err}\n\
+                     Remove manually if needed before retrying `wt new`.",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    inner?;
+    Ok(CreateOutcome::CowCloned)
 }
 
 /// Remove a workspace + delete the on-disk directory.

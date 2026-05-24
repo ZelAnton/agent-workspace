@@ -38,6 +38,16 @@ pub enum Error {
     Walk(#[from] ignore::Error),
 }
 
+/// Env var that disables the CoW worktree-creation path even when the
+/// filesystem supports it. Set by `wt new --no-cow` or by config
+/// (`[create] use_cow = false`) before any dispatcher fires.
+///
+/// Exposed as a const so all readers (dispatchers in `vcs::git` and
+/// `vcs::jj`) and the writer (`cli::commands::lifecycle::new`) share
+/// one source of truth — silent string-literal drift between modules
+/// would otherwise be a silent-disable risk.
+pub const DISABLE_COW_ENV: &str = "WT_DISABLE_COW";
+
 /// True if `src_dir` and `dst_parent` are on the same volume **and** a
 /// sentinel reflink attempt succeeds at `dst_parent`.
 ///

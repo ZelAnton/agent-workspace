@@ -83,7 +83,7 @@ pub(super) fn fetch(runner: &dyn Runner) -> Result<()> {
 /// and `merge` to pin the rollback target precisely (more reliable than
 /// `jj op undo`, which only walks back one op and can lose track if a
 /// snapshot op slipped in).
-fn capture_op_id(runner: &dyn Runner) -> Result<String> {
+pub(super) fn capture_op_id(runner: &dyn Runner) -> Result<String> {
     let cwd = std::env::current_dir()?;
     let out = runner
         .run(

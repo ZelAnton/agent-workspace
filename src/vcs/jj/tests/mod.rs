@@ -90,7 +90,10 @@ pub(super) fn with_cwd<F, T>(path: &Path, f: F) -> T
 where
     F: FnOnce() -> T,
 {
-    let _guard = CWD_MUTEX.lock().unwrap();
+    // Recover from poison so one panicking test doesn't block every
+    // subsequent jj test from acquiring the cwd mutex. The poisoned
+    // state we'd inherit is irrelevant — we restore cwd ourselves.
+    let _guard = CWD_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let original = std::env::current_dir().unwrap();
     std::env::set_current_dir(path).unwrap();
     let result = f();
@@ -482,5 +485,72 @@ jj_test!(test_dry_run_merge_clean_already_up_to_date, |dir: &Path| {
             .unwrap();
         let clean = backend().dry_run_merge("feat", false).unwrap();
         assert!(clean, "merging already-merged branch should report clean");
+    });
+});
+
+// ---------------------------------------------------------------------------
+// jj CoW (Step 1 + Step 2): block-clone workspace creation + colocated
+// ---------------------------------------------------------------------------
+
+// End-state correctness: whether the CoW path or the plain path runs
+// (depends on host FS), the new workspace must contain files that exist
+// on `main`. `setup_jj_repo` committed README.md as the initial commit
+// on `main`, so we just check for that file in the new workspace.
+jj_test!(test_create_worktree_populates_files_from_base, |dir: &Path| {
+    let wt_path = dir.join("workspaces").join("populated");
+    std::fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
+
+    with_cwd(dir, || {
+        let b = backend();
+        b.create_worktree(&wt_path, "feat-populated", "main").unwrap();
+        // CoW or plain — both must produce a worktree with main's
+        // committed files. README.md is created by `setup_jj_repo` as
+        // part of the initial commit on `main`.
+        assert!(
+            wt_path.join("README.md").is_file(),
+            "new workspace must contain files materialised at base ('main')"
+        );
+        b.remove_worktree(&wt_path, false).unwrap();
+    });
+});
+
+// jj CoW workflow's step 8 (restore source @): after creation,
+// source workspace's change-id should match what it was before the
+// orchestration touched it. Verifies `jj edit <orig_change_id>` restore.
+jj_test!(test_create_worktree_restores_source_change_id, |dir: &Path| {
+    // Create a child change so source @ isn't on the `main` bookmark.
+    StdCommand::new("jj")
+        .args(["new", "-m", "source workspace change"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
+
+    let wt_path = dir.join("workspaces").join("restore-test");
+    std::fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
+
+    with_cwd(dir, || {
+        let b = backend();
+        // Capture both the commit-id (stable jj identity for that
+        // revision) AND the change-id (jj's mutable-content identity
+        // that the restore step targets explicitly via `jj edit`).
+        // Asserting BOTH catches future regressions where one is
+        // restored but the other diverges.
+        let runner = procpilot::DefaultRunner;
+        let pre_commit = b.current_commit().unwrap();
+        let pre_change =
+            crate::vcs::jj::repo::current_change_id(&runner).unwrap();
+        b.create_worktree(&wt_path, "feat-restore", "main").unwrap();
+        let post_commit = b.current_commit().unwrap();
+        let post_change =
+            crate::vcs::jj::repo::current_change_id(&runner).unwrap();
+        assert_eq!(
+            pre_commit, post_commit,
+            "source workspace's @ commit must be restored after create_worktree"
+        );
+        assert_eq!(
+            pre_change, post_change,
+            "source workspace's @ change-id must be restored after create_worktree"
+        );
+        b.remove_worktree(&wt_path, false).unwrap();
     });
 });

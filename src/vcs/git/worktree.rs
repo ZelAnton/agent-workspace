@@ -44,7 +44,7 @@ pub(super) fn create_worktree(
     // (caller in `new.rs` calls `create_dir_all` on `workspace_dir` before
     // dispatching here).
     let parent = path.parent().unwrap_or(path);
-    if std::env::var("WT_DISABLE_COW").is_err()
+    if std::env::var(crate::cow::DISABLE_COW_ENV).is_err()
         && let Ok(repo_root) = super::repo::repo_root(runner)
         && parent.exists()
         && crate::cow::can_clone(&repo_root, parent)
@@ -87,6 +87,41 @@ fn create_worktree_cow(
     branch_already_exists: bool,
 ) -> Result<CreateOutcome> {
     let path_arg = path_str(path)?;
+
+    // 0. Colocated detection. When the repo has `.jj/` alongside `.git/`,
+    //    the raw git operations below (stash, checkout, worktree add)
+    //    mutate git's HEAD/index without going through jj — desyncing
+    //    jj's view of the repo. Bracket the whole CoW flow with `jj git
+    //    import` so jj's bookmarks/refs catch up before and after.
+    //
+    // The import calls are best-effort: jj may not be installed locally
+    // (a colocated repo can travel between machines), in which case the
+    // calls silently fail and the user's jj-side state may drift —
+    // already broken if they ran any raw git command without jj sync,
+    // so no regression.
+    let is_colocated = repo_root.join(".jj").is_dir();
+    if is_colocated {
+        match std::process::Command::new("jj")
+            .current_dir(repo_root)
+            .args(["git", "import"])
+            .status()
+        {
+            Ok(s) if !s.success() => {
+                eprintln!(
+                    "Warning: pre-CoW `jj git import` exited {} — jj-side refs may \
+                     be stale after this operation; run `jj git import` manually if needed",
+                    s.code().unwrap_or(-1)
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: pre-CoW `jj git import` failed to spawn: {e} \
+                     (is jj installed?); colocated jj state may drift from git"
+                );
+            }
+            Ok(_) => {} // success; no output
+        }
+    }
 
     // 1. Capture source state. Both the branch name AND the commit hash:
     // when the branch name is "HEAD" the repo is in detached state, and
@@ -176,6 +211,31 @@ fn create_worktree_cow(
                  Your changes are saved in 'git stash list'; resolve manually."
             );
         }
+
+    // 7. Colocated post-sync: tell jj about the new worktree's ref
+    //    movement and the source repo's branch/stash state restoration.
+    if is_colocated {
+        match std::process::Command::new("jj")
+            .current_dir(repo_root)
+            .args(["git", "import"])
+            .status()
+        {
+            Ok(s) if !s.success() => {
+                eprintln!(
+                    "Warning: post-CoW `jj git import` exited {} — jj's bookmarks \
+                     may not reflect the new worktree's HEAD; run `jj git import` manually",
+                    s.code().unwrap_or(-1)
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: post-CoW `jj git import` failed to spawn: {e} \
+                     (is jj installed?); colocated jj state may drift from git"
+                );
+            }
+            Ok(_) => {}
+        }
+    }
 
     inner?;
     Ok(CreateOutcome::CowCloned)

@@ -69,7 +69,7 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
         // (post_create hooks etc) inherit it but it has no effect on
         // them (only `vcs::create_worktree` reads it).
         unsafe {
-            std::env::set_var("WT_DISABLE_COW", "1");
+            std::env::set_var(crate::cow::DISABLE_COW_ENV, "1");
         }
     }
 

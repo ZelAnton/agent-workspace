@@ -99,6 +99,27 @@ pub(super) fn current_branch(runner: &dyn Runner) -> Result<String> {
     })
 }
 
+/// Current working-copy change-id (a stable jj identifier that survives
+/// content rewrites, unlike commit_id which changes on every snapshot).
+/// Used to restore the source workspace's `@` after CoW orchestration:
+/// `jj edit <commit_id>` jumps to a frozen point in history; `jj edit
+/// <change_id>` jumps to whichever revision currently bears that
+/// change-id, which is what we want after intervening snapshots.
+pub(super) fn current_change_id(runner: &dyn Runner) -> Result<String> {
+    let cwd = std::env::current_dir()?;
+    runner
+        .run(
+            Cmd::new("jj")
+                .in_dir(&cwd)
+                .args(["log", "-r", "@", "-T", "change_id", "--no-graph", "--limit", "1"]),
+        )
+        .map(|out| out.stdout_lossy().trim().to_string())
+        .map_err(|e| match e {
+            RunError::NonZeroExit { .. } => Error::NotInRepo,
+            other => map_run_err(other),
+        })
+}
+
 /// HEAD commit id (short form, matching git's behaviour of returning
 /// whatever `rev-parse HEAD` prints — a full sha for git, a short id for jj.
 /// Callers use this as an opaque pointer; full vs short doesn't matter).

@@ -65,9 +65,20 @@ On filesystems with block cloning (Windows ReFS / DevDrive, Linux Btrfs / XFS, m
 
 **Skip when CoW used**: the `copy_files` (`[general] copy_files`) step in `src/cli/commands/lifecycle/new.rs::run` is **redundant** after a successful CoW clone — every file from source is already in the new worktree. The caller switches on `CreateOutcome::CowCloned` vs `CreateOutcome::Plain` returned from `vcs::create_worktree` to decide.
 
-**Jj backend**: not yet supported. `jj workspace add` materialises files itself with no `--no-checkout` equivalent; an empirical investigation is needed to determine if jj is smart enough to skip writes when target dir already contains matching files. For now `JjBackend::create_worktree` always returns `CreateOutcome::Plain`.
+**Jj backend** (`src/vcs/jj/worktree.rs::create_worktree_cow`): mirrors the git workflow via jj's `--sparse-patterns empty` analogue of `--no-checkout`:
+1. Capture op id (precise rollback) and current `@` change-id (source restore).
+2. `jj edit <base>` to move source workspace's working-copy to base's tree.
+3. `jj workspace add --name <derived> -r <base> --sparse-patterns empty <path>` — creates the workspace + empty change above base; no files materialised.
+4. `cow::try_clone_dir_except(repo_root, path, &[".jj", ".git"])` — reflink-copies source's files (which now match base) into the new workspace. Both `.jj/` and `.git/` are excluded (the latter for colocated repos).
+5. `jj sparse set --pattern .` + `jj status` inside the new workspace — restores sparse-pattern set to "all files" and triggers a snapshot so jj's view of `@` matches the on-disk tree.
+6. `jj bookmark create <branch> -r <derived>@`.
+7. `jj edit <orig_change_id>` to restore source workspace's `@`.
 
-**User overrides**: `--no-cow` flag on `wt new`; `[create] use_cow = false` (project or global) to disable by default. Sets the `WT_DISABLE_COW` env var which the dispatcher in `vcs::git::worktree` checks.
+Rollback on internal failure: `jj op restore <pre_op>` + `fs::remove_dir_all(path)`.
+
+**Colocated git-force bracketing** (`src/vcs/git/worktree.rs::create_worktree_cow`): when the source repo has `.jj/` alongside `.git/` and the user forced git backend via `--vcs=git`, raw git ops (stash, checkout, worktree add) would desync jj's view. The CoW flow brackets the entire git-side work with `jj git import` calls (before and after) so jj's bookmarks/refs catch up. Calls are best-effort — silently skipped if jj isn't installed.
+
+**User overrides**: `--no-cow` flag on `wt new`; `[create] use_cow = false` (project or global) to disable by default. Sets the `WT_DISABLE_COW` env var which both backends' CoW dispatchers check.
 
 ### Merge is atomic — no continue/abort
 
