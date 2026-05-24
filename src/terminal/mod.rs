@@ -40,36 +40,46 @@ pub enum Error {
 
 /// What the spawned tab should run.
 ///
-/// The script generated for the spawned tab does (in order):
-///   1. set `WT_SPAWNED_IN_TAB=1` (the recursion guard)
-///   2. invoke `binary new <args> --path-file <tmp>` with the given args
-///   3. if `tmp` exists and is non-empty, `cd` to the first line
-///   4. if a second line exists (snap mode), run the snap-resume loop
-///
-/// The binary path is captured at spawn time via [`std::env::current_exe`]
-/// — on Windows this is critical because the system PATH may surface
-/// Microsoft Store's `wt.exe` (Windows Terminal itself) before ours.
+/// Two distinct flows live behind one type:
+///   - [`TabMode::WtNew`] — `wt new` creation: spawned tab re-invokes our
+///     binary with the original args + a fresh `--path-file`, optionally
+///     enters the snap-resume loop. The script body is substantial.
+///   - [`TabMode::OpenAtCwd`] — `wt cd` navigation: spawned tab just
+///     opens a shell at the target directory. The terminal's native cwd
+///     flag (`wt.exe new-tab -d`, `gnome-terminal --working-directory`,
+///     iTerm2's AppleScript) does the work; the script body only sets
+///     the recursion-guard env and locks the tab title via OSC 0.
 pub struct TabSpec {
     /// Title to set on the new tab (typically the branch/bookmark name).
     pub title: String,
 
-    /// Working directory the new tab starts in. The worktree-cd happens
-    /// AFTER creation (so the new tab ends up in the worktree); this is
-    /// just the starting directory before our binary runs.
+    /// Working directory the new tab starts in. For `OpenAtCwd` this IS
+    /// where the user ends up. For `WtNew` it's just the starting dir
+    /// before the binary runs — the worktree-cd happens AFTER creation
+    /// inside the spawned binary's `--path-file` dance.
     pub cwd: PathBuf,
 
-    /// Absolute path to our `wt` binary. Always use the absolute path —
-    /// see the note above about `wt.exe` ambiguity on Windows.
-    pub binary: PathBuf,
+    /// What the spawned tab actually does.
+    pub mode: TabMode,
+}
 
-    /// CLI args to pass to the binary after `new` (e.g. `["feat-x"]` or
-    /// `["feat-x", "--base", "main", "--snap", "claude"]`).
-    pub args: Vec<String>,
-
-    /// Whether the args include `--snap` (or `-s`). The spawned-tab
-    /// script then includes the snap-resume loop so the agent flow runs
-    /// natively in the new tab.
-    pub is_snap: bool,
+/// Distinguishes the two spawn flows. The script generator and each
+/// terminal backend branch on this.
+pub enum TabMode {
+    /// Re-invoke `<binary> new <args> --path-file <tmp>` in the new tab.
+    /// Includes the snap-resume loop when `is_snap` is true. The binary
+    /// path is captured at spawn time via [`std::env::current_exe`] — on
+    /// Windows this is critical because the system PATH may surface
+    /// Microsoft Store's `wt.exe` (Windows Terminal itself) before ours.
+    WtNew {
+        binary: PathBuf,
+        args: Vec<String>,
+        is_snap: bool,
+    },
+    /// Just open a shell at [`TabSpec::cwd`]. No binary re-invocation, no
+    /// `--path-file` dance — the terminal's native cwd flag handles it.
+    /// Used by `wt cd <branch>`.
+    OpenAtCwd,
 }
 
 pub trait TerminalIntegration: Send + Sync {
@@ -93,6 +103,26 @@ pub fn is_spawned_in_tab() -> bool {
     std::env::var(SPAWNED_IN_TAB_ENV)
         .ok()
         .is_some_and(|v| !v.is_empty())
+}
+
+/// Shared precedence resolver for the `--in-new-tab` / `--no-tab` flags +
+/// config toggle. Used by both `wt new` and `wt cd`:
+///
+///   1. `--no-tab` flag → false (user explicitly disabled)
+///   2. `--in-new-tab` flag → true (user explicitly enabled)
+///   3. Already running inside a spawned tab (recursion guard) → false
+///   4. `config_value` (`[ui] open_in_new_tab` resolved project/global)
+pub fn should_open_in_new_tab(no_tab: bool, in_new_tab: bool, config_value: bool) -> bool {
+    if no_tab {
+        return false;
+    }
+    if in_new_tab {
+        return true;
+    }
+    if is_spawned_in_tab() {
+        return false;
+    }
+    config_value
 }
 
 /// Detect which terminal-with-tabs (if any) the current process is running

@@ -20,8 +20,7 @@
 // PowerShell and POSIX shell (bash/zsh) are both supported because that's
 // what Windows Terminal (pwsh) and iTerm2/GNOME Terminal (sh) hand us.
 
-use super::TabSpec;
-use super::SPAWNED_IN_TAB_ENV;
+use super::{TabMode, TabSpec, SPAWNED_IN_TAB_ENV};
 
 /// PowerShell quoting: wrap in single quotes; double internal single
 /// quotes. Safe for any string (no `\n`/`\r` escapes needed because
@@ -38,17 +37,80 @@ fn sh_quote(s: &str) -> String {
     format!("'{escaped}'")
 }
 
+/// Escape a string for embedding INSIDE a bash single-quoted `printf`
+/// format argument — `printf '<here>'`. Handles:
+///   - `\` → `\\` (printf consumes `\\` → `\`; otherwise our literal `\033`
+///     escape sequences in the surrounding format would mis-parse)
+///   - `%`  → `%%` (printf format specifier neutralisation)
+///   - `'`  → `'\''` (close single-quote, escaped literal `'`, reopen)
+///
+/// Shared by `build_posix_cd` and the iTerm2 / GNOME Terminal wrappers
+/// that also embed the title into a `printf` format string.
+pub(super) fn escape_for_printf_single_quoted(s: &str) -> String {
+    let clean: String = s.chars().filter(|c| !c.is_control()).collect();
+    clean
+        .replace('\\', "\\\\")
+        .replace('%', "%%")
+        .replace('\'', r"'\''")
+}
+
+/// Escape a string for embedding INSIDE a bash double-quoted argument —
+/// e.g. `cd "<here>"`. Neutralises shell-active characters that bash
+/// expands inside `"..."`:
+///   - `\` (escape char)
+///   - `"` (close quote)
+///   - `$` (variable expansion / command substitution)
+///   - `` ` `` (legacy command substitution)
+pub(super) fn escape_for_shell_double_quoted(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('$', "\\$")
+        .replace('`', "\\`")
+}
+
 /// Build the PowerShell command body for the spawned tab.
 pub fn build_pwsh(spec: &TabSpec) -> String {
-    let exe = ps_quote(&spec.binary.to_string_lossy());
-    let new_args_ps = spec
-        .args
+    match &spec.mode {
+        TabMode::OpenAtCwd => build_pwsh_cd(&spec.title),
+        TabMode::WtNew { binary, args, is_snap } => {
+            build_pwsh_wt_new(binary, args, *is_snap)
+        }
+    }
+}
+
+/// Minimal pwsh script for `wt cd` mode: set the recursion guard, emit
+/// OSC 0 to lock the tab title against shell-prompt overrides, then exit
+/// the `-Command` script. The user lands at the shell prompt; cwd was
+/// already set by `wt.exe new-tab -d <cwd>` natively.
+///
+/// **Quoting strategy** (security-sensitive — branch names reach this):
+/// the title is embedded in a *single-quoted* PowerShell string and
+/// concatenated with `[char]27` (ESC) / `[char]7` (BEL) for the OSC 0
+/// terminators. Single quotes are literal in PowerShell — no `$`
+/// variable expansion, no backtick escape interpretation — so the only
+/// character that can break out is `'` itself, which we double-escape
+/// (PS single-quote convention). This shuts the door on injection via
+/// hostile branch names containing `` ` ``, `$`, `"`, etc.
+fn build_pwsh_cd(title: &str) -> String {
+    let title_clean: String = title.chars().filter(|c| !c.is_control()).collect();
+    let title_quoted = title_clean.replace('\'', "''");
+    format!(
+        "$env:{env}='1'; \
+         [Console]::Write([char]27 + ']0;' + '{title}' + [char]7)",
+        env = SPAWNED_IN_TAB_ENV,
+        title = title_quoted,
+    )
+}
+
+fn build_pwsh_wt_new(binary: &std::path::Path, args: &[String], is_snap: bool) -> String {
+    let exe = ps_quote(&binary.to_string_lossy());
+    let new_args_ps = args
         .iter()
         .map(|a| ps_quote(a))
         .collect::<Vec<_>>()
         .join(" ");
 
-    if spec.is_snap {
+    if is_snap {
         format!(
             // Lines kept compact: PowerShell -Command treats `\n` as a
             // statement separator, so layout is purely readability.
@@ -107,15 +169,43 @@ pub fn build_pwsh(spec: &TabSpec) -> String {
 
 /// Build the POSIX shell command body for the spawned tab (bash/zsh).
 pub fn build_posix(spec: &TabSpec) -> String {
-    let exe = sh_quote(&spec.binary.to_string_lossy());
-    let new_args_sh = spec
-        .args
+    match &spec.mode {
+        TabMode::OpenAtCwd => build_posix_cd(&spec.title),
+        TabMode::WtNew { binary, args, is_snap } => {
+            build_posix_wt_new(binary, args, *is_snap)
+        }
+    }
+}
+
+/// Minimal POSIX script for `wt cd` mode: export the recursion guard,
+/// emit OSC 0 to lock the tab title, then exec the user's login shell.
+/// The terminal already opened at the right cwd via its native flag.
+///
+/// **Quoting strategy** (security-sensitive — branch names reach this):
+/// the title is embedded in a *single-quoted* `printf` format string.
+/// Inside single quotes shell-level expansion is suppressed, so we only
+/// worry about: `'` (close quote → use `'\''` to reopen), `\` (printf
+/// itself processes escapes — `\033`/`\007` must remain literal in the
+/// title), and `%` (printf format specifier — would be interpreted as
+/// missing-arg if not doubled). All three are escaped.
+fn build_posix_cd(title: &str) -> String {
+    let title_escaped = escape_for_printf_single_quoted(title);
+    format!(
+        "export {env}=1; printf '\\033]0;{title}\\007'; exec \"$SHELL\" -l",
+        env = SPAWNED_IN_TAB_ENV,
+        title = title_escaped,
+    )
+}
+
+fn build_posix_wt_new(binary: &std::path::Path, args: &[String], is_snap: bool) -> String {
+    let exe = sh_quote(&binary.to_string_lossy());
+    let new_args_sh = args
         .iter()
         .map(|a| sh_quote(a))
         .collect::<Vec<_>>()
         .join(" ");
 
-    if spec.is_snap {
+    if is_snap {
         format!(
             "export {env}=1; \
              pf=$(mktemp); \
@@ -181,9 +271,19 @@ mod tests {
         TabSpec {
             title: "t".into(),
             cwd: PathBuf::from("/tmp"),
-            binary: PathBuf::from("/usr/bin/wt"),
-            args: args.into_iter().map(String::from).collect(),
-            is_snap: snap,
+            mode: TabMode::WtNew {
+                binary: PathBuf::from("/usr/bin/wt"),
+                args: args.into_iter().map(String::from).collect(),
+                is_snap: snap,
+            },
+        }
+    }
+
+    fn make_cd_spec(title: &str) -> TabSpec {
+        TabSpec {
+            title: title.into(),
+            cwd: PathBuf::from("/tmp/some/worktree"),
+            mode: TabMode::OpenAtCwd,
         }
     }
 
@@ -246,6 +346,65 @@ mod tests {
         let posix = build_posix(&spec);
         assert!(pwsh.contains("'feat with spaces'"));
         assert!(posix.contains("'feat with spaces'"));
+    }
+
+    #[test]
+    fn pwsh_cd_mode_sets_guard_and_emits_osc() {
+        let cmd = build_pwsh(&make_cd_spec("feat-x"));
+        assert!(cmd.contains("$env:WT_SPAWNED_IN_TAB='1'"));
+        // Title embedded as single-quoted literal between ESC and BEL
+        // char codes — defends against $/`/" injection from branch names.
+        assert!(cmd.contains("[char]27 + ']0;' + 'feat-x' + [char]7"));
+        // No path-file dance, no binary re-exec.
+        assert!(!cmd.contains("--path-file"));
+        assert!(!cmd.contains("new "));
+    }
+
+    #[test]
+    fn posix_cd_mode_exports_guard_and_emits_osc() {
+        let cmd = build_posix(&make_cd_spec("feat-x"));
+        assert!(cmd.contains("export WT_SPAWNED_IN_TAB=1"));
+        assert!(cmd.contains(r"\033]0;feat-x\007"));
+        // No path-file dance, no binary re-exec.
+        assert!(!cmd.contains("--path-file"));
+        assert!(cmd.ends_with(r#"exec "$SHELL" -l"#));
+    }
+
+    #[test]
+    fn cd_mode_strips_control_chars_from_title() {
+        let cmd = build_pwsh(&make_cd_spec("feat\x07x"));
+        assert!(cmd.contains("'featx'"), "control chars filtered out");
+    }
+
+    /// PowerShell injection regression: branch name with `$` and backtick
+    /// must NOT cause variable expansion or escape interpretation.
+    #[test]
+    fn pwsh_cd_title_neutralises_injection_chars() {
+        let cmd = build_pwsh(&make_cd_spec("feat-$env:PATH-`evil"));
+        // Title embedded verbatim inside single quotes — no expansion.
+        assert!(cmd.contains("'feat-$env:PATH-`evil'"));
+    }
+
+    /// PowerShell single-quote handling: `'` in title is doubled.
+    #[test]
+    fn pwsh_cd_title_doubles_internal_single_quotes() {
+        let cmd = build_pwsh(&make_cd_spec("it's"));
+        assert!(cmd.contains("'it''s'"));
+    }
+
+    /// POSIX printf format-specifier neutralisation: `%` doubled.
+    #[test]
+    fn posix_cd_title_doubles_percent() {
+        let cmd = build_posix(&make_cd_spec("100% done"));
+        assert!(cmd.contains("100%% done"));
+    }
+
+    /// POSIX printf backslash and single-quote escaping.
+    #[test]
+    fn posix_cd_title_escapes_backslash_and_quote() {
+        let cmd = build_posix(&make_cd_spec(r"a\b'c"));
+        // \ doubled to \\ (printf consumes one); ' closed-reopened.
+        assert!(cmd.contains(r"a\\b'\''c"));
     }
 
     #[test]

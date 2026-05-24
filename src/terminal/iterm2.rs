@@ -57,18 +57,32 @@ impl TerminalIntegration for ITerm2 {
 
 /// Build the AppleScript driving iTerm2.
 ///
-/// Two layers of escaping:
-///   1. `as_escape` for AppleScript string literals (handles `\` and `"`).
-///   2. The shell script ITSELF is the inner payload — it's already
-///      shell-quoted by the caller, but its body becomes an AppleScript
-///      string literal here, so we double-escape backslashes / quotes.
+/// **Three layers of escaping** — concrete and security-sensitive:
+///   1. **Shell context** (inner): `cd "{cwd}"` is bash-double-quoted —
+///      `cwd` is escaped via [`escape_for_shell_double_quoted`] to
+///      neutralise `$`, `` ` ``, `"`, `\`. `printf '{title}'` is
+///      bash-single-quoted — `title` is escaped via
+///      [`escape_for_printf_single_quoted`] (handles `'`, `%`, `\`).
+///      Without these, hostile branch names with `'`, `$`, or `` ` ``
+///      would break out of the printf / cd args.
+///   2. **AppleScript string literal** (outer wrap): the entire shell
+///      command becomes the argument of `write text "..."` — AppleScript
+///      string syntax requires `\` → `\\` and `"` → `\"`.
+///   3. The inner `shell_script` arrives already double-escaped by the
+///      caller's `build_posix` (or its `_cd` variant); we wrap it once
+///      more for AppleScript context.
 fn build_applescript(title: &str, cwd: &str, shell_script: &str) -> String {
     fn as_escape(s: &str) -> String {
         s.replace('\\', "\\\\").replace('"', "\\\"")
     }
 
-    let title_esc = as_escape(title);
-    let cwd_esc = as_escape(cwd);
+    // Shell-level escapes FIRST (title for printf single-quote context,
+    // cwd for cd double-quote context), THEN AppleScript escape on top.
+    let title_shell = script::escape_for_printf_single_quoted(title);
+    let cwd_shell = script::escape_for_shell_double_quoted(cwd);
+
+    let title_esc = as_escape(&title_shell);
+    let cwd_esc = as_escape(&cwd_shell);
     let script_esc = as_escape(shell_script);
 
     // The OSC 0 sequence (`ESC ] 0 ; <title> BEL`) sets both icon and
@@ -89,6 +103,34 @@ fn build_applescript(title: &str, cwd: &str, shell_script: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression for R2-1: title with `'` (single quote) must be
+    /// shell-escaped (close-reopen) BEFORE AppleScript wrapping. Without
+    /// the fix, hostile branch names broke the printf single-quoted arg.
+    #[test]
+    fn applescript_title_with_apostrophe_uses_shell_escape() {
+        let s = build_applescript("it's", "/tmp", "echo hi");
+        // After shell escape: `it'\''s`. After AppleScript escape: `it'\\''s`.
+        assert!(s.contains(r#"it'\\''s"#));
+    }
+
+    /// Regression for R2-2: title with `%` must be doubled to neutralise
+    /// printf format-specifier interpretation.
+    #[test]
+    fn applescript_title_with_percent_doubles_it() {
+        let s = build_applescript("100%-done", "/tmp", "echo");
+        assert!(s.contains("100%%-done"));
+    }
+
+    /// Regression for R2-3: cwd with `$` must be backslash-escaped
+    /// inside bash double-quoted `cd "..."` to prevent variable expansion.
+    #[test]
+    fn applescript_cwd_with_dollar_escapes_it() {
+        let s = build_applescript("t", "/path/$HOME/foo", "echo");
+        // Shell escape: `\$`. AppleScript escape (no change for `\$`):
+        // string contains `\\$` (AppleScript representation of literal `\$`).
+        assert!(s.contains(r"\\$HOME"));
+    }
 
     #[test]
     fn applescript_escapes_quotes_and_backslashes() {

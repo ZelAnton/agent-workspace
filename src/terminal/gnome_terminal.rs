@@ -45,9 +45,15 @@ impl TerminalIntegration for GnomeTerminal {
         // GNOME Terminal's `--title` sets the initial title; we ALSO emit
         // an OSC 0 sequence at script start so the title sticks past the
         // first prompt repaint.
+        //
+        // The title is embedded inside `printf '...'` — bash single-quoted
+        // — so we use the shared printf-single-quoted escape (handles
+        // `\`, `%`, `'`). The previous inline escape was missing `%`
+        // neutralisation: a branch name with `%` would be misinterpreted
+        // as a printf format specifier.
         let title_osc = format!(
             "printf '\\033]0;{}\\007'; ",
-            spec.title.replace('\\', "\\\\").replace('\'', r"'\''")
+            script::escape_for_printf_single_quoted(&spec.title)
         );
         let full_script = format!("{title_osc}{script_body}");
 

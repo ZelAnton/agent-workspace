@@ -315,16 +315,11 @@ fn should_use_cow(args: &NewArgs, config: &Config) -> bool {
 }
 
 fn should_open_new_tab(args: &NewArgs, config: &Config) -> bool {
-    if args.no_tab {
-        return false;
-    }
-    if args.in_new_tab {
-        return true;
-    }
-    if crate::terminal::is_spawned_in_tab() {
-        return false;
-    }
-    config.open_in_new_tab
+    crate::terminal::should_open_in_new_tab(
+        args.no_tab,
+        args.in_new_tab,
+        config.open_in_new_tab,
+    )
 }
 
 /// Spawn the new tab and return immediately. The caller (originating
@@ -373,9 +368,11 @@ fn spawn_in_new_tab(
     let spec = crate::terminal::TabSpec {
         title: title.clone(),
         cwd,
-        binary,
-        args: new_args,
-        is_snap: args.snap.is_some(),
+        mode: crate::terminal::TabMode::WtNew {
+            binary,
+            args: new_args,
+            is_snap: args.snap.is_some(),
+        },
     };
 
     terminal
