@@ -11,12 +11,30 @@
 //       --title <title> \
 //       --suppressApplicationTitle \         (stops apps from changing it)
 //       -d <starting-directory> \
-//       pwsh -NoExit -Command <script>
+//       pwsh -NoExit -File <temp-script.ps1>
 //
-// The `pwsh -NoExit -Command ...` keeps the tab open after the script
-// finishes. `-NoExit` is critical — without it, the tab closes the moment
-// the creation script returns, dropping the user back to ground.
+// **Why `-File` instead of `-Command`?** Windows Terminal's CLI parser
+// splits on `;` to chain subcommands (`wt new-tab cmd1 ; new-tab cmd2`)
+// — and the split happens AT THE WT ARGV LEVEL, **even when `;` is
+// inside a quoted argument** passed via Rust's `Command::args`. Our
+// PowerShell script is full of `;` (statement separators). If we pass
+// it inline via `-Command "<script>"`, WT silently truncates the script
+// at the first `;`, then treats every subsequent chunk as an implicit
+// `new-tab` whose first token (e.g. `try`, `if`, `$pf=...`) it tries to
+// launch as an executable — producing the user-visible
+// `[error 0x80070002 when launching ...]` errors. Writing the script to
+// a temp .ps1 file and invoking `pwsh -File <path>` keeps WT's argv
+// free of `;` and bullet-proofs the spawn against arbitrary script
+// content (regression: 0.12.4 and earlier did inline `-Command`).
+//
+// The `-NoExit` flag keeps the tab open after the script finishes;
+// without it the tab closes the moment the creation script returns,
+// dropping the user back to ground. The temp script self-deletes at
+// the end of execution (PowerShell loads `-File` into memory and
+// releases the handle before user code runs, so removing the file is
+// safe).
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -55,6 +73,15 @@ impl TerminalIntegration for WindowsTerminal {
             )
         })?;
 
+        // Write the PowerShell script to a temp .ps1 file. See the
+        // module-level comment for the full rationale — short version:
+        // WT splits its own command line on `;` even inside quoted
+        // args, so an inline `-Command "$env:X='1'; ..."` silently
+        // truncates at the first `;`. `-File <path>` sidesteps the WT
+        // argv parser entirely.
+        let tmp_path = write_script_to_temp(&ps_command)?;
+        let tmp_path_str = tmp_path.to_string_lossy().to_string();
+
         let status = Command::new(&wt_bin)
             .args([
                 "new-tab",
@@ -65,13 +92,17 @@ impl TerminalIntegration for WindowsTerminal {
                 &cwd_str,
                 "pwsh",
                 "-NoExit",
-                "-Command",
-                &ps_command,
+                "-File",
+                &tmp_path_str,
             ])
             .status()
             .map_err(|e| Error::Spawn(format!("wt.exe new-tab: {e}")))?;
 
         if !status.success() {
+            // Best-effort temp cleanup: if WT failed to spawn, no shell
+            // will run the self-delete tail, so unlink it here. Ignored
+            // if it fails (already gone, or AV holds a handle).
+            let _ = std::fs::remove_file(&tmp_path);
             return Err(Error::Spawn(format!(
                 "wt.exe new-tab exit code {}",
                 status.code().unwrap_or(-1)
@@ -79,6 +110,50 @@ impl TerminalIntegration for WindowsTerminal {
         }
         Ok(())
     }
+}
+
+/// Persist the PowerShell script to a uniquely-named `.ps1` file and
+/// append a self-delete tail so the file is cleaned up when the user
+/// closes the spawned tab.
+///
+/// PowerShell's `-File` loads the script and closes the file handle
+/// before user code runs, so `Remove-Item $PSCommandPath` at the bottom
+/// is safe. If the script body itself errors out the tail still runs
+/// because we wrap in `try { ... } finally { ... }`. If pwsh itself
+/// crashes before reaching the finally, the file leaks to `%TEMP%` and
+/// the OS reclaims it on the next cleanup pass — acceptable.
+fn write_script_to_temp(body: &str) -> Result<PathBuf> {
+    // `tempfile::Builder::tempfile()` creates the file with `O_EXCL`
+    // semantics on Unix and `CREATE_NEW` on Windows — no race on the
+    // unique name. We then `keep()` it so the file outlives this
+    // process (the spawned tab needs to read it).
+    let tmp = tempfile::Builder::new()
+        .prefix("wt-tab-")
+        .suffix(".ps1")
+        .tempfile()
+        .map_err(|e| Error::Spawn(format!("create temp script: {e}")))?;
+
+    let (mut file, path) = tmp
+        .keep()
+        .map_err(|e| Error::Spawn(format!("persist temp script: {e}")))?;
+
+    // Wrap the body in try/finally for the self-delete. The body
+    // already contains its own try/finally (for the path-file dance)
+    // — nesting is fine in PowerShell. `-LiteralPath` defeats any
+    // wildcard interpretation of `$PSCommandPath`.
+    let wrapped = format!(
+        "try {{\n{body}\n}} finally {{ \
+         Remove-Item -LiteralPath $PSCommandPath -ErrorAction SilentlyContinue \
+         }}\n"
+    );
+
+    file.write_all(wrapped.as_bytes())
+        .map_err(|e| Error::Spawn(format!("write temp script: {e}")))?;
+    file.flush()
+        .map_err(|e| Error::Spawn(format!("flush temp script: {e}")))?;
+    drop(file);
+
+    Ok(path)
 }
 
 /// Locate Windows Terminal's `wt.exe`.
