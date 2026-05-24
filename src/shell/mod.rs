@@ -320,10 +320,25 @@ end
 # === agent-workspace END ==="#;
 
 const POWERSHELL_WRAPPER: &str = r#"# === agent-workspace BEGIN ===
+# Helper: locate OUR `wt.exe`, NOT Microsoft Windows Terminal's `wt.exe`.
+#
+# Windows ships Windows Terminal as `wt.exe` in `%LOCALAPPDATA%\Microsoft\
+# WindowsApps\wt.exe` (an app execution alias) — and that dir is usually
+# first in PATH. A naive `Get-Command wt | Select -First 1` returns the
+# Microsoft one, which makes `wt update` invoke Windows Terminal's CLI
+# (which treats unknown args as implicit `new-tab` commandlines, opening
+# a doomed tab for every wt invocation). Filtering the WindowsApps path
+# resolves to whichever `wt.exe` we installed (npm shim, install.ps1
+# stamp into ~/.agent-workspace/bin, or a dev build on PATH).
+function Get-AgentWorkspaceBinary {
+  Get-Command wt -CommandType Application -All -ErrorAction SilentlyContinue |
+    Where-Object { $_.Source -notlike '*\WindowsApps\wt.exe' } |
+    Select-Object -First 1
+}
 function wt {
-  $wtBin = Get-Command wt -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  $wtBin = Get-AgentWorkspaceBinary
   if (-not $wtBin) {
-    Write-Error "wt: binary not found. Install: npm install -g agent-workspace"
+    Write-Error "wt: binary not found. Install: npm install -g @zelanton/agent-workspace"
     return 1
   }
   if ($args -contains '-h' -or $args -contains '--help') {
@@ -400,12 +415,11 @@ function wt {
     }
   }
 }
-# Dynamic completions: call binary directly to bypass wt function
-$_wtBin = Get-Command wt -CommandType Application -ErrorAction SilentlyContinue |
-  Select-Object -ExpandProperty Source -First 1
+# Dynamic completions: call OUR binary directly (NOT Microsoft's wt.exe)
+$_wtBin = Get-AgentWorkspaceBinary
 if ($_wtBin) {
   $env:COMPLETE = "powershell"
-  & $_wtBin | Out-String | Invoke-Expression
+  & $_wtBin.Source | Out-String | Invoke-Expression
   Remove-Item Env:\COMPLETE -ErrorAction SilentlyContinue
 }
 Remove-Variable _wtBin -ErrorAction SilentlyContinue
