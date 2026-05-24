@@ -84,10 +84,15 @@ publish_package() {
 
     cd "$pkg_dir"
 
+    # `--provenance` records GitHub-OIDC-signed attestations on npm so
+    # consumers can verify the package was built from this repo's
+    # release.yml workflow. It's a no-op outside CI (gracefully degrades)
+    # but a hard requirement once Trusted Publishing is configured for
+    # the package — npm rejects unprovenance'd publishes from CI then.
     if [[ "$dry_run" == "true" ]]; then
-        npm publish --dry-run
+        npm publish --dry-run --provenance --access public
     else
-        npm publish --access public
+        npm publish --provenance --access public
     fi
 }
 

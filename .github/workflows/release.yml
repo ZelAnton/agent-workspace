@@ -165,6 +165,14 @@ jobs:
     # Skip when the manual dispatcher unchecked the publish_npm flag.
     # Tag pushes always publish (workflow_dispatch.inputs is null on push).
     if: github.event_name == 'push' || inputs.publish_npm
+    # OIDC Trusted Publishing: GitHub mints a short-lived ID token for
+    # this job, npm verifies it against each package's Trusted Publisher
+    # config (configured per-package on npmjs.com). No long-lived token
+    # in repository secrets — `npm publish --provenance` uses the OIDC
+    # flow + records cryptographic provenance attestations.
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -213,7 +221,10 @@ jobs:
             ls -la "$target"
           done
 
-      - name: Publish to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish to npm (OIDC + provenance)
+        # No NODE_AUTH_TOKEN: the npm CLI picks up the GitHub OIDC token
+        # automatically via ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN env vars
+        # (provided when `permissions: id-token: write` is set above).
+        # `--provenance` is passed inside `publish-npm.sh` for every
+        # `npm publish` invocation.
         run: bash scripts/publish-npm.sh "${{ steps.version.outputs.version }}"
