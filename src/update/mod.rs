@@ -121,7 +121,9 @@ pub fn platform_key() -> Option<&'static str> {
     use std::env::consts::{ARCH, OS};
     match (OS, ARCH) {
         ("macos", "aarch64") => Some("darwin-arm64"),
-        ("macos", "x86_64") => Some("darwin-x64"),
+        // Intel Mac (darwin-x64) is intentionally NOT packaged — the
+        // macos-13 GitHub runner is too flaky to keep in the release
+        // matrix. Intel Mac users build from source via cargo.
         ("linux", "x86_64") => Some("linux-x64"),
         ("windows", "x86_64") => Some("win32-x64"),
         _ => None,

@@ -46,7 +46,7 @@ sync_versions() {
 
     # Also update optionalDependencies versions in main package
     local main_pkg="$NPM_DIR/agent-workspace/package.json"
-    for platform in darwin-arm64 darwin-x64 linux-x64 win32-x64; do
+    for platform in darwin-arm64 linux-x64 win32-x64; do
         if [[ "$(uname)" == "Darwin" ]]; then
             sed -i '' "s/\"@zelanton\/agent-workspace-$platform\": \".*\"/\"@zelanton\/agent-workspace-$platform\": \"$version\"/" "$main_pkg"
         else
@@ -107,7 +107,7 @@ fi
 sync_versions "$VERSION"
 
 # Publish platform packages first (main package depends on them)
-for platform in darwin-arm64 darwin-x64 linux-x64 win32-x64; do
+for platform in darwin-arm64 linux-x64 win32-x64; do
     pkg_dir="$NPM_DIR/agent-workspace-$platform"
     pkg_name="@zelanton/agent-workspace-$platform"
     # Windows uses .exe extension

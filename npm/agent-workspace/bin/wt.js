@@ -9,7 +9,6 @@ const { join } = require("path");
 
 const PLATFORMS = {
   "darwin-arm64": "@zelanton/agent-workspace-darwin-arm64",
-  "darwin-x64": "@zelanton/agent-workspace-darwin-x64",
   "linux-x64": "@zelanton/agent-workspace-linux-x64",
   "win32-x64": "@zelanton/agent-workspace-win32-x64",
 };

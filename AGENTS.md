@@ -142,7 +142,7 @@ Missing marker defaults to `Channel::Npm` — keeps existing installs predating 
 
 The version check (`update::check_update` in `src/update/mod.rs`) hits the **GitHub Releases API** for both channels — GitHub is the canonical truth, npm publishes happen after a GitHub release. Requires a non-empty `User-Agent` header (GitHub returns 403 otherwise — `USER_AGENT` const handles this).
 
-Platform key strings (`darwin-arm64`, `darwin-x64`, `linux-x64`, `win32-x64`) must stay consistent across `update::platform_key()`, `npm/agent-workspace/bin/wt.js`, `install.sh`, `install.ps1`, and the CI release archive naming (`.github/workflows/release.yml`). Changing them requires touching all five.
+Platform key strings (`darwin-arm64`, `linux-x64`, `win32-x64`) must stay consistent across `update::platform_key()`, `npm/agent-workspace/bin/wt.js`, `install.sh`, `install.ps1`, and the CI release archive naming (`.github/workflows/release.yml`). Changing them requires touching all five. **Intel Mac (`darwin-x64`) is intentionally dropped** — the `macos-13` GitHub runner is too flaky for the release matrix. Intel Mac users build from source via `cargo install --path .`.
 
 ## Local-only files
 

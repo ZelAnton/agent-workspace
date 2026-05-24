@@ -14,7 +14,7 @@
 #                                 (default: ~/.agent-workspace)
 #
 # This script:
-#   1. Detects platform (darwin-arm64 / darwin-x64 / linux-x64).
+#   1. Detects platform (darwin-arm64 / linux-x64).
 #   2. Downloads the matching .tar.gz from GitHub Releases.
 #   3. Installs `wt` to ~/.agent-workspace/bin.
 #   4. Appends a PATH-export block to the user's shell rc with strict
@@ -76,8 +76,8 @@ esac
 platform="${os}-${arch}"
 
 case "$platform" in
-    darwin-arm64|darwin-x64|linux-x64) : ;;
-    *) err "no prebuilt binary for $platform (supported: darwin-arm64, darwin-x64, linux-x64)" ;;
+    darwin-arm64|linux-x64) : ;;
+    *) err "no prebuilt binary for $platform (supported: darwin-arm64, linux-x64). Intel Mac (darwin-x64) is not packaged — build from source via 'cargo install --path .'." ;;
 esac
 
 # ---------------------------------------------------------------------------

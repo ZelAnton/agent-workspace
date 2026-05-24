@@ -106,15 +106,11 @@ case "${1:-current}" in
     all)
         log "Building all platforms (requires cross)..."
         build_cross_compile "aarch64-apple-darwin" "agent-workspace-darwin-arm64"
-        build_cross_compile "x86_64-apple-darwin" "agent-workspace-darwin-x64"
         build_cross_compile "x86_64-unknown-linux-gnu" "agent-workspace-linux-x64"
         build_cross_compile "x86_64-pc-windows-gnu" "agent-workspace-win32-x64" "true"
         ;;
     darwin-arm64)
         build_cross_compile "aarch64-apple-darwin" "agent-workspace-darwin-arm64"
-        ;;
-    darwin-x64)
-        build_cross_compile "x86_64-apple-darwin" "agent-workspace-darwin-x64"
         ;;
     linux-x64)
         build_cross_compile "x86_64-unknown-linux-gnu" "agent-workspace-linux-x64"
@@ -123,7 +119,7 @@ case "${1:-current}" in
         build_cross_compile "x86_64-pc-windows-gnu" "agent-workspace-win32-x64" "true"
         ;;
     *)
-        echo "Usage: $0 [current|all|darwin-arm64|darwin-x64|linux-x64|win32-x64]"
+        echo "Usage: $0 [current|all|darwin-arm64|linux-x64|win32-x64]"
         exit 1
         ;;
 esac

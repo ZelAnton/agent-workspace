@@ -13,7 +13,6 @@
 
 # 构建指定平台
 ./scripts/build-npm.sh darwin-arm64
-./scripts/build-npm.sh darwin-x64
 ./scripts/build-npm.sh linux-x64
 ./scripts/build-npm.sh win32-x64
 ```
@@ -24,9 +23,10 @@
 cargo install cross
 ```
 
-注意: cross 不支持 macOS 目标。在 macOS 上构建时:
-- darwin-arm64/darwin-x64 使用 `cargo build` (需要 `rustup target add`)
+注意:
+- darwin-arm64 使用 `cargo build` (需要 `rustup target add`)
 - linux-x64/win32-x64 使用 `cross` (需要 Docker)
+- darwin-x64 (Intel Mac) **не упаковывается** — macos-13 GitHub runner ненадёжен. Intel Mac пользователи собирают из source через `cargo install --path .`.
 
 ## publish-npm.sh
 

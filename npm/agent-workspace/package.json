@@ -25,7 +25,6 @@
   },
   "optionalDependencies": {
     "@zelanton/agent-workspace-darwin-arm64": "0.11.0",
-    "@zelanton/agent-workspace-darwin-x64": "0.11.0",
     "@zelanton/agent-workspace-linux-x64": "0.11.0",
     "@zelanton/agent-workspace-win32-x64": "0.11.0"
   },
