@@ -1,5 +1,5 @@
 // ===========================================================================
-// wt rm - Remove a worktree
+// ws rm - Remove a worktree
 // ===========================================================================
 
 use std::path::Path;
@@ -51,7 +51,7 @@ pub fn run(args: RmArgs, config: &Config, path_file: Option<&Path>) -> Result<()
     if inside_target && path_file.is_none() {
         return Err(Error::Other(
             "Refusing to remove the current worktree without shell integration.\n\
-             Run 'wt setup' first, or 'cd' to the main repo and retry."
+             Run 'ws setup' first, or 'cd' to the main repo and retry."
                 .into(),
         ));
     }

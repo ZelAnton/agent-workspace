@@ -1,5 +1,5 @@
 // ===========================================================================
-// wt init - Initialize project configuration
+// ws init - Initialize project configuration
 // ===========================================================================
 
 use std::path::Path;

@@ -15,8 +15,8 @@ fn test_sync_on_trunk_fails() {
     let dir = tempdir().unwrap();
     setup_git_repo(dir.path());
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .arg("sync")
         .current_dir(dir.path())
         .output()
@@ -38,12 +38,12 @@ fn test_sync_abort_no_rebase() {
         .output()
         .unwrap();
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["sync", "--abort"])
         .current_dir(dir.path())
         .output()
-        .expect("wt sync --abort failed");
+        .expect("ws sync --abort failed");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("rebase") || stderr.contains("No") || !output.status.success());
@@ -60,12 +60,12 @@ fn test_sync_continue_no_rebase() {
         .output()
         .unwrap();
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["sync", "--continue"])
         .current_dir(dir.path())
         .output()
-        .expect("wt sync --continue failed");
+        .expect("ws sync --continue failed");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("rebase") || stderr.contains("No") || !output.status.success());
@@ -76,8 +76,8 @@ fn test_sync_on_feature_branch() {
     let (dir, repo, home) = setup_worktree_test_env();
 
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "sync-feature",
@@ -88,7 +88,7 @@ fn test_sync_on_feature_branch() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
 
     assert!(
         output.status.success(),
@@ -98,14 +98,14 @@ fn test_sync_on_feature_branch() {
 
     let wt_path = read_path_file(&path_file).trim().to_string();
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .arg("sync")
         .current_dir(&wt_path)
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt sync failed");
+        .expect("ws sync failed");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success() || stderr.contains("Already") || stderr.contains("sync"));
@@ -116,8 +116,8 @@ fn test_sync_on_feature_with_updates() {
     let (dir, repo, home) = setup_worktree_test_env();
 
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "sync-updates",
@@ -128,7 +128,7 @@ fn test_sync_on_feature_with_updates() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
 
     assert!(
         output.status.success(),
@@ -150,14 +150,14 @@ fn test_sync_on_feature_with_updates() {
         .output()
         .unwrap();
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .arg("sync")
         .current_dir(&wt_path)
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt sync failed");
+        .expect("ws sync failed");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "sync failed: {}", stderr);
@@ -168,8 +168,8 @@ fn test_sync_from_nonexistent_branch_fails() {
     let (_dir, repo, home) = setup_worktree_test_env();
 
     let path_file = create_path_file(repo.parent().unwrap());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "sync-from-test",
@@ -180,19 +180,19 @@ fn test_sync_from_nonexistent_branch_fails() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
     assert!(output.status.success());
 
     let wt_path = PathBuf::from(read_path_file(&path_file).trim());
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["sync", "--from", "nonexistent-branch-xyz"])
         .current_dir(&wt_path)
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt sync --from failed");
+        .expect("ws sync --from failed");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -223,8 +223,8 @@ fn test_sync_uses_project_config_strategy() {
         .unwrap();
 
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "sync-cfg",
@@ -235,7 +235,7 @@ fn test_sync_uses_project_config_strategy() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
     assert!(output.status.success());
 
     let wt_path = PathBuf::from(read_path_file(&path_file).trim());
@@ -252,14 +252,14 @@ fn test_sync_uses_project_config_strategy() {
         .output()
         .unwrap();
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .arg("sync")
         .current_dir(&wt_path)
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt sync failed");
+        .expect("ws sync failed");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "sync failed: {stderr}");
@@ -298,8 +298,8 @@ fn test_sync_from_specific_branch() {
 
     // Create worktree
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "sync-from-src",
@@ -310,20 +310,20 @@ fn test_sync_from_specific_branch() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
     assert!(output.status.success());
 
     let wt_path = PathBuf::from(read_path_file(&path_file).trim());
 
     // Sync from source-branch instead of trunk
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["sync", "--from", "source-branch", "--strategy", "merge"])
         .current_dir(&wt_path)
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt sync --from failed");
+        .expect("ws sync --from failed");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "sync --from failed: {stderr}");

@@ -1,5 +1,5 @@
 // ===========================================================================
-// wt setup - Install shell integration
+// ws setup - Install shell integration
 // ===========================================================================
 
 use clap::{Args, ValueEnum};

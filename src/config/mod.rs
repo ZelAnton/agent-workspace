@@ -50,7 +50,7 @@ pub struct GlobalConfig {
 pub struct CreateConfig {
     /// Use Copy-on-Write (reflink) when the filesystem supports it. On
     /// ReFS/DevDrive (Windows), Btrfs/XFS (Linux), or APFS (macOS) and
-    /// same-volume worktrees, this dramatically speeds up `wt new` for
+    /// same-volume worktrees, this dramatically speeds up `ws new` for
     /// large monorepos. Falls back to plain `git worktree add` silently
     /// when not possible. Default: `true`.
     #[serde(default = "default_use_cow")]
@@ -78,10 +78,10 @@ pub struct ProjectCreateConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiConfig {
-    /// Open `wt new` in a new terminal tab when running inside a
+    /// Open `ws new` in a new terminal tab when running inside a
     /// supported terminal (Windows Terminal, iTerm2, GNOME Terminal).
     /// Default: `true`. Disable via `[ui] open_in_new_tab = false` or
-    /// per-call via `wt new --no-tab`.
+    /// per-call via `ws new --no-tab`.
     #[serde(default = "default_open_in_new_tab")]
     pub open_in_new_tab: bool,
 }

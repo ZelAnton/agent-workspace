@@ -18,9 +18,9 @@ AI coding agents work best with isolated environments:
 
 This is a fork of [`nekocode/agent-worktree`](https://github.com/nekocode/agent-worktree). Highlights of the fork:
 
-- **Native [Jujutsu (`jj`)](https://jj-vcs.github.io/jj/) backend** alongside git. Both backends are feature-complete for `wt`'s happy-path workflows (new / ls / cd / rm / clean / merge / sync / status / mv). Lives behind `src/vcs/` with `GitBackend` and `JjBackend` as separate impls of a common trait. Colocated repos (both `.git/` and `.jj/` present) default to jj — override with `--vcs=git` or `[general] vcs = "git"` in `.agent-workspace.toml`. A few git-shaped operations have no clean jj analogue and surface `Error::Unsupported` with a hint: `wt mv` (use `wt rm` + `wt new` instead) and `wt sync --abort`/`--continue` (jj records conflicts in commits — resolve files and re-run). See [`AGENTS.md`](AGENTS.md) → "VCS backend compatibility" for the full semantic-delta table.
-- **Terminal-tab integration** for `wt new` and `wt cd` on Windows Terminal, iTerm2, and GNOME Terminal — the creation / navigation flow opens a new tab titled with the branch and runs there; the originating shell stays put. `wt cd <branch>` to your current worktree is a no-op (no duplicate tabs unless `--in-new-tab` forces it). Auto-enabled when supported; disable with `--no-tab` or `[ui] open_in_new_tab = false`.
-- **Copy-on-Write worktree creation** on filesystems that support block cloning (Windows ReFS / DevDrive, Linux Btrfs / XFS, macOS APFS). `wt new` becomes near-instant on large monorepos and the new worktree initially occupies only its diff on disk. Supported on both backends: git uses `worktree add --no-checkout` + reflink; jj uses `workspace add --sparse-patterns empty` + reflink + sparse-set restore. Colocated repos with `--vcs=git` bracket the git ops with `jj git import` to keep jj in sync. Auto-enabled when the source repo and `$AGENT_WORKSPACE_DIR` are on the same reflink-capable volume; falls back silently otherwise. Disable with `--no-cow` or `[create] use_cow = false`.
+- **Native [Jujutsu (`jj`)](https://jj-vcs.github.io/jj/) backend** alongside git. Both backends are feature-complete for `ws`'s happy-path workflows (new / ls / cd / rm / clean / merge / sync / status / mv). Lives behind `src/vcs/` with `GitBackend` and `JjBackend` as separate impls of a common trait. Colocated repos (both `.git/` and `.jj/` present) default to jj — override with `--vcs=git` or `[general] vcs = "git"` in `.agent-workspace.toml`. A few git-shaped operations have no clean jj analogue and surface `Error::Unsupported` with a hint: `ws mv` (use `ws rm` + `ws new` instead) and `ws sync --abort`/`--continue` (jj records conflicts in commits — resolve files and re-run). See [`AGENTS.md`](AGENTS.md) → "VCS backend compatibility" for the full semantic-delta table.
+- **Terminal-tab integration** for `ws new` and `ws cd` on Windows Terminal, iTerm2, and GNOME Terminal — the creation / navigation flow opens a new tab titled with the branch and runs there; the originating shell stays put. `ws cd <branch>` to your current worktree is a no-op (no duplicate tabs unless `--in-new-tab` forces it). Auto-enabled when supported; disable with `--no-tab` or `[ui] open_in_new_tab = false`.
+- **Copy-on-Write worktree creation** on filesystems that support block cloning (Windows ReFS / DevDrive, Linux Btrfs / XFS, macOS APFS). `ws new` becomes near-instant on large monorepos and the new worktree initially occupies only its diff on disk. Supported on both backends: git uses `worktree add --no-checkout` + reflink; jj uses `workspace add --sparse-patterns empty` + reflink + sparse-set restore. Colocated repos with `--vcs=git` bracket the git ops with `jj git import` to keep jj in sync. Auto-enabled when the source repo and `$AGENT_WORKSPACE_DIR` are on the same reflink-capable volume; falls back silently otherwise. Disable with `--no-cow` or `[create] use_cow = false`.
 
 ## Install
 
@@ -38,7 +38,7 @@ curl -fsSL https://github.com/ZelAnton/agent-workspace/releases/latest/download/
 iwr https://github.com/ZelAnton/agent-workspace/releases/latest/download/install.ps1 -UseBasicParsing | iex
 ```
 
-Installs `wt` to `~/.agent-workspace/bin`, adds it to your PATH, and runs `wt setup` for shell integration.
+Installs `ws` to `~/.agent-workspace/bin`, adds it to your PATH, and runs `ws setup` for shell integration.
 
 ### Via npm
 
@@ -49,30 +49,30 @@ npm install -g @zelanton/agent-workspace
 ### Update
 
 ```bash
-wt update
+ws update
 ```
 
-`wt update` detects how `wt` was installed (`~/.agent-workspace/install_channel`):
+`ws update` detects how `ws` was installed (`~/.agent-workspace/install_channel`):
 - **Shell installer** — downloads the latest release from GitHub and atomically replaces itself (uses [`self_replace`](https://crates.io/crates/self-replace) for the Windows .exe rename-trick).
-- **npm** — re-runs `npm install -g agent-workspace@latest`.
+- **npm** — re-runs `npm install -g /agent-workspace@latest`.
 
 Shell integration is installed automatically by both channels. To reinstall manually:
 
 ```bash
-wt setup
+ws setup
 ```
 
 Supported shells: bash, zsh, fish, PowerShell
 
 ### Uninstall
 
-Remove the shell wrapper installed by `wt setup`:
+Remove the shell wrapper installed by `ws setup`:
 
 ```bash
-wt uninstall
+ws uninstall
 ```
 
-If the `wt` binary is missing or broken, run the standalone script instead — it works without a functioning binary:
+If the `ws` binary is missing or broken, run the standalone script instead — it works without a functioning binary:
 
 ```bash
 # macOS / Linux
@@ -88,21 +88,21 @@ The uninstall step does **not** delete `~/.agent-workspace/` (binary, channel ma
 
 ```bash
 # Create a worktree and enter it
-wt new feature-x
+ws new feature-x
 
 # ... develop, commit ...
 
 # Merge back (merges to the branch you were on when creating)
-wt merge            # keeps worktree
-wt merge -d         # deletes worktree after merge
+ws merge            # keeps worktree
+ws merge -d         # deletes worktree after merge
 ```
 
 Other useful commands:
 
 ```bash
-wt ls              # List all worktrees (with BASE branch info)
-wt cd feature-y    # Switch to another worktree
-wt cd              # Return to main repository
+ws ls              # List all worktrees (with BASE branch info)
+ws cd feature-y    # Switch to another worktree
+ws cd              # Return to main repository
 ```
 
 ## Snap Mode
@@ -110,21 +110,21 @@ wt cd              # Return to main repository
 One-liner for AI agent workflows:
 
 ```bash
-wt new -s claude           # Random branch name
-wt new fix-bug -s codex    # Specified branch name
-wt new -s "claude --dangerously-skip-permissions"  # Command with arguments
+ws new -s claude           # Random branch name
+ws new fix-bug -s codex    # Specified branch name
+ws new -s "claude --dangerously-skip-permissions"  # Command with arguments
 ```
 
 > **Argument quoting** — `-s` takes a single token. Use quotes whenever the
 > command has flags or arguments (`-s "agent --flag"`), otherwise the shell
-> hands the trailing args to `wt new` instead.
+> hands the trailing args to `ws new` instead.
 >
-> **Nested snap is refused** — running `wt new -s` from inside an existing
-> worktree exits with an error. Run `wt cd` to return to the main repo first.
+> **Nested snap is refused** — running `ws new -s` from inside an existing
+> worktree exits with an error. Run `ws cd` to return to the main repo first.
 
 Flow: Create worktree → Enter → Run agent → [Develop] → Agent exits → Check changes → Merge → Cleanup
 
-After the agent exits — whether normally or with a crash / Ctrl+C — `wt`
+After the agent exits — whether normally or with a crash / Ctrl+C — `ws`
 checks the worktree state:
 
 - **No changes**: Worktree cleaned up automatically
@@ -140,7 +140,7 @@ checks the worktree state:
   ```
 
 > **base_branch must still exist** — if the worktree's base branch was
-> deleted while the agent ran, `[m]` errors out. Use `wt merge --into <branch>`
+> deleted while the agent ran, `[m]` errors out. Use `ws merge --into <branch>`
 > to pick an explicit target instead.
 
 ## Commands
@@ -149,52 +149,52 @@ checks the worktree state:
 
 | Command | Description |
 |---------|-------------|
-| `wt new [branch]` | Create worktree from current branch (random name if omitted) |
-| `wt new --base <branch>` | Create from specific base branch (default: current branch) |
-| `wt new -s <cmd>` | Create + snap mode |
-| `wt cd [branch]` | Switch to worktree (omit branch to return to main repo) |
-| `wt ls` | List worktrees |
-| `wt ls -l` | Show full path for each worktree |
-| `wt mv <old> <new>` | Rename worktree (use `.` for current) |
-| `wt rm <branch>` | Remove worktree (use `.` for current) |
-| `wt rm -f <branch>` | Force remove with uncommitted changes |
-| `wt clean` | Remove worktrees with no diff from their base branch (falls back to trunk); dirty worktrees are skipped |
-| `wt clean --dry-run` | Preview which worktrees would be cleaned |
+| `ws new [branch]` | Create worktree from current branch (random name if omitted) |
+| `ws new --base <branch>` | Create from specific base branch (default: current branch) |
+| `ws new -s <cmd>` | Create + snap mode |
+| `ws cd [branch]` | Switch to worktree (omit branch to return to main repo) |
+| `ws ls` | List worktrees |
+| `ws ls -l` | Show full path for each worktree |
+| `ws mv <old> <new>` | Rename worktree (use `.` for current) |
+| `ws rm <branch>` | Remove worktree (use `.` for current) |
+| `ws rm -f <branch>` | Force remove with uncommitted changes |
+| `ws clean` | Remove worktrees with no diff from their base branch (falls back to trunk); dirty worktrees are skipped |
+| `ws clean --dry-run` | Preview which worktrees would be cleaned |
 
 ### Workflow
 
 | Command | Description |
 |---------|-------------|
-| `wt merge` | Merge to base branch (falls back to trunk, default: squash) |
-| `wt merge -s <strategy>` | Merge with strategy (squash/merge) |
-| `wt merge --into <branch>` | Merge to specific branch (overrides base) |
-| `wt merge -d` | Delete worktree after merge (default: keep) |
-| `wt merge -H` | Skip pre-merge hooks |
-| `wt sync` | Sync from base branch (falls back to trunk, default: rebase) |
-| `wt sync -s <strategy>` | Sync with strategy (rebase/merge) |
-| `wt sync --from <branch>` | Sync from specific branch (overrides base) |
-| `wt sync --continue` | Continue after resolving conflicts |
-| `wt sync --abort` | Abort sync |
+| `ws merge` | Merge to base branch (falls back to trunk, default: squash) |
+| `ws merge -s <strategy>` | Merge with strategy (squash/merge) |
+| `ws merge --into <branch>` | Merge to specific branch (overrides base) |
+| `ws merge -d` | Delete worktree after merge (default: keep) |
+| `ws merge -H` | Skip pre-merge hooks |
+| `ws sync` | Sync from base branch (falls back to trunk, default: rebase) |
+| `ws sync -s <strategy>` | Sync with strategy (rebase/merge) |
+| `ws sync --from <branch>` | Sync from specific branch (overrides base) |
+| `ws sync --continue` | Continue after resolving conflicts |
+| `ws sync --abort` | Abort sync |
 
 ### Info
 
 | Command | Description |
 |---------|-------------|
-| `wt status` | Show current worktree info (also reports in-progress `wt sync` rebase/merge with recovery hints) |
-| `wt update` | Update to the latest version |
+| `ws status` | Show current worktree info (also reports in-progress `ws sync` rebase/merge with recovery hints) |
+| `ws update` | Update to the latest version |
 
 ### Configuration
 
 | Command | Description |
 |---------|-------------|
-| `wt setup` | Install shell integration (auto-detect) |
-| `wt setup --shell zsh` | Install for specific shell |
-| `wt uninstall` | Remove shell integration (inverse of `setup`) |
-| `wt init` | Initialize project config |
-| `wt init --trunk <branch>` | Initialize with specific trunk branch |
-| `wt init --merge-strategy <strategy>` | Set default merge strategy (squash/merge) |
-| `wt init --sync-strategy <strategy>` | Set default sync strategy (rebase/merge) |
-| `wt init --copy-files <pattern>` | Files to copy to new worktrees (repeatable) |
+| `ws setup` | Install shell integration (auto-detect) |
+| `ws setup --shell zsh` | Install for specific shell |
+| `ws uninstall` | Remove shell integration (inverse of `setup`) |
+| `ws init` | Initialize project config |
+| `ws init --trunk <branch>` | Initialize with specific trunk branch |
+| `ws init --merge-strategy <strategy>` | Set default merge strategy (squash/merge) |
+| `ws init --sync-strategy <strategy>` | Set default sync strategy (rebase/merge) |
+| `ws init --copy-files <pattern>` | Files to copy to new worktrees (repeatable) |
 
 ## Configuration
 

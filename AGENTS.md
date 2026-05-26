@@ -4,14 +4,14 @@ This file provides guidance to AI coding agents when working with code in this r
 
 ## Project
 
-`agent-workspace` — a Rust CLI (`wt`) that manages git worktrees for AI coding agents. Distributed as a single static binary, packaged for npm with per-platform subpackages under `npm/`.
+`agent-workspace` (CLI binary: `ws`) that manages git worktrees for AI coding agents. Distributed as a single static binary, packaged for npm with per-platform subpackages under `npm/`.
 
 `ARCHITECTURE.md` (Chinese) is the canonical design doc. `FILE_TREE.local.md` (gitignored) is the single source of truth for per-file responsibilities — read it if it exists before doing structural work.
 
 ## Build, test, run
 
 ```bash
-cargo build                  # debug binary at target/debug/wt
+cargo build                  # debug binary at target/debug/ws
 cargo build --release        # release binary
 cargo test                   # all unit + integration tests
 cargo test --test cmd_merge  # single integration test file (one per command in tests/)
@@ -23,7 +23,7 @@ cargo fmt                    # format
 ./scripts/build-npm.sh all            # cross-compile all four target triples (needs `cross`)
 ```
 
-Integration tests in `tests/cmd_*.rs` shell out to `target/debug/wt` — they assume `cargo build` has run. `tests/common/mod.rs` provides `setup_git_repo`, `setup_worktree_test_env`, and `create_path_file` helpers; use them rather than rolling your own git fixtures.
+Integration tests in `tests/cmd_*.rs` shell out to `target/debug/ws` — they assume `cargo build` has run. `tests/common/mod.rs` provides `setup_git_repo`, `setup_worktree_test_env`, and `create_path_file` helpers; use them rather than rolling your own git fixtures.
 
 ## Architectural invariants
 
@@ -31,41 +31,41 @@ These aren't obvious from reading individual files — they constrain how featur
 
 ### Shell integration is load-bearing for any `cwd`-changing command
 
-`wt cd`, `wt new`, `wt rm`, `wt mv`, `wt merge -d`, `wt clean` change the user's shell directory. The binary can't do that directly; instead it writes the target path to a temp file passed via the hidden global `--path-file <FILE>` flag, and the shell wrapper (installed by `wt setup`, sources defined in `src/shell/mod.rs`) reads that file and `cd`s. Helpers: `cli::write_path_file` (single line) and `cli::write_path_file_lines` (multi-line, used by snap). Any new command that wants to move the user must accept `path_file: Option<&Path>` and write to it — `wt cd` deliberately errors out when `--path-file` is missing rather than silently no-op'ing.
+`ws cd`, `ws new`, `ws rm`, `ws mv`, `ws merge -d`, `ws clean` change the user's shell directory. The binary can't do that directly; instead it writes the target path to a temp file passed via the hidden global `--path-file <FILE>` flag, and the shell wrapper (installed by `ws setup`, sources defined in `src/shell/mod.rs`) reads that file and `cd`s. Helpers: `cli::write_path_file` (single line) and `cli::write_path_file_lines` (multi-line, used by snap). Any new command that wants to move the user must accept `path_file: Option<&Path>` and write to it — `ws cd` deliberately errors out when `--path-file` is missing rather than silently no-op'ing.
 
-The `# === agent-workspace BEGIN/END ===` markers around the wrapper are a wire contract with `wt uninstall` (and the standalone `uninstall.ps1` / `uninstall.sh` scripts). `src/shell/mod.rs::remove_wrapper` refuses to touch a file with unpaired markers — silently truncating after an orphan would wipe unrelated config (PATH exports, aliases). Any future wrapper change must keep the markers literal and balanced, or both `wt setup` (re-install path) and `wt uninstall` will refuse the file. `uninstall()` is the inverse of `install()` and lives next to it; both call into the same `remove_wrapper` helper so the safety net is single-sourced.
+The `# === agent-workspace BEGIN/END ===` markers around the wrapper are a wire contract with `ws uninstall` (and the standalone `uninstall.ps1` / `uninstall.sh` scripts). `src/shell/mod.rs::remove_wrapper` refuses to touch a file with unpaired markers — silently truncating after an orphan would wipe unrelated config (PATH exports, aliases). Any future wrapper change must keep the markers literal and balanced, or both `ws setup` (re-install path) and `ws uninstall` will refuse the file. `uninstall()` is the inverse of `install()` and lives next to it; both call into the same `remove_wrapper` helper so the safety net is single-sourced.
 
 ### Snap mode exit codes are a wire protocol with the shell wrapper
 
-`src/cli/commands/snap/resume.rs` exports `EXIT_DONE = 0`, `EXIT_REOPEN = 2`, `EXIT_PRESERVE = 3`. The bash/zsh/fish/PowerShell wrapper scripts in `src/shell/mod.rs` switch on these to either loop the agent, drop the user into the worktree, or `cd` back to the main repo. **Changing these constants requires updating every wrapper template in lockstep.** The same exit codes are interpreted by the spawned-tab script generated in `src/terminal/script.rs` when `wt new --snap` opens a new terminal tab — keep that script's `case`/`if` block in sync too. Nested snap (`wt new -s` from inside a worktree) is refused for the same reason — two snap loops in one parent shell break the cwd tracking.
+`src/cli/commands/snap/resume.rs` exports `EXIT_DONE = 0`, `EXIT_REOPEN = 2`, `EXIT_PRESERVE = 3`. The bash/zsh/fish/PowerShell wrapper scripts in `src/shell/mod.rs` switch on these to either loop the agent, drop the user into the worktree, or `cd` back to the main repo. **Changing these constants requires updating every wrapper template in lockstep.** The same exit codes are interpreted by the spawned-tab script generated in `src/terminal/script.rs` when `ws new --snap` opens a new terminal tab — keep that script's `case`/`if` block in sync too. Nested snap (`ws new -s` from inside a worktree) is refused for the same reason — two snap loops in one parent shell break the cwd tracking.
 
-### Terminal-tab integration changes the spawn point for `wt new` and `wt cd`
+### Terminal-tab integration changes the spawn point for `ws new` and `ws cd`
 
-When `wt new <branch>` or `wt cd <branch>` runs inside a supported terminal (Windows Terminal, iTerm2, GNOME Terminal — detection via `WT_SESSION`, `TERM_PROGRAM=iTerm.app`, `GNOME_TERMINAL_SERVICE`/`GNOME_TERMINAL_SCREEN`) and `[ui] open_in_new_tab` is enabled (default), the flow does NOT run in the originating shell. Instead `src/terminal/` opens a fresh tab titled with the branch name. The originating shell prints `Opened in new tab: <branch>` and exits cleanly without writing the `--path-file` (so its shell wrapper stays put).
+When `ws new <branch>` or `ws cd <branch>` runs inside a supported terminal (Windows Terminal, iTerm2, GNOME Terminal — detection via `WT_SESSION`, `TERM_PROGRAM=iTerm.app`, `GNOME_TERMINAL_SERVICE`/`GNOME_TERMINAL_SCREEN`) and `[ui] open_in_new_tab` is enabled (default), the flow does NOT run in the originating shell. Instead `src/terminal/` opens a fresh tab titled with the branch name. The originating shell prints `Opened in new tab: <branch>` and exits cleanly without writing the `--path-file` (so its shell wrapper stays put).
 
 **Two spawn modes** (see `src/terminal/mod.rs::TabMode`):
 
-- **`WtNew`** (used by `wt new`): the spawned tab re-invokes `wt new <args>` with `WT_SPAWNED_IN_TAB=1`, runs creation inside the new tab, optionally enters the snap-resume loop. Script body is substantial — includes the `--path-file` dance and snap exit-code handling.
-- **`OpenAtCwd`** (used by `wt cd`): the spawned tab opens at the target worktree's directory via the terminal's native cwd flag (`wt.exe new-tab -d`, `gnome-terminal --working-directory`, iTerm2's AppleScript). The script body is minimal — only sets the recursion-guard env and emits OSC 0 for the title.
+- **`WtNew`** (used by `ws new`): the spawned tab re-invokes `ws new <args>` with `WS_SPAWNED_IN_TAB=1`, runs creation inside the new tab, optionally enters the snap-resume loop. Script body is substantial — includes the `--path-file` dance and snap exit-code handling.
+- **`OpenAtCwd`** (used by `ws cd`): the spawned tab opens at the target worktree's directory via the terminal's native cwd flag (`wt.exe new-tab -d`, `gnome-terminal --working-directory`, iTerm2's AppleScript). The script body is minimal — only sets the recursion-guard env and emits OSC 0 for the title.
 
-**Recursion guard**: `WT_SPAWNED_IN_TAB=1` is critical for both modes. Without it, every re-entry would open another tab. The shared precedence resolver `terminal::should_open_in_new_tab` checks this guard before consulting flags/config.
+**Recursion guard**: `WS_SPAWNED_IN_TAB=1` is critical for both modes. Without it, every re-entry would open another tab. The shared precedence resolver `terminal::should_open_in_new_tab` checks this guard before consulting flags/config.
 
-**`wt cd` specifics**:
-- **Validate before spawn**: non-existent worktree errors in originating shell, no tab opens. (Inverted from `wt new`, which validates AFTER the spawn since creation happens in the tab.)
-- **Same-target short-circuit**: `wt cd <branch>` when already in that worktree skips the spawn (no duplicate tabs). `--in-new-tab` overrides.
-- **No-arg `wt cd`** (return to main repo): always spawns when integration enabled — consistent UX. The tab title falls back to the repo name.
+**`ws cd` specifics**:
+- **Validate before spawn**: non-existent worktree errors in originating shell, no tab opens. (Inverted from `ws new`, which validates AFTER the spawn since creation happens in the tab.)
+- **Same-target short-circuit**: `ws cd <branch>` when already in that worktree skips the spawn (no duplicate tabs). `--in-new-tab` overrides.
+- **No-arg `ws cd`** (return to main repo): always spawns when integration enabled — consistent UX. The tab title falls back to the repo name.
 
-On Windows the spawned tab MUST run PowerShell (per design); the binary spawn uses `wt.exe new-tab pwsh -NoExit -Command ...` and locates `wt.exe` via PATH-walking that skips our own binary (both `wt.exe` names collide on Windows — see `src/terminal/windows_terminal.rs::locate_wt_binary`).
+On Windows the spawned tab MUST run PowerShell (per design); the binary spawn uses `wt.exe new-tab pwsh -NoExit -Command ...` and locates Microsoft Windows Terminal's `wt.exe` via PATH lookup. Pre-v0.13.0 our own binary was *also* called `wt.exe`, requiring an elaborate skip-our-own-binary PATH walk in `src/terminal/windows_terminal.rs::locate_wt_binary`; the v0.13.0 rename to `ws.exe` resolved that collision and the function simplified to a straight PATH walk.
 
-User overrides: `--in-new-tab` / `--no-tab` flags on `wt new` and `wt cd`; `[ui] open_in_new_tab = false` (project or global) to disable by default.
+User overrides: `--in-new-tab` / `--no-tab` flags on `ws new` and `ws cd`; `[ui] open_in_new_tab = false` (project or global) to disable by default.
 
 ### Worktree creation uses Copy-on-Write when the filesystem supports it
 
-On filesystems with block cloning (Windows ReFS / DevDrive, Linux Btrfs / XFS, macOS APFS), `wt new` creates worktrees via reflink instead of git's standard checkout. The result is near-instant creation and minimal disk usage even for large monorepos — only the diff occupies physical space until either side mutates.
+On filesystems with block cloning (Windows ReFS / DevDrive, Linux Btrfs / XFS, macOS APFS), `ws new` creates worktrees via reflink instead of git's standard checkout. The result is near-instant creation and minimal disk usage even for large monorepos — only the diff occupies physical space until either side mutates.
 
 **Git workflow** (`src/vcs/git/worktree.rs::create_worktree_cow`):
 1. Capture `current_branch()` and `has_uncommitted_changes()`.
-2. If dirty, `git stash push -u -m "wt-cow-create-<pid>"`.
+2. If dirty, `git stash push -u -m "ws-cow-create-<pid>"`.
 3. If `current_branch != base`, `git checkout <base>`.
 4. `git worktree add --no-checkout <path> <branch>` — creates only the `.git` gitlink file.
 5. `cow::try_clone_dir_except(repo_root, path, &[".git"])` — reflink-copies every file/dir except `.git/`. Uses `reflink-copy` crate (single API for ReFS / Btrfs / XFS / APFS; per-file fallback to plain copy when reflink is rejected).
@@ -90,17 +90,17 @@ Rollback on internal failure: `jj op restore <pre_op>` + `fs::remove_dir_all(pat
 
 **Colocated git-force bracketing** (`src/vcs/git/worktree.rs::create_worktree_cow`): when the source repo has `.jj/` alongside `.git/` and the user forced git backend via `--vcs=git`, raw git ops (stash, checkout, worktree add) would desync jj's view. The CoW flow brackets the entire git-side work with `jj git import` calls (before and after) so jj's bookmarks/refs catch up. Calls are best-effort — silently skipped if jj isn't installed.
 
-**User overrides**: `--no-cow` flag on `wt new`; `[create] use_cow = false` (project or global) to disable by default. Sets the `WT_DISABLE_COW` env var which both backends' CoW dispatchers check.
+**User overrides**: `--no-cow` flag on `ws new`; `[create] use_cow = false` (project or global) to disable by default. Sets the `WT_DISABLE_COW` env var which both backends' CoW dispatchers check.
 
 ### Merge is atomic — no continue/abort
 
-`wt merge` records the main repo's current branch, dry-runs the merge with `--squash --no-commit` or `--no-ff --no-commit` (matching the real strategy), and only proceeds if the dry-run is conflict-free. On any failure: `reset_merge` + checkout original branch. There is intentionally no `wt merge --continue/--abort` — the recovery path for conflicts is `wt sync` inside the worktree, then re-run `wt merge`. Don't add intermediate-state handling; preserve the atomic property.
+`ws merge` records the main repo's current branch, dry-runs the merge with `--squash --no-commit` or `--no-ff --no-commit` (matching the real strategy), and only proceeds if the dry-run is conflict-free. On any failure: `reset_merge` + checkout original branch. There is intentionally no `ws merge --continue/--abort` — the recovery path for conflicts is `ws sync` inside the worktree, then re-run `ws merge`. Don't add intermediate-state handling; preserve the atomic property.
 
-`wt sync`, by contrast, is git-native rebase/merge — its conflicts *do* leave recoverable state, which is why `wt status` detects in-progress rebase/merge and prints `wt sync --continue/--abort` hints.
+`ws sync`, by contrast, is git-native rebase/merge — its conflicts *do* leave recoverable state, which is why `ws status` detects in-progress rebase/merge and prints `ws sync --continue/--abort` hints.
 
 ### Target branch resolution: CLI override > base_branch (if still exists) > trunk
 
-`meta::resolve_target_branch` (pure, in `src/meta/mod.rs`) is the single resolver used by merge/sync/clean/status. `resolve_effective_target` is the I/O wrapper that loads the `{branch}.toml` meta. If the worktree's `base_branch` was deleted, the fallback to trunk for `wt clean` is fine, but `wt merge`/snap-continue refuse rather than silently retargeting (landing commits on the wrong branch is worse than an error). Anything that picks a target must go through this resolver.
+`meta::resolve_target_branch` (pure, in `src/meta/mod.rs`) is the single resolver used by merge/sync/clean/status. `resolve_effective_target` is the I/O wrapper that loads the `{branch}.toml` meta. If the worktree's `base_branch` was deleted, the fallback to trunk for `ws clean` is fine, but `ws merge`/snap-continue refuse rather than silently retargeting (landing commits on the wrong branch is worse than an error). Anything that picks a target must go through this resolver.
 
 ### Worktree metadata: format migrated, legacy still readable
 
@@ -129,22 +129,22 @@ Worktrees live under `$AGENT_WORKSPACE_DIR/workspaces/{repo}-{hash}/` where the 
 - `src/shell/` — wrapper script templates and rc-file install/uninstall (strict BEGIN/END marker pairing — refuses to touch a file with orphaned markers).
 - `src/process/` `src/prompt/` `src/update/` `src/util/` — hook execution, dialoguer prompts, daily update check, random branch-name generator (~100 adjectives × ~100 nouns, numeric suffix on collision).
 
-## Install channels and `wt update`
+## Install channels and `ws update`
 
 Two install channels, distinguished by a marker file at `~/.agent-workspace/install_channel` (content: `npm` or `shell`):
 
 - **npm** — `npm install -g agent-workspace`. Postinstall (`npm/agent-workspace/install.js`) writes `npm` to the marker.
-- **shell** — `install.sh` / `install.ps1` at repo root. Downloads a prebuilt archive from GitHub Releases, places `wt` at `~/.agent-workspace/bin/wt`, writes `shell` to the marker.
+- **shell** — `install.sh` / `install.ps1` at repo root. Downloads a prebuilt archive from GitHub Releases, places `ws` at `~/.agent-workspace/bin/ws`, writes `shell` to the marker.
 
-`wt update` (`src/cli/commands/sys/update.rs`) reads the marker via `update::detect_channel()` and branches:
+`ws update` (`src/cli/commands/sys/update.rs`) reads the marker via `update::detect_channel()` and branches:
 - `Channel::Npm` → `npm install -g agent-workspace@latest` (legacy path).
-- `Channel::Shell` → `update::self_update()` downloads `agent-workspace-<version>-<platform>.tar.gz` from the GitHub release and uses the `self-replace` crate for atomic binary replacement, then re-invokes `wt setup`.
+- `Channel::Shell` → `update::self_update()` downloads `agent-workspace-<version>-<platform>.tar.gz` from the GitHub release and uses the `self-replace` crate for atomic binary replacement, then re-invokes `ws setup`.
 
 Missing marker defaults to `Channel::Npm` — keeps existing installs predating the marker working.
 
 The version check (`update::check_update` in `src/update/mod.rs`) hits the **GitHub Releases API** for both channels — GitHub is the canonical truth, npm publishes happen after a GitHub release. Requires a non-empty `User-Agent` header (GitHub returns 403 otherwise — `USER_AGENT` const handles this).
 
-Platform key strings (`darwin-arm64`, `linux-x64`, `win32-x64`) must stay consistent across `update::platform_key()`, `npm/agent-workspace/bin/wt.js`, `install.sh`, `install.ps1`, and the CI release archive naming (`.github/workflows/release.yml`). Changing them requires touching all five. **Intel Mac (`darwin-x64`) is intentionally dropped** — the `macos-13` GitHub runner is too flaky for the release matrix. Intel Mac users build from source via `cargo install --path .`.
+Platform key strings (`darwin-arm64`, `linux-x64`, `win32-x64`) must stay consistent across `update::platform_key()`, `npm/agent-workspace/bin/ws.js`, `install.sh`, `install.ps1`, and the CI release archive naming (`.github/workflows/release.yml`). Changing them requires touching all five. **Intel Mac (`darwin-x64`) is intentionally dropped** — the `macos-13` GitHub runner is too flaky for the release matrix. Intel Mac users build from source via `cargo install --path .`.
 
 ## Local-only files
 
@@ -152,9 +152,9 @@ Platform key strings (`darwin-arm64`, `linux-x64`, `win32-x64`) must stay consis
 
 ## Windows specifics
 
-For the **shell channel**, `wt update` uses the `self-replace` crate which handles the running-`.exe` lock via the rename-trick (move running exe aside as `.old`, drop new one in place, OS cleans up on next reboot). No user action needed.
+For the **shell channel**, `ws update` uses the `self-replace` crate which handles the running-`.exe` lock via the rename-trick (move running exe aside as `.old`, drop new one in place, OS cleans up on next reboot). No user action needed.
 
-For the **npm channel**, `wt update` shells out to `npm install -g`. npm tries to overwrite the running `wt.exe` and fails — users on the npm channel must close all shells running `wt` before updating. Reflect this in any user-facing messaging you add to the npm update path.
+For the **npm channel**, `ws update` shells out to `npm install -g`. npm tries to overwrite the running `wt.exe` and fails — users on the npm channel must close all shells running `wt` before updating. Reflect this in any user-facing messaging you add to the npm update path.
 
 The repo's working tree may carry CRLF line endings on Windows despite `.gitattributes` mandating LF — that's stat-cache state from a pre-attributes checkout, not actual file divergence. The committed blobs are LF; pushed commits are clean. Colocated `jj st` may show phantom modifications for files that haven't been re-extracted since `.gitattributes` was added.
 
@@ -198,14 +198,14 @@ This fork's primary goal is native `jj` backend support alongside `git`. All VCS
 
 - `src/vcs/backend.rs` — the `VcsBackend` trait. **Every public VCS operation is a trait method, no exceptions.**
 - `src/vcs/git/` — `GitBackend`. Each method goes through `vcs_runner::Cmd::new("git").in_dir(cwd).args(...)` via an `Arc<dyn procpilot::Runner>` so tests can swap in `MockRunner`.
-- `src/vcs/jj/` — `JjBackend`. Implemented for `wt`'s happy-path workflows (identity, bookmarks, workspaces, state probes, diff, merge/rebase/checkout/commit/fetch). The locked-decision methods that have no jj analogue surface `Error::Unsupported`: `move_worktree` (use `jj workspace forget` + manual move) and `*_abort`/`*_continue` (jj records conflicts in commits — resolve and re-run).
-- `src/vcs/mod.rs` — facade `vcs::foo()` free functions backed by a thread-local backend. Production code in `src/cli/commands/` calls `crate::vcs::repo_root()` etc. — no `Box<dyn VcsBackend>` ever leaks out of this module. Backend resolution lives in `resolve_backend(cli, project, global)`, called once from `Cli::run`. The `vcs::backend_name()` accessor is the only intentional leak of the active-backend tag (for UI hint branching in `wt sync`/`wt status` — never use it for behavioural switches).
+- `src/vcs/jj/` — `JjBackend`. Implemented for `ws`'s happy-path workflows (identity, bookmarks, workspaces, state probes, diff, merge/rebase/checkout/commit/fetch). The locked-decision methods that have no jj analogue surface `Error::Unsupported`: `move_worktree` (use `jj workspace forget` + manual move) and `*_abort`/`*_continue` (jj records conflicts in commits — resolve and re-run).
+- `src/vcs/mod.rs` — facade `vcs::foo()` free functions backed by a thread-local backend. Production code in `src/cli/commands/` calls `crate::vcs::repo_root()` etc. — no `Box<dyn VcsBackend>` ever leaks out of this module. Backend resolution lives in `resolve_backend(cli, project, global)`, called once from `Cli::run`. The `vcs::backend_name()` accessor is the only intentional leak of the active-backend tag (for UI hint branching in `ws sync`/`ws status` — never use it for behavioural switches).
 
 **Semantic deltas (jj vs git)** worth knowing when reading the trait impls:
 
 - **No staging area.** jj snapshots the working copy into `@` on every command, so "uncommitted" means "`@` differs from `@-`". `has_staged_changes` was removed from the trait in F-7 (git's only consumer, `merge.rs::execute_merge`, was refactored to drop the staging gate).
 - **No in-progress merge/rebase state.** jj operations are atomic; conflicts record into the resulting commit. `is_rebase_in_progress` is always `false`. `is_merge_in_progress` checks `jj st` for the `"unresolved conflicts"` marker (jj ≥ 0.16 wording — fall back to a regex if a future jj rev changes the string).
-- **Bookmarks ≠ branches.** jj bookmarks don't auto-follow `@`. The `merge()` impl explicitly advances the target bookmark via `jj bookmark move <name> --to <revset> --allow-backwards` after the squash/merge. **`wt new` always creates a bookmark on the new workspace's `@`** — `current_branch()` errors otherwise with the message "no bookmark on @; run wt new or jj bookmark create".
+- **Bookmarks ≠ branches.** jj bookmarks don't auto-follow `@`. The `merge()` impl explicitly advances the target bookmark via `jj bookmark move <name> --to <revset> --allow-backwards` after the squash/merge. **`ws new` always creates a bookmark on the new workspace's `@`** — `current_branch()` errors otherwise with the message "no bookmark on @; run ws new or jj bookmark create".
 - **Dry-run merge** in jj uses `jj op log` to capture the operation id, then materialises the merge via `jj new`, checks the resulting commit's `conflict` flag, and `jj op restore <pre-op-id>` to roll back. There's a ~10ms window where a concurrent reader sees the merge commit on `@`. Acceptable per the locked decision; documented inline in `src/vcs/jj/ops.rs::dry_run_merge`.
 
 **When adding a new VCS operation, in order**:

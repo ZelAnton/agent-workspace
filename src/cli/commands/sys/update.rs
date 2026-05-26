@@ -2,10 +2,10 @@
 // cli/commands/update - Self-update Command (channel-aware)
 // ===========================================================================
 //
-// `wt update` reads the install_channel marker in the base dir and dispatches:
+// `ws update` reads the install_channel marker in the base dir and dispatches:
 //   - Channel::Npm   → `npm install -g agent-workspace@latest`
 //   - Channel::Shell → download from GitHub Releases + atomic self-replace
-//                      + re-run `wt setup` for any wrapper template changes
+//                      + re-run `ws setup` for any wrapper template changes
 //
 // Marker is missing for legacy installs (defaults to Npm). New installs stamp
 // the marker explicitly: npm via install.js postinstall, shell via install.sh
@@ -84,7 +84,7 @@ fn run_shell_update(latest: &str) -> cli::Result<()> {
     update::self_update(latest)
         .map_err(|e| cli::Error::Other(format!("self-update failed: {e}")))?;
 
-    // Re-run `wt setup` from the new binary so any wrapper template changes
+    // Re-run `ws setup` from the new binary so any wrapper template changes
     // propagate. The current process is the *old* binary — spawn a subprocess
     // pointing at the path of the running exe (which now contains the new
     // bytes after self_replace).

@@ -1,5 +1,5 @@
 // ===========================================================================
-// wt new - Create a new worktree
+// ws new - Create a new worktree
 // ===========================================================================
 
 use std::path::Path;
@@ -52,7 +52,7 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
     // Terminal-tab dispatch happens FIRST, before any VCS work, so the
     // user sees the new tab open immediately instead of after the
     // (sometimes slow) workspace-id hash + repo discovery. The spawned
-    // tab then re-enters `wt new` with `WT_SPAWNED_IN_TAB=1` set and
+    // tab then re-enters `ws new` with `WS_SPAWNED_IN_TAB=1` set and
     // skips this branch — actual creation runs there.
     if should_open_new_tab(&args, config) && let Some(terminal) = crate::terminal::detect() {
         return spawn_in_new_tab(&args, terminal.as_ref());
@@ -83,7 +83,7 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
     if args.snap.is_some() && vcs::is_cwd_inside(&workspace_dir) {
         return Err(Error::Other(
             "Refusing to start snap mode inside an existing worktree.\n\
-             Run 'wt cd' to return to the main repo, then retry."
+             Run 'ws cd' to return to the main repo, then retry."
                 .into(),
         ));
     }
@@ -113,8 +113,8 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
 
     // If we're running inside a spawned terminal tab, update the tab
     // title to match the *real* branch name. Critical when the user ran
-    // `wt new` without a branch arg — the spawn fires before the random
-    // branch is generated, so the tab opens with the "wt-new" placeholder
+    // `ws new` without a branch arg — the spawn fires before the random
+    // branch is generated, so the tab opens with the "ws-new" placeholder
     // title in [`spawn_in_new_tab`]. This OSC 0 escape fixes that.
     //
     // The escape is also harmless on terminals that don't interpret it
@@ -175,7 +175,7 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
             eprintln!();
             eprintln!("post_create hook failed: {e}");
             eprintln!("Worktree '{branch}' was created at: {}", wt_path.display());
-            eprintln!("Fix the hook and `cd` in manually, or run 'wt rm {branch}' to discard.");
+            eprintln!("Fix the hook and `cd` in manually, or run 'ws rm {branch}' to discard.");
             return Err(Error::Other(format!("post_create hook failed: {e}")));
         }
     }
@@ -186,7 +186,7 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
             write_path_file_lines(path_file, &[&wt_path.display().to_string(), &cmd])?;
         } else {
             return Err(Error::Other(
-                "Snap mode requires shell integration. Run 'wt setup' first.".into(),
+                "Snap mode requires shell integration. Run 'ws setup' first.".into(),
             ));
         }
         return Ok(());
@@ -289,7 +289,7 @@ fn copy_files(from: &Path, to: &Path, config: &Config) -> Result<()> {
 // Terminal-tab dispatch helpers
 // ---------------------------------------------------------------------------
 
-/// Decide whether `wt new` should open a new terminal tab instead of
+/// Decide whether `ws new` should open a new terminal tab instead of
 /// running the creation inline. Precedence:
 ///   1. `--no-tab` flag → always false (user explicitly disabled)
 ///   2. `--in-new-tab` flag → true (user explicitly enabled)
@@ -299,7 +299,7 @@ fn copy_files(from: &Path, to: &Path, config: &Config) -> Result<()> {
 /// Terminal-detection still happens at the call site — even if this
 /// returns true, [`crate::terminal::detect()`] may return `None` and we
 /// fall through to in-place creation.
-/// Decide whether `wt new` should use the Copy-on-Write creation path.
+/// Decide whether `ws new` should use the Copy-on-Write creation path.
 /// The actual filesystem-capability probe happens later in the VCS
 /// dispatcher (`vcs::create_worktree`). This function ONLY decides
 /// whether to even attempt CoW.
@@ -325,7 +325,7 @@ fn should_open_new_tab(args: &NewArgs, config: &Config) -> bool {
 /// Spawn the new tab and return immediately. The caller (originating
 /// shell) sees a clean exit — does NOT write any `--path-file`, so the
 /// outer shell wrapper doesn't `cd` and stays put. The new tab runs the
-/// re-entrant `wt new <args>` with `WT_SPAWNED_IN_TAB=1` set.
+/// re-entrant `ws new <args>` with `WS_SPAWNED_IN_TAB=1` set.
 fn spawn_in_new_tab(
     args: &NewArgs,
     terminal: &dyn crate::terminal::TerminalIntegration,
@@ -335,20 +335,22 @@ fn spawn_in_new_tab(
     // Title: prefer the explicit branch; fall back to a placeholder.
     // The actual branch may be auto-generated downstream; the placeholder
     // is just for the brief window before creation finishes.
-    let title = args.branch.clone().unwrap_or_else(|| "wt-new".into());
+    let title = args.branch.clone().unwrap_or_else(|| "ws-new".into());
 
     let cwd = std::env::current_dir()
         .map_err(|e| Error::Other(format!("cannot read current directory: {e}")))?;
 
-    // Use the absolute path to OUR binary. On Windows, `wt` on PATH may
-    // resolve to Microsoft Store's Windows Terminal binary (also named
-    // `wt.exe`); the spawned tab MUST run our binary.
+    // Use the absolute path to OUR binary. Since v0.13.0 we renamed
+    // ourselves to `ws` to escape the Microsoft Windows Terminal `wt.exe`
+    // collision; this `current_exe()` lookup is now mostly redundant but
+    // kept to guarantee the spawned tab re-invokes the exact same binary
+    // (matters during development when multiple `ws` builds may be on PATH).
     let binary = std::env::current_exe()
         .map_err(|e| Error::Other(format!("cannot resolve own binary path: {e}")))?;
     let binary: PathBuf = binary.canonicalize().unwrap_or(binary);
     let binary = crate::config::strip_verbatim_prefix(binary);
 
-    // Reconstruct argv for the new tab's `wt new ...` invocation. Keep
+    // Reconstruct argv for the new tab's `ws new ...` invocation. Keep
     // tab-control flags (`--in-new-tab` / `--no-tab`) OUT of the re-entry
     // — they were resolved here; the spawned process would just confuse
     // itself with them (plus the recursion guard short-circuits anyway).

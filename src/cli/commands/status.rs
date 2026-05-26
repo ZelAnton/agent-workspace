@@ -1,5 +1,5 @@
 // ===========================================================================
-// wt status - Show current worktree information
+// ws status - Show current worktree information
 // ===========================================================================
 
 use crate::cli::{Error, Result};
@@ -91,19 +91,19 @@ fn print_in_progress_state() {
         // Only reachable on git — jj always returns false here.
         println!();
         println!("State:        REBASE IN PROGRESS (sync)");
-        println!("  Resolve conflicts, then: wt sync --continue");
-        println!("  Or abort: wt sync --abort");
+        println!("  Resolve conflicts, then: ws sync --continue");
+        println!("  Or abort: ws sync --abort");
     } else if vcs::is_merge_in_progress() {
         println!();
         if vcs::backend_name() == "jj" {
             println!("State:        CONFLICTS IN COMMIT");
             println!("  jj records conflicts in `@`. Resolve the markers in your files;");
             println!("  jj snapshots the resolution into `@` on the next command.");
-            println!("  (No `wt sync --continue/--abort` — those are git-only.)");
+            println!("  (No `ws sync --continue/--abort` — those are git-only.)");
         } else {
             println!("State:        MERGE IN PROGRESS (sync)");
-            println!("  Resolve conflicts, then: wt sync --continue");
-            println!("  Or abort: wt sync --abort");
+            println!("  Resolve conflicts, then: ws sync --continue");
+            println!("  Or abort: ws sync --abort");
         }
     }
 }

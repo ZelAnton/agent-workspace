@@ -47,10 +47,10 @@ pub enum Error {
 
 #[derive(Parser)]
 #[command(
-    name = "wt",
+    name = "ws",
     version,
     about = "Git worktree workflow tool for AI agents",
-    after_help = "Run 'wt setup' to install shell integration for cd/new commands."
+    after_help = "Run 'ws setup' to install shell integration for cd/new commands."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -100,7 +100,7 @@ enum Command {
     /// Install shell integration (bash/zsh/fish)
     Setup(commands::SetupArgs),
 
-    /// Remove shell integration (inverse of `wt setup`)
+    /// Remove shell integration (inverse of `ws setup`)
     Uninstall(commands::UninstallArgs),
 
     /// Create .agent-workspace.toml config file
@@ -168,164 +168,164 @@ mod tests {
     #[test]
     fn test_cli_parse_help() {
         // Verify CLI can parse --help without panicking
-        let result = Cli::try_parse_from(["wt", "--help"]);
+        let result = Cli::try_parse_from(["ws", "--help"]);
         assert!(result.is_err()); // --help causes early exit
     }
 
     #[test]
     fn test_cli_parse_version() {
-        let result = Cli::try_parse_from(["wt", "--version"]);
+        let result = Cli::try_parse_from(["ws", "--version"]);
         assert!(result.is_err()); // --version causes early exit
     }
 
     #[test]
     fn test_cli_parse_new() {
-        let cli = Cli::try_parse_from(["wt", "new", "feature-branch"]);
+        let cli = Cli::try_parse_from(["ws", "new", "feature-branch"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_new_with_base() {
-        let cli = Cli::try_parse_from(["wt", "new", "feature", "--base", "develop"]);
+        let cli = Cli::try_parse_from(["ws", "new", "feature", "--base", "develop"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_ls() {
-        let cli = Cli::try_parse_from(["wt", "ls"]);
+        let cli = Cli::try_parse_from(["ws", "ls"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_ls_long() {
-        let cli = Cli::try_parse_from(["wt", "ls", "-l"]);
+        let cli = Cli::try_parse_from(["ws", "ls", "-l"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_ls_long_full() {
-        let cli = Cli::try_parse_from(["wt", "ls", "--long"]);
+        let cli = Cli::try_parse_from(["ws", "ls", "--long"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_cd() {
-        let cli = Cli::try_parse_from(["wt", "cd", "branch-name"]);
+        let cli = Cli::try_parse_from(["ws", "cd", "branch-name"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_cd_no_args() {
-        let cli = Cli::try_parse_from(["wt", "cd"]);
+        let cli = Cli::try_parse_from(["ws", "cd"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_rm() {
-        let cli = Cli::try_parse_from(["wt", "rm", "branch"]);
+        let cli = Cli::try_parse_from(["ws", "rm", "branch"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_rm_force() {
-        let cli = Cli::try_parse_from(["wt", "rm", "branch", "--force"]);
+        let cli = Cli::try_parse_from(["ws", "rm", "branch", "--force"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_clean() {
-        let cli = Cli::try_parse_from(["wt", "clean"]);
+        let cli = Cli::try_parse_from(["ws", "clean"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_clean_dry_run() {
-        let cli = Cli::try_parse_from(["wt", "clean", "--dry-run"]);
+        let cli = Cli::try_parse_from(["ws", "clean", "--dry-run"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_merge() {
-        let cli = Cli::try_parse_from(["wt", "merge"]);
+        let cli = Cli::try_parse_from(["ws", "merge"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_merge_with_strategy() {
-        let cli = Cli::try_parse_from(["wt", "merge", "--strategy", "squash"]);
+        let cli = Cli::try_parse_from(["ws", "merge", "--strategy", "squash"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_status() {
-        let cli = Cli::try_parse_from(["wt", "status"]);
+        let cli = Cli::try_parse_from(["ws", "status"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_sync() {
-        let cli = Cli::try_parse_from(["wt", "sync"]);
+        let cli = Cli::try_parse_from(["ws", "sync"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_sync_from() {
-        let cli = Cli::try_parse_from(["wt", "sync", "--from", "develop"]);
+        let cli = Cli::try_parse_from(["ws", "sync", "--from", "develop"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_mv() {
-        let cli = Cli::try_parse_from(["wt", "mv", "old", "new"]);
+        let cli = Cli::try_parse_from(["ws", "mv", "old", "new"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_setup() {
-        let cli = Cli::try_parse_from(["wt", "setup"]);
+        let cli = Cli::try_parse_from(["ws", "setup"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_setup_with_shell() {
-        let cli = Cli::try_parse_from(["wt", "setup", "--shell", "bash"]);
+        let cli = Cli::try_parse_from(["ws", "setup", "--shell", "bash"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_uninstall() {
-        let cli = Cli::try_parse_from(["wt", "uninstall"]);
+        let cli = Cli::try_parse_from(["ws", "uninstall"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_uninstall_with_shell() {
-        let cli = Cli::try_parse_from(["wt", "uninstall", "--shell", "powershell"]);
+        let cli = Cli::try_parse_from(["ws", "uninstall", "--shell", "powershell"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_init() {
-        let cli = Cli::try_parse_from(["wt", "init"]);
+        let cli = Cli::try_parse_from(["ws", "init"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_init_with_trunk() {
-        let cli = Cli::try_parse_from(["wt", "init", "--trunk", "develop"]);
+        let cli = Cli::try_parse_from(["ws", "init", "--trunk", "develop"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_init_with_merge_strategy() {
-        let cli = Cli::try_parse_from(["wt", "init", "--merge-strategy", "merge"]);
+        let cli = Cli::try_parse_from(["ws", "init", "--merge-strategy", "merge"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_init_with_copy_files() {
         let cli = Cli::try_parse_from([
-            "wt",
+            "ws",
             "init",
             "--copy-files",
             ".env",
@@ -337,7 +337,7 @@ mod tests {
 
     #[test]
     fn test_cli_parse_with_path_file() {
-        let cli = Cli::try_parse_from(["wt", "--path-file", "/tmp/test", "cd"]);
+        let cli = Cli::try_parse_from(["ws", "--path-file", "/tmp/test", "cd"]);
         assert!(cli.is_ok());
         let cli = cli.unwrap();
         assert_eq!(cli.path_file, Some(std::path::PathBuf::from("/tmp/test")));
@@ -345,38 +345,38 @@ mod tests {
 
     #[test]
     fn test_cli_parse_new_with_snap() {
-        let cli = Cli::try_parse_from(["wt", "new", "-s", "claude"]);
+        let cli = Cli::try_parse_from(["ws", "new", "-s", "claude"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_new_with_snap_long() {
-        let cli = Cli::try_parse_from(["wt", "new", "--snap", "claude"]);
+        let cli = Cli::try_parse_from(["ws", "new", "--snap", "claude"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_new_with_snap_and_branch() {
-        let cli = Cli::try_parse_from(["wt", "new", "my-branch", "-s", "agent"]);
+        let cli = Cli::try_parse_from(["ws", "new", "my-branch", "-s", "agent"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_update() {
-        let cli = Cli::try_parse_from(["wt", "update"]);
+        let cli = Cli::try_parse_from(["ws", "update"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_parse_snap_continue() {
-        let cli = Cli::try_parse_from(["wt", "snap-continue"]);
+        let cli = Cli::try_parse_from(["ws", "snap-continue"]);
         assert!(cli.is_ok());
     }
 
     #[test]
     fn test_cli_snap_continue_is_hidden() {
         // snap-continue should not appear in help
-        let result = Cli::try_parse_from(["wt", "--help"]);
+        let result = Cli::try_parse_from(["ws", "--help"]);
         // --help causes early exit but the command is still valid
         assert!(result.is_err());
     }

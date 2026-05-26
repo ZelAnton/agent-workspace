@@ -7,15 +7,15 @@ mod common;
 use std::process::Command;
 use tempfile::tempdir;
 
-use common::{setup_git_repo, wt_binary};
+use common::{setup_git_repo, ws_binary};
 
 #[test]
 fn test_init_creates_config() {
     let dir = tempdir().unwrap();
     setup_git_repo(dir.path());
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["init", "--trunk", "develop"])
         .current_dir(dir.path())
         .output()
@@ -36,15 +36,15 @@ fn test_init_already_exists() {
     let dir = tempdir().unwrap();
     setup_git_repo(dir.path());
 
-    Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .arg("init")
         .current_dir(dir.path())
         .output()
         .expect("Failed to execute wt init");
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .arg("init")
         .current_dir(dir.path())
         .output()
@@ -60,12 +60,12 @@ fn test_init_with_default_trunk() {
     let dir = tempdir().unwrap();
     setup_git_repo(dir.path());
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .arg("init")
         .current_dir(dir.path())
         .output()
-        .expect("wt init failed");
+        .expect("ws init failed");
 
     assert!(output.status.success());
 
@@ -81,12 +81,12 @@ fn test_init_with_custom_trunk() {
     let dir = tempdir().unwrap();
     setup_git_repo(dir.path());
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["init", "--trunk", "develop"])
         .current_dir(dir.path())
         .output()
-        .expect("wt init failed");
+        .expect("ws init failed");
 
     assert!(output.status.success());
 
@@ -99,12 +99,12 @@ fn test_init_multiple_options() {
     let dir = tempdir().unwrap();
     setup_git_repo(dir.path());
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["init", "--trunk", "master"])
         .current_dir(dir.path())
         .output()
-        .expect("wt init failed");
+        .expect("ws init failed");
 
     assert!(output.status.success());
 
@@ -117,12 +117,12 @@ fn test_init_with_merge_strategy() {
     let dir = tempdir().unwrap();
     setup_git_repo(dir.path());
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["init", "--merge-strategy", "merge"])
         .current_dir(dir.path())
         .output()
-        .expect("wt init failed");
+        .expect("ws init failed");
 
     assert!(output.status.success());
 
@@ -138,12 +138,12 @@ fn test_init_with_copy_files() {
     let dir = tempdir().unwrap();
     setup_git_repo(dir.path());
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["init", "--copy-files", ".env", "--copy-files", ".env.*"])
         .current_dir(dir.path())
         .output()
-        .expect("wt init failed");
+        .expect("ws init failed");
 
     assert!(output.status.success());
 
@@ -159,8 +159,8 @@ fn test_init_with_all_options() {
     let dir = tempdir().unwrap();
     setup_git_repo(dir.path());
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "init",
             "--trunk",
@@ -174,7 +174,7 @@ fn test_init_with_all_options() {
         ])
         .current_dir(dir.path())
         .output()
-        .expect("wt init failed");
+        .expect("ws init failed");
 
     assert!(output.status.success());
 
@@ -190,12 +190,12 @@ fn test_init_with_sync_strategy() {
     let dir = tempdir().unwrap();
     setup_git_repo(dir.path());
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["init", "--sync-strategy", "merge"])
         .current_dir(dir.path())
         .output()
-        .expect("wt init failed");
+        .expect("ws init failed");
 
     assert!(output.status.success());
 

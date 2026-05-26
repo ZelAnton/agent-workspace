@@ -1,8 +1,8 @@
 // ===========================================================================
-// terminal - Multi-tab terminal integration for `wt new`
+// terminal - Multi-tab terminal integration for `ws new`
 // ===========================================================================
 //
-// When the user runs `wt new` inside a terminal that supports tabs (Windows
+// When the user runs `ws new` inside a terminal that supports tabs (Windows
 // Terminal, iTerm2, GNOME Terminal), open a fresh tab titled with the
 // branch name and run the worktree-creation flow there instead of in the
 // originating shell. The originating shell prints a one-line confirmation
@@ -12,10 +12,10 @@
 // supported terminal is detected, callers fall through to the standard
 // in-place creation flow.
 //
-// **Recursion guard**: the spawned tab inherits/sets `WT_SPAWNED_IN_TAB=1`
-// before re-invoking `wt new`. Subsequent invocations see the guard and
+// **Recursion guard**: the spawned tab inherits/sets `WS_SPAWNED_IN_TAB=1`
+// before re-invoking `ws new`. Subsequent invocations see the guard and
 // skip the spawn, doing the actual worktree creation. Without this, every
-// `wt new` inside a spawned tab would open *another* tab ad infinitum.
+// `ws new` inside a spawned tab would open *another* tab ad infinitum.
 
 use std::path::PathBuf;
 
@@ -41,10 +41,10 @@ pub enum Error {
 /// What the spawned tab should run.
 ///
 /// Two distinct flows live behind one type:
-///   - [`TabMode::WtNew`] — `wt new` creation: spawned tab re-invokes our
+///   - [`TabMode::WtNew`] — `ws new` creation: spawned tab re-invokes our
 ///     binary with the original args + a fresh `--path-file`, optionally
 ///     enters the snap-resume loop. The script body is substantial.
-///   - [`TabMode::OpenAtCwd`] — `wt cd` navigation: spawned tab just
+///   - [`TabMode::OpenAtCwd`] — `ws cd` navigation: spawned tab just
 ///     opens a shell at the target directory. The terminal's native cwd
 ///     flag (`wt.exe new-tab -d`, `gnome-terminal --working-directory`,
 ///     iTerm2's AppleScript) does the work; the script body only sets
@@ -78,7 +78,7 @@ pub enum TabMode {
     },
     /// Just open a shell at [`TabSpec::cwd`]. No binary re-invocation, no
     /// `--path-file` dance — the terminal's native cwd flag handles it.
-    /// Used by `wt cd <branch>`.
+    /// Used by `ws cd <branch>`.
     OpenAtCwd,
 }
 
@@ -86,16 +86,16 @@ pub trait TerminalIntegration: Send + Sync {
     /// Stable identifier (used for logging / `--tab` flag debug output).
     fn name(&self) -> &'static str;
 
-    /// Open a new tab and return immediately. The binary's `wt new` flow
+    /// Open a new tab and return immediately. The binary's `ws new` flow
     /// runs INSIDE the new tab; the caller (the originating shell) just
     /// gets back the spawn result.
     fn open_tab(&self, spec: &TabSpec) -> Result<()>;
 }
 
 /// Env var marking a process already spawned via [`TerminalIntegration::open_tab`].
-/// Set inside the spawned shell script; checked by the binary's `wt new`
+/// Set inside the spawned shell script; checked by the binary's `ws new`
 /// dispatch to skip re-spawning.
-pub const SPAWNED_IN_TAB_ENV: &str = "WT_SPAWNED_IN_TAB";
+pub const SPAWNED_IN_TAB_ENV: &str = "WS_SPAWNED_IN_TAB";
 
 /// True if this process is running inside an already-spawned terminal tab
 /// (the spawn-loop recursion guard is set).
@@ -106,7 +106,7 @@ pub fn is_spawned_in_tab() -> bool {
 }
 
 /// Shared precedence resolver for the `--in-new-tab` / `--no-tab` flags +
-/// config toggle. Used by both `wt new` and `wt cd`:
+/// config toggle. Used by both `ws new` and `ws cd`:
 ///
 ///   1. `--no-tab` flag → false (user explicitly disabled)
 ///   2. `--in-new-tab` flag → true (user explicitly enabled)

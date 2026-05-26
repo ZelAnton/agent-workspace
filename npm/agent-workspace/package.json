@@ -1,6 +1,6 @@
 {
   "name": "@zelanton/agent-workspace",
-  "version": "0.12.11",
+  "version": "0.13.0",
   "description": "Git worktree workflow tool for AI agents",
   "keywords": ["cli", "git", "worktree", "ai", "agent"],
   "license": "MIT",
@@ -14,7 +14,7 @@
     "url": "git+https://github.com/ZelAnton/agent-workspace.git"
   },
   "bin": {
-    "wt": "bin/wt.js"
+    "ws": "bin/ws.js"
   },
   "files": [
     "bin",
@@ -24,9 +24,9 @@
     "postinstall": "node install.js"
   },
   "optionalDependencies": {
-    "@zelanton/agent-workspace-darwin-arm64": "0.12.11",
-    "@zelanton/agent-workspace-linux-x64": "0.12.11",
-    "@zelanton/agent-workspace-win32-x64": "0.12.11"
+    "@zelanton/agent-workspace-darwin-arm64": "0.13.0",
+    "@zelanton/agent-workspace-linux-x64": "0.13.0",
+    "@zelanton/agent-workspace-win32-x64": "0.13.0"
   },
   "engines": {
     "node": ">=14"

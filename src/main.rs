@@ -41,7 +41,7 @@ fn spawn_update_check(base_dir: std::path::PathBuf) -> JoinHandle<()> {
                 "\x1b[33mA new version of agent-workspace is available: {} -> {}\x1b[0m",
                 VERSION, latest
             );
-            eprintln!("\x1b[33mRun `wt update` to update\x1b[0m");
+            eprintln!("\x1b[33mRun `ws update` to update\x1b[0m");
         }
         // Mark that we checked (ignore errors)
         let _ = update::mark_checked(&base_dir);

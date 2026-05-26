@@ -1,12 +1,12 @@
 // ===========================================================================
-// wt uninstall - Remove shell integration
+// ws uninstall - Remove shell integration
 // ===========================================================================
 //
-// Symmetric inverse of `wt setup`: strips the `# === agent-workspace
+// Symmetric inverse of `ws setup`: strips the `# === agent-workspace
 // BEGIN/END ===` block from the user's shell rc file. Does NOT touch the
 // install directory (`~/.agent-workspace/`), the binary itself, or any
 // worktrees the user created — that's a deliberate scope limit so an
-// accidental `wt uninstall` is recoverable (just re-run `wt setup`).
+// accidental `ws uninstall` is recoverable (just re-run `ws setup`).
 //
 // For a full nuke (binary + install dir + PATH), use the standalone
 // `uninstall.ps1` / `uninstall.sh` scripts shipped with each release.
@@ -42,8 +42,8 @@ pub fn run(args: UninstallArgs) -> Result<()> {
         UninstallOutcome::Removed => {
             eprintln!("Shell integration removed from {}.", config_path.display());
             eprintln!();
-            eprintln!("Restart your shell to drop the `wt` function. The binary itself");
-            eprintln!("(and ~/.agent-workspace/) is untouched — re-run `wt setup` to");
+            eprintln!("Restart your shell to drop the `ws` function. The binary itself");
+            eprintln!("(and ~/.agent-workspace/) is untouched — re-run `ws setup` to");
             eprintln!("reinstate the wrapper. For a full uninstall, use the standalone");
             eprintln!("uninstall.ps1 / uninstall.sh from the GitHub release page.");
         }

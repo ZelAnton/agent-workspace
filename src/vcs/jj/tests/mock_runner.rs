@@ -194,7 +194,7 @@ fn workspace_name_for_path_uses_registered_name_not_basename() {
 
 /// Review fix #4: jj merge() must return Ok(()) without spawning any
 /// `jj new` when `branch` has no commits the working copy lacks. Prevents
-/// degenerate merge commits during `wt sync --strategy=merge` on an
+/// degenerate merge commits during `ws sync --strategy=merge` on an
 /// up-to-date worktree.
 #[test]
 fn jj_merge_noop_when_branch_already_in_ancestors() {

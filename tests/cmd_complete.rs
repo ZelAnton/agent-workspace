@@ -10,8 +10,8 @@ use common::*;
 
 #[test]
 fn test_complete_bash_outputs_script() {
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .env("COMPLETE", "bash")
         .output()
         .expect("Failed to run with COMPLETE=bash");
@@ -22,26 +22,26 @@ fn test_complete_bash_outputs_script() {
         stdout.contains("complete"),
         "bash output should contain 'complete'"
     );
-    assert!(stdout.contains("wt"), "bash output should reference 'wt'");
+    assert!(stdout.contains("ws"), "bash output should reference 'ws'");
 }
 
 #[test]
 fn test_complete_zsh_outputs_script() {
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .env("COMPLETE", "zsh")
         .output()
         .expect("Failed to run with COMPLETE=zsh");
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("compdef") || stdout.contains("wt"));
+    assert!(stdout.contains("compdef") || stdout.contains("ws"));
 }
 
 #[test]
 fn test_complete_fish_outputs_script() {
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .env("COMPLETE", "fish")
         .output()
         .expect("Failed to run with COMPLETE=fish");
@@ -56,8 +56,8 @@ fn test_complete_fish_outputs_script() {
 
 #[test]
 fn test_complete_powershell_outputs_script() {
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .env("COMPLETE", "powershell")
         .output()
         .expect("Failed to run with COMPLETE=powershell");
@@ -65,7 +65,7 @@ fn test_complete_powershell_outputs_script() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("Register-ArgumentCompleter") || stdout.contains("wt"),
+        stdout.contains("Register-ArgumentCompleter") || stdout.contains("ws"),
         "powershell output should contain completer registration"
     );
 }
@@ -82,15 +82,15 @@ fn test_complete_dynamic_branches() {
         .output()
         .expect("git branch failed");
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .env("COMPLETE", "bash")
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .env("_CLAP_COMPLETE_INDEX", "3")
         .env("_CLAP_COMPLETE_COMP_TYPE", "9")
         .env("_CLAP_COMPLETE_SPACE", "true")
-        .args(["--", "wt", "new", "--base", ""])
+        .args(["--", "ws", "new", "--base", ""])
         .current_dir(&repo)
         .output()
         .expect("Failed to run dynamic completion");

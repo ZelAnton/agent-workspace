@@ -65,7 +65,7 @@ pub(super) fn has_changes_from_trunk(runner: &dyn Runner, trunk: &str) -> Result
 /// jj operations are atomic — there is no transient "merge in progress"
 /// state like git's `MERGE_HEAD`. Conflicts get recorded into the resulting
 /// commit. This probe scans `jj st` for the literal marker so callers
-/// (`wt status`, `wt sync --continue`) can branch on it.
+/// (`ws status`, `ws sync --continue`) can branch on it.
 ///
 /// **Marker fragility note**: jj's wording has changed across versions.
 /// The string `"There are unresolved conflicts"` has been stable since
@@ -190,7 +190,7 @@ pub(super) fn diff_shortstat_in(runner: &dyn Runner, path: &Path) -> Result<Diff
 ///
 /// **Divergence from git's exact counts**: jj counts logical change lines
 /// against `@`'s parent in the revset, while git's `--shortstat` compares
-/// against the index. For our use case (display in `wt ls`/`wt status`)
+/// against the index. For our use case (display in `ws ls`/`ws status`)
 /// the difference is cosmetic — both give the user a sense of magnitude.
 pub fn parse_jj_stat_footer(output: &str) -> DiffStat {
     let footer = output

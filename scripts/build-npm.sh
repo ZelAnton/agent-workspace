@@ -60,8 +60,8 @@ build_current_platform() {
 
     log "Copying binary to $target_dir"
     mkdir -p "$target_dir"
-    cp target/release/wt "$target_dir/wt"
-    chmod +x "$target_dir/wt"
+    cp target/release/ws "$target_dir/ws"
+    chmod +x "$target_dir/ws"
 
     log "Done: agent-workspace-$platform"
 }
@@ -86,10 +86,10 @@ build_cross_compile() {
     mkdir -p "$target_dir"
 
     if [[ "$is_windows" == "true" ]]; then
-        cp "target/$target/release/wt.exe" "$target_dir/wt.exe"
+        cp "target/$target/release/ws.exe" "$target_dir/ws.exe"
     else
-        cp "target/$target/release/wt" "$target_dir/wt"
-        chmod +x "$target_dir/wt"
+        cp "target/$target/release/ws" "$target_dir/ws"
+        chmod +x "$target_dir/ws"
     fi
 
     log "Done: $npm_pkg"

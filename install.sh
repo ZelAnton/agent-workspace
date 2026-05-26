@@ -8,7 +8,7 @@
 #
 # Environment variables (all optional):
 #   AGENT_WORKSPACE_VERSION       Pin to a specific version (default: latest GitHub release)
-#   AGENT_WORKSPACE_INSTALL_DIR   Install dir for the `wt` binary
+#   AGENT_WORKSPACE_INSTALL_DIR   Install dir for the `ws` binary
 #                                 (default: $AGENT_WORKSPACE_DIR/bin = ~/.agent-workspace/bin)
 #   AGENT_WORKSPACE_DIR           Base dir for channel marker and worktrees
 #                                 (default: ~/.agent-workspace)
@@ -16,13 +16,13 @@
 # This script:
 #   1. Detects platform (darwin-arm64 / linux-x64).
 #   2. Downloads the matching .tar.gz from GitHub Releases.
-#   3. Installs `wt` to ~/.agent-workspace/bin.
+#   3. Installs `ws` to ~/.agent-workspace/bin.
 #   4. Appends a PATH-export block to the user's shell rc with strict
 #      BEGIN/END markers (matching src/shell/mod.rs discipline).
-#   5. Writes ~/.agent-workspace/install_channel = "shell" so `wt update`
+#   5. Writes ~/.agent-workspace/install_channel = "shell" so `ws update`
 #      self-updates via GitHub Releases instead of npm.
-#   6. Runs `wt setup` to install the shell wrappers required for
-#      `wt cd`, `wt new`, etc. to change the user's cwd.
+#   6. Runs `ws setup` to install the shell wrappers required for
+#      `ws cd`, `ws new`, etc. to change the user's cwd.
 # ============================================================================
 
 set -eu
@@ -54,7 +54,7 @@ need_cmd tar
 need_cmd mktemp
 
 # ---------------------------------------------------------------------------
-# Platform detection — must match keys in npm/agent-workspace/bin/wt.js and
+# Platform detection — must match keys in npm/agent-workspace/bin/ws.js and
 # the CI release archive naming (agent-workspace-<version>-<platform>.tar.gz).
 # ---------------------------------------------------------------------------
 
@@ -129,16 +129,16 @@ if ! tar -xzf "$tmp_dir/$archive" -C "$tmp_dir"; then
     err "extraction failed"
 fi
 
-if [ ! -f "$tmp_dir/wt" ]; then
-    err "binary 'wt' not found in archive"
+if [ ! -f "$tmp_dir/ws" ]; then
+    err "binary 'ws' not found in archive"
 fi
 
-mv "$tmp_dir/wt" "$install_dir/wt"
-chmod +x "$install_dir/wt"
-info "Installed $install_dir/wt"
+mv "$tmp_dir/ws" "$install_dir/ws"
+chmod +x "$install_dir/ws"
+info "Installed $install_dir/ws"
 
 # ---------------------------------------------------------------------------
-# Channel marker — tells `wt update` to self-update from GitHub Releases
+# Channel marker — tells `ws update` to self-update from GitHub Releases
 # rather than re-invoking npm. The Rust side reads this at
 # update::detect_channel() in src/update/mod.rs.
 # ---------------------------------------------------------------------------
@@ -208,13 +208,13 @@ if [ -n "$rc" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Hand off to `wt setup` for shell wrapper installation
+# Hand off to `ws setup` for shell wrapper installation
 # ---------------------------------------------------------------------------
 
-if "$install_dir/wt" setup; then
+if "$install_dir/ws" setup; then
     info "Shell integration installed."
 else
-    info "wt setup failed — run '$install_dir/wt setup' manually."
+    info "ws setup failed — run '$install_dir/ws setup' manually."
 fi
 
 # ---------------------------------------------------------------------------
@@ -226,6 +226,6 @@ cat <<EOF
 [agent-workspace] Done. Open a new shell (or 'source ${rc:-your shell rc}'),
 then verify:
 
-    wt --version
+    ws --version
 
 EOF

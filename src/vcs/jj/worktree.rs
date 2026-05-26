@@ -276,14 +276,14 @@ fn create_worktree_cow(
             // Filesystem cleanup may fail on Windows when files are held
             // open by background indexers / antivirus. Logging the
             // failure beats silently leaving an orphan dir that the
-            // next `wt new <same-branch>` would trip over with a
+            // next `ws new <same-branch>` would trip over with a
             // confusing "path exists" error.
             if path.exists()
                 && let Err(rm_err) = std::fs::remove_dir_all(path)
             {
                 eprintln!(
                     "Warning: failed to clean up partial workspace at {}: {rm_err}\n\
-                     Remove manually if needed before retrying `wt new`.",
+                     Remove manually if needed before retrying `ws new`.",
                     path.display()
                 );
             }
@@ -299,7 +299,7 @@ fn create_worktree_cow(
 /// **Order matters**: remove the filesystem directory first, then call
 /// `jj workspace forget`. If the swap is reversed and `forget` succeeds
 /// but `remove_dir_all` fails, the user is left with an orphan directory
-/// that `wt` has lost track of — worse than a still-attached workspace
+/// that `ws` has lost track of — worse than a still-attached workspace
 /// (which they can retry). With our ordering, an `fs` failure leaves the
 /// workspace attached but intact, and a `forget` failure (rare once the
 /// dir is gone) is benign — jj's `forget` doesn't require the dir to

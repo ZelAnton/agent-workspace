@@ -1,5 +1,5 @@
 // ===========================================================================
-// wt cd - Change to worktree directory
+// ws cd - Change to worktree directory
 // ===========================================================================
 
 use std::path::{Path, PathBuf};
@@ -33,7 +33,7 @@ pub struct CdArgs {
 }
 
 pub fn run(args: CdArgs, config: &Config, path_file: Option<&Path>) -> Result<()> {
-    // `wt cd` only makes sense behind the shell wrapper — a child process
+    // `ws cd` only makes sense behind the shell wrapper — a child process
     // can't change its parent shell's CWD. Without a path_file the wrapper
     // isn't installed (or the binary was invoked directly), so refuse loudly
     // instead of pretending to switch.
@@ -45,7 +45,7 @@ pub fn run(args: CdArgs, config: &Config, path_file: Option<&Path>) -> Result<()
     // stays where it is to guard direct-binary invocations.
     if path_file.is_none() {
         return Err(Error::Other(
-            "Shell integration not installed. Run 'wt setup' first.".into(),
+            "Shell integration not installed. Run 'ws setup' first.".into(),
         ));
     }
 
@@ -57,7 +57,7 @@ pub fn run(args: CdArgs, config: &Config, path_file: Option<&Path>) -> Result<()
     //    BEFORE the tab-spawn decision so non-existent branches don't
     //    open spurious tabs. `is_dir()` (not `exists()`) catches the
     //    edge case where a regular file lives at the worktree path —
-    //    `wt cd` into it would fail downstream with a confusing
+    //    `ws cd` into it would fail downstream with a confusing
     //    terminal-spawn error; better to surface a clear one here.
     if !target_path.is_dir() {
         return Err(Error::Git(vcs::Error::WorktreeNotFound(
@@ -65,7 +65,7 @@ pub fn run(args: CdArgs, config: &Config, path_file: Option<&Path>) -> Result<()
         )));
     }
 
-    // 3. Same-target short-circuit. When `wt cd <branch>` would land in
+    // 3. Same-target short-circuit. When `ws cd <branch>` would land in
     //    the same directory the user is already in, spawning a new tab
     //    is pure noise — skip and let the originating shell `cd` to the
     //    same place (no-op for cd, but writes the path-file so the
@@ -81,9 +81,9 @@ pub fn run(args: CdArgs, config: &Config, path_file: Option<&Path>) -> Result<()
         .unwrap_or(false);
     let skip_for_same = args.branch.is_some() && cwd_is_target && !args.in_new_tab;
 
-    // 4. Tab-integration dispatch. Mirrors `wt new`'s precedence logic
+    // 4. Tab-integration dispatch. Mirrors `ws new`'s precedence logic
     //    via the shared `should_open_in_new_tab` helper. Note the order
-    //    difference vs `wt new`: validation happens BEFORE this check
+    //    difference vs `ws new`: validation happens BEFORE this check
     //    (see step 2's comment).
     if !skip_for_same
         && crate::terminal::should_open_in_new_tab(
@@ -111,7 +111,7 @@ pub fn run(args: CdArgs, config: &Config, path_file: Option<&Path>) -> Result<()
     Ok(())
 }
 
-/// Resolve the target directory and the tab title for `wt cd`.
+/// Resolve the target directory and the tab title for `ws cd`.
 ///
 /// No-arg case: target = main repo root, title = repo name (or `"main"`
 /// fallback). Explicit branch: target = worktree dir, title = branch

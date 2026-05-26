@@ -135,27 +135,27 @@ const MARKER_END: &str = "# === agent-workspace END ===";
 
 const BASH_ZSH_WRAPPER: &str = r#"# === agent-workspace BEGIN ===
 # NOTE: Don't use 'path' as variable name - it shadows zsh's $path array
-wt() {
-  local wt_bin path_file target_path snap_cmd reopen_count
+ws() {
+  local ws_bin path_file target_path snap_cmd reopen_count
   if [[ -n "$ZSH_VERSION" ]]; then
-    wt_bin=$(whence -p wt 2>/dev/null)
+    ws_bin=$(whence -p ws 2>/dev/null)
   else
-    wt_bin=$(type -P wt 2>/dev/null)
+    ws_bin=$(type -P ws 2>/dev/null)
   fi
-  if [[ -z "$wt_bin" ]]; then
-    echo "wt: binary not found. Install: npm install -g agent-workspace" >&2
+  if [[ -z "$ws_bin" ]]; then
+    echo "ws: binary not found. Install: npm install -g @zelanton/agent-workspace" >&2
     return 1
   fi
   # Pass through if -h/--help anywhere in args
   case " $* " in
-    *" -h "*|*" --help "*) "$wt_bin" "$@"; return ;;
+    *" -h "*|*" --help "*) "$ws_bin" "$@"; return ;;
   esac
   # Use mktemp so concurrent calls (and subshells where $$ is the parent
   # PID) get unique files; fall back to PID-based name if mktemp missing.
-  path_file=$(mktemp 2>/dev/null) || path_file="${TMPDIR:-/tmp}/wt-path-$$"
+  path_file=$(mktemp 2>/dev/null) || path_file="${TMPDIR:-/tmp}/ws-path-$$"
   case "$1" in
     cd)
-      "$wt_bin" "$@" --path-file "$path_file" || { rm -f "$path_file"; return $?; }
+      "$ws_bin" "$@" --path-file "$path_file" || { rm -f "$path_file"; return $?; }
       if [[ -f "$path_file" ]]; then
         target_path=$(<"$path_file"); rm -f "$path_file"; cd "$target_path"
       fi
@@ -163,7 +163,7 @@ wt() {
     new)
       # Check for snap mode (-s/--snap)
       if [[ " $* " == *" -s "* ]] || [[ " $* " == *" --snap "* ]]; then
-        "$wt_bin" "$@" --path-file "$path_file" || { rm -f "$path_file"; return $?; }
+        "$ws_bin" "$@" --path-file "$path_file" || { rm -f "$path_file"; return $?; }
         if [[ -f "$path_file" ]]; then
           target_path="$(head -n1 "$path_file")"
           snap_cmd="$(tail -n1 "$path_file")"
@@ -175,7 +175,7 @@ wt() {
             reopen_count=0
             while true; do
               if [[ $reopen_count -gt 0 ]]; then
-                echo "[wt] Reopen #$reopen_count"
+                echo "[ws] Reopen #$reopen_count"
               fi
               echo "Entering snap mode: $snap_cmd"
               echo "Worktree: $(basename "$target_path")"
@@ -186,9 +186,9 @@ wt() {
                 # Crash / SIGINT / non-zero exit: still consult snap-continue
                 # so the user can choose merge / reopen / preserve instead of
                 # being silently stranded with a half-made worktree.
-                echo "[wt] Agent exited with status $agent_status; checking worktree state..."
+                echo "[ws] Agent exited with status $agent_status; checking worktree state..."
               fi
-              "$wt_bin" snap-continue --path-file "$path_file"
+              "$ws_bin" snap-continue --path-file "$path_file"
               local continue_status=$?
               # 0: done, cd to main; 2: reopen agent; 3: exit, stay in worktree
               case $continue_status in
@@ -215,54 +215,54 @@ wt() {
           fi
         fi
       else
-        "$wt_bin" "$@" --path-file "$path_file" || { rm -f "$path_file"; return $?; }
+        "$ws_bin" "$@" --path-file "$path_file" || { rm -f "$path_file"; return $?; }
         if [[ -f "$path_file" ]]; then
           target_path=$(<"$path_file"); rm -f "$path_file"; cd "$target_path"
         fi
       fi
       ;;
     rm|mv|merge|clean)
-      "$wt_bin" "$@" --path-file "$path_file" || { rm -f "$path_file"; return $?; }
+      "$ws_bin" "$@" --path-file "$path_file" || { rm -f "$path_file"; return $?; }
       if [[ -f "$path_file" ]]; then
         target_path=$(<"$path_file"); rm -f "$path_file"; cd "$target_path"
       fi
       ;;
     *)
       rm -f "$path_file" 2>/dev/null
-      "$wt_bin" "$@"
+      "$ws_bin" "$@"
       ;;
   esac
 }
-# Dynamic completions: call binary directly to bypass wt function
+# Dynamic completions: call binary directly to bypass ws function
 if [[ -n "$ZSH_VERSION" ]]; then
-  _wt_bin=$(whence -p wt 2>/dev/null)
-  [[ -n "$_wt_bin" ]] && source <(COMPLETE=zsh "$_wt_bin" 2>/dev/null) 2>/dev/null
+  _ws_bin=$(whence -p ws 2>/dev/null)
+  [[ -n "$_ws_bin" ]] && source <(COMPLETE=zsh "$_ws_bin" 2>/dev/null) 2>/dev/null
 else
-  _wt_bin=$(type -P wt 2>/dev/null)
-  [[ -n "$_wt_bin" ]] && source <(COMPLETE=bash "$_wt_bin" 2>/dev/null) 2>/dev/null
+  _ws_bin=$(type -P ws 2>/dev/null)
+  [[ -n "$_ws_bin" ]] && source <(COMPLETE=bash "$_ws_bin" 2>/dev/null) 2>/dev/null
 fi
-unset _wt_bin
+unset _ws_bin
 # === agent-workspace END ==="#;
 
 const FISH_WRAPPER: &str = r#"# === agent-workspace BEGIN ===
-function wt
-  set -l wt_bin (type --force-path wt 2>/dev/null)
-  if test -z "$wt_bin"
-    echo "wt: binary not found. Install: npm install -g agent-workspace" >&2
+function ws
+  set -l ws_bin (type --force-path ws 2>/dev/null)
+  if test -z "$ws_bin"
+    echo "ws: binary not found. Install: npm install -g @zelanton/agent-workspace" >&2
     return 1
   end
   if contains -- -h $argv; or contains -- --help $argv
-    $wt_bin $argv
+    $ws_bin $argv
     return
   end
   set -l path_file (mktemp)
   switch $argv[1]
     case cd
-      $wt_bin $argv --path-file $path_file; or begin; rm -f $path_file; return $status; end
+      $ws_bin $argv --path-file $path_file; or begin; rm -f $path_file; return $status; end
       if test -f $path_file; cd (cat $path_file); rm -f $path_file; end
     case new
       if contains -- -s $argv; or contains -- --snap $argv
-        $wt_bin $argv --path-file $path_file; or begin; rm -f $path_file; return $status; end
+        $ws_bin $argv --path-file $path_file; or begin; rm -f $path_file; return $status; end
         if test -f $path_file
           set -l target_path (head -n1 $path_file)
           set -l snap_cmd (tail -n1 $path_file)
@@ -273,7 +273,7 @@ function wt
             set -l reopen_count 0
             while true
               if test $reopen_count -gt 0
-                echo "[wt] Reopen #$reopen_count"
+                echo "[ws] Reopen #$reopen_count"
               end
               echo "Entering snap mode: $snap_cmd"
               echo "Worktree: "(basename $target_path)
@@ -281,9 +281,9 @@ function wt
               eval $snap_cmd
               set -l agent_status $status
               if test $agent_status -ne 0
-                echo "[wt] Agent exited with status $agent_status; checking worktree state..."
+                echo "[ws] Agent exited with status $agent_status; checking worktree state..."
               end
-              $wt_bin snap-continue --path-file $path_file
+              $ws_bin snap-continue --path-file $path_file
               set -l continue_status $status
               # 0: done, cd to main; 2: reopen agent; 3: exit, stay in worktree
               switch $continue_status
@@ -306,55 +306,49 @@ function wt
           end
         end
       else
-        $wt_bin $argv --path-file $path_file; or begin; rm -f $path_file; return $status; end
+        $ws_bin $argv --path-file $path_file; or begin; rm -f $path_file; return $status; end
         if test -f $path_file; cd (cat $path_file); rm -f $path_file; end
       end
     case rm mv merge clean
-      $wt_bin $argv --path-file $path_file; or begin; rm -f $path_file; return $status; end
+      $ws_bin $argv --path-file $path_file; or begin; rm -f $path_file; return $status; end
       if test -f $path_file; cd (cat $path_file); rm -f $path_file; end
     case '*'
       rm -f $path_file
-      $wt_bin $argv
+      $ws_bin $argv
   end
 end
 # === agent-workspace END ==="#;
 
 const POWERSHELL_WRAPPER: &str = r#"# === agent-workspace BEGIN ===
-# Helper: locate OUR `wt.exe`, NOT Microsoft Windows Terminal's `wt.exe`.
-#
-# Windows ships Windows Terminal as `wt.exe` in `%LOCALAPPDATA%\Microsoft\
-# WindowsApps\wt.exe` (an app execution alias) — and that dir is usually
-# first in PATH. A naive `Get-Command wt | Select -First 1` returns the
-# Microsoft one, which makes `wt update` invoke Windows Terminal's CLI
-# (which treats unknown args as implicit `new-tab` commandlines, opening
-# a doomed tab for every wt invocation). Filtering the WindowsApps path
-# resolves to whichever `wt.exe` we installed (npm shim, install.ps1
-# stamp into ~/.agent-workspace/bin, or a dev build on PATH).
+# Locate our `ws.exe` on PATH. No filtering needed — Microsoft Windows
+# Terminal owns `wt.exe` (an App Execution Alias under WindowsApps); we
+# renamed our binary to `ws.exe` precisely to avoid that conflict. (See
+# the pre-v0.13.0 git history for the elaborate PATH-filter dance the
+# rename replaced.)
 function Get-AgentWorkspaceBinary {
-  Get-Command wt -CommandType Application -All -ErrorAction SilentlyContinue |
-    Where-Object { $_.Source -notlike '*\WindowsApps\wt.exe' } |
+  Get-Command ws -CommandType Application -ErrorAction SilentlyContinue |
     Select-Object -First 1
 }
-function wt {
-  $wtBin = Get-AgentWorkspaceBinary
-  if (-not $wtBin) {
-    Write-Error "wt: binary not found. Install: npm install -g @zelanton/agent-workspace"
+function ws {
+  $wsBin = Get-AgentWorkspaceBinary
+  if (-not $wsBin) {
+    Write-Error "ws: binary not found. Install: npm install -g @zelanton/agent-workspace"
     return 1
   }
   if ($args -contains '-h' -or $args -contains '--help') {
-    & $wtBin.Source @args
+    & $wsBin.Source @args
     return
   }
   $pathFile = [System.IO.Path]::GetTempFileName()
   switch ($args[0]) {
     { $_ -eq 'cd' } {
-      & $wtBin.Source @args --path-file $pathFile
+      & $wsBin.Source @args --path-file $pathFile
       if ($LASTEXITCODE -ne 0) { Remove-Item $pathFile -ErrorAction SilentlyContinue; return $LASTEXITCODE }
       if (Test-Path $pathFile) { Set-Location (Get-Content $pathFile); Remove-Item $pathFile }
     }
     'new' {
       if ($args -contains '-s' -or $args -contains '--snap') {
-        & $wtBin.Source @args --path-file $pathFile
+        & $wsBin.Source @args --path-file $pathFile
         if ($LASTEXITCODE -ne 0) { Remove-Item $pathFile -ErrorAction SilentlyContinue; return $LASTEXITCODE }
         if (Test-Path $pathFile) {
           $lines = Get-Content $pathFile
@@ -367,7 +361,7 @@ function wt {
             $reopenCount = 0
             while ($true) {
               if ($reopenCount -gt 0) {
-                Write-Host "[wt] Reopen #$reopenCount"
+                Write-Host "[ws] Reopen #$reopenCount"
               }
               Write-Host "Entering snap mode: $snapCmd"
               Write-Host "Worktree: $(Split-Path $targetPath -Leaf)"
@@ -375,9 +369,9 @@ function wt {
               Invoke-Expression $snapCmd
               $agentStatus = $LASTEXITCODE
               if ($agentStatus -ne 0) {
-                Write-Host "[wt] Agent exited with status $agentStatus; checking worktree state..."
+                Write-Host "[ws] Agent exited with status $agentStatus; checking worktree state..."
               }
-              & $wtBin.Source snap-continue --path-file $pathFile
+              & $wsBin.Source snap-continue --path-file $pathFile
               $continueStatus = $LASTEXITCODE
               # 0: done, cd to main; 2: reopen agent; 3: exit, stay in worktree
               if ($continueStatus -eq 0) {
@@ -399,44 +393,44 @@ function wt {
           }
         }
       } else {
-        & $wtBin.Source @args --path-file $pathFile
+        & $wsBin.Source @args --path-file $pathFile
         if ($LASTEXITCODE -ne 0) { Remove-Item $pathFile -ErrorAction SilentlyContinue; return $LASTEXITCODE }
         if (Test-Path $pathFile) { Set-Location (Get-Content $pathFile); Remove-Item $pathFile }
       }
     }
     { $_ -in 'rm', 'mv', 'merge', 'clean' } {
-      & $wtBin.Source @args --path-file $pathFile
+      & $wsBin.Source @args --path-file $pathFile
       if ($LASTEXITCODE -ne 0) { Remove-Item $pathFile -ErrorAction SilentlyContinue; return $LASTEXITCODE }
       if (Test-Path $pathFile) { Set-Location (Get-Content $pathFile); Remove-Item $pathFile }
     }
     default {
       Remove-Item $pathFile -ErrorAction SilentlyContinue
-      & $wtBin.Source @args
+      & $wsBin.Source @args
     }
   }
 }
-# Dynamic completions: call OUR binary directly (NOT Microsoft's wt.exe)
-$_wtBin = Get-AgentWorkspaceBinary
-if ($_wtBin) {
+# Dynamic completions: call our binary directly to bypass the ws function.
+$_wsBin = Get-AgentWorkspaceBinary
+if ($_wsBin) {
   $env:COMPLETE = "powershell"
-  & $_wtBin.Source | Out-String | Invoke-Expression
+  & $_wsBin.Source | Out-String | Invoke-Expression
   Remove-Item Env:\COMPLETE -ErrorAction SilentlyContinue
 }
-Remove-Variable _wtBin -ErrorAction SilentlyContinue
+Remove-Variable _wsBin -ErrorAction SilentlyContinue
 # === agent-workspace END ==="#;
 
 // Fish completions go to a dedicated file (auto-sourced by fish)
-const FISH_COMPLETIONS: &str = r#"# Dynamic completions for wt (auto-generated by wt setup)
-set -l _wt_bin (type --force-path wt 2>/dev/null)
-if test -n "$_wt_bin"
-  COMPLETE=fish $_wt_bin | source
+const FISH_COMPLETIONS: &str = r#"# Dynamic completions for ws (auto-generated by ws setup)
+set -l _ws_bin (type --force-path ws 2>/dev/null)
+if test -n "$_ws_bin"
+  COMPLETE=fish $_ws_bin | source
 end
 "#;
 
-/// Fish completions file path: ~/.config/fish/completions/wt.fish
+/// Fish completions file path: ~/.config/fish/completions/ws.fish
 fn fish_completions_path() -> Result<PathBuf> {
     let base = BaseDirs::new().ok_or(Error::NoHome)?;
-    Ok(base.home_dir().join(".config/fish/completions/wt.fish"))
+    Ok(base.home_dir().join(".config/fish/completions/ws.fish"))
 }
 
 /// Install shell wrapper to config file
@@ -493,7 +487,7 @@ pub enum UninstallOutcome {
 ///
 /// Mirror of [`install`]: reads the rc file, strips the BEGIN/END block via
 /// [`remove_wrapper`] (which refuses unpaired markers — the same discipline
-/// that protects unrelated config during `wt setup`), writes the result back.
+/// that protects unrelated config during `ws setup`), writes the result back.
 /// For Fish, also deletes the dedicated completions file.
 ///
 /// Returns [`UninstallOutcome::NotInstalled`] when the rc file is missing or
@@ -567,7 +561,7 @@ fn remove_wrapper(content: &str) -> Result<String> {
         if line.contains(MARKER_BEGIN) {
             if in_wrapper {
                 return Err(Error::Other(format!(
-                    "rc file has nested '{MARKER_BEGIN}' at line {} — manual fixup needed before re-running 'wt setup'.",
+                    "rc file has nested '{MARKER_BEGIN}' at line {} — manual fixup needed before re-running 'ws setup'.",
                     idx + 1
                 )));
             }
@@ -577,7 +571,7 @@ fn remove_wrapper(content: &str) -> Result<String> {
         if line.contains(MARKER_END) {
             if !in_wrapper {
                 return Err(Error::Other(format!(
-                    "rc file has '{MARKER_END}' without matching BEGIN at line {} — manual fixup needed before re-running 'wt setup'.",
+                    "rc file has '{MARKER_END}' without matching BEGIN at line {} — manual fixup needed before re-running 'ws setup'.",
                     idx + 1
                 )));
             }
@@ -592,7 +586,7 @@ fn remove_wrapper(content: &str) -> Result<String> {
 
     if in_wrapper {
         return Err(Error::Other(format!(
-            "rc file has '{MARKER_BEGIN}' without matching END — manual fixup needed before re-running 'wt setup'."
+            "rc file has '{MARKER_BEGIN}' without matching END — manual fixup needed before re-running 'ws setup'."
         )));
     }
 

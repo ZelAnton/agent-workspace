@@ -113,7 +113,7 @@ impl VcsBackend for JjBackend {
     fn remove_worktree(&self, path: &Path, force: bool) -> Result<()> {
         worktree::remove_worktree(self.runner.as_ref(), path, force)
     }
-    /// **Per locked decision**: `wt mv` on jj workspaces is not supported.
+    /// **Per locked decision**: `ws mv` on jj workspaces is not supported.
     /// jj has no `workspace move` primitive; the manual recipe is "remove
     /// and re-create the workspace" — surface that to the user as an error.
     fn move_worktree(&self, _old: &Path, _new: &Path) -> Result<()> {
@@ -186,7 +186,7 @@ impl VcsBackend for JjBackend {
     fn fetch(&self) -> Result<()> { ops::fetch(self.runner.as_ref()) }
 
     /// **Per locked decision**: jj has no in-progress state. Return
-    /// `Unsupported` with a guidance message; `wt sync` will surface this
+    /// `Unsupported` with a guidance message; `ws sync` will surface this
     /// directly until F-5 adds backend-aware hints at the caller layer.
     fn rebase_abort(&self) -> Result<()> {
         Err(Error::Unsupported(

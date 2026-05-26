@@ -15,12 +15,12 @@ fn test_status_on_trunk_fails() {
     let dir = tempdir().unwrap();
     setup_git_repo(dir.path());
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .arg("status")
         .current_dir(dir.path())
         .output()
-        .expect("wt status failed");
+        .expect("ws status failed");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -32,8 +32,8 @@ fn test_status_in_worktree() {
     let (dir, repo, home) = setup_worktree_test_env();
 
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "status-test",
@@ -44,19 +44,19 @@ fn test_status_in_worktree() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
     assert!(output.status.success());
 
     let wt_path = PathBuf::from(read_path_file(&path_file).trim());
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .arg("status")
         .current_dir(&wt_path)
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt status failed");
+        .expect("ws status failed");
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -87,8 +87,8 @@ fn test_status_with_commits() {
     let (dir, repo, home) = setup_worktree_test_env();
 
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "status-commits",
@@ -99,7 +99,7 @@ fn test_status_with_commits() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
     assert!(output.status.success());
 
     let wt_path = PathBuf::from(read_path_file(&path_file).trim());
@@ -117,14 +117,14 @@ fn test_status_with_commits() {
         .output()
         .unwrap();
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .arg("status")
         .current_dir(&wt_path)
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt status failed");
+        .expect("ws status failed");
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -152,8 +152,8 @@ fn test_status_with_base_branch() {
         .unwrap();
 
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "status-base",
@@ -166,19 +166,19 @@ fn test_status_with_base_branch() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
     assert!(output.status.success());
 
     let wt_path = PathBuf::from(read_path_file(&path_file).trim());
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .arg("status")
         .current_dir(&wt_path)
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt status failed");
+        .expect("ws status failed");
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);

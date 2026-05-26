@@ -6,7 +6,7 @@
 //   - `merge` is atomic in jj: every `jj new` records conflicts into the
 //     resulting commit rather than failing. We materialise the merge, then
 //     `jj op restore <pre-op-id>` on conflict to keep the same "main repo
-//     never silently changes on failure" invariant `wt merge` relies on.
+//     never silently changes on failure" invariant `ws merge` relies on.
 //   - `*_abort` / `*_continue` return `Error::Unsupported` per locked
 //     decision: jj has no in-progress state to abort or continue from.
 //   - `commit(message)` is `jj describe -m` (sets description on `@`, which
@@ -199,7 +199,7 @@ pub(super) fn dry_run_merge(runner: &dyn Runner, branch: &str, squash: bool) -> 
 /// **No-op detection** (review fix #4): if `branch` has no commits the
 /// current `@` lacks AND the content diff is empty, returns Ok(()) without
 /// creating a degenerate merge commit. This is the symmetric guard to
-/// `execute_merge`'s pre-check — needed here too because `wt sync
+/// `execute_merge`'s pre-check — needed here too because `ws sync
 /// --strategy=merge` and other callers reach `merge()` without the
 /// command-layer pre-check.
 pub(super) fn merge(
@@ -211,7 +211,7 @@ pub(super) fn merge(
 ) -> Result<()> {
     // No-op pre-flight: if branch has no commits @ lacks, nothing to merge.
     // Avoids degenerate "merge commit with already-ancestor parent" output
-    // when `wt sync` calls merge() on an up-to-date worktree.
+    // when `ws sync` calls merge() on an up-to-date worktree.
     if super::branch::commit_count_via_revset(
         runner,
         &format!("({branch}) ~ ancestors(@)"),

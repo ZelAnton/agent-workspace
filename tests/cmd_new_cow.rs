@@ -2,7 +2,7 @@
 // Integration Tests - CoW worktree creation
 // ===========================================================================
 //
-// These tests exercise the `wt new` CoW code path:
+// These tests exercise the `ws new` CoW code path:
 //   - on filesystems WITHOUT block cloning (typical NTFS / ext4 CI), the
 //     `cow::can_clone` probe returns false → fallback to plain
 //     `git worktree add` → tests verify the dispatcher routes correctly
@@ -21,9 +21,9 @@ mod common;
 use std::process::Command;
 use tempfile::tempdir;
 
-use common::{create_path_file, read_path_file, setup_git_repo, wt_binary};
+use common::{create_path_file, read_path_file, setup_git_repo, ws_binary};
 
-/// Baseline: `wt new` produces a worktree with all the source repo's
+/// Baseline: `ws new` produces a worktree with all the source repo's
 /// files (CoW path or fallback — both must yield the same content).
 #[test]
 fn test_cow_or_fallback_creates_worktree_with_all_files() {
@@ -45,15 +45,15 @@ fn test_cow_or_fallback_creates_worktree_with_all_files() {
         .unwrap();
 
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["new", "feat-x", "--path-file", path_file.to_str().unwrap()])
         .current_dir(dir.path())
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
     assert!(
         output.status.success(),
-        "wt new failed: {}",
+        "ws new failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -76,8 +76,8 @@ fn test_no_cow_flag_works() {
     setup_git_repo(dir.path());
 
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "feat-y",
@@ -87,10 +87,10 @@ fn test_no_cow_flag_works() {
         ])
         .current_dir(dir.path())
         .output()
-        .expect("wt new --no-cow failed");
+        .expect("ws new --no-cow failed");
     assert!(
         output.status.success(),
-        "wt new --no-cow failed: {}",
+        "ws new --no-cow failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -114,8 +114,8 @@ fn test_cow_path_stashes_and_restores_uncommitted_changes() {
     let pre_new = std::fs::read_to_string(dir.path().join("new.tmp")).unwrap();
 
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "feat-stash",
@@ -124,10 +124,10 @@ fn test_cow_path_stashes_and_restores_uncommitted_changes() {
         ])
         .current_dir(dir.path())
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
     assert!(
         output.status.success(),
-        "wt new failed: {}",
+        "ws new failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 

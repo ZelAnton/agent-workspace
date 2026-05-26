@@ -9,7 +9,7 @@
 // file initially shares all extents with the source — disk usage grows only
 // as either side diverges.
 //
-// We use this for `wt new` to replace the slow `git worktree add` checkout
+// We use this for `ws new` to replace the slow `git worktree add` checkout
 // of large monorepos with a fast `git worktree add --no-checkout` plus a
 // reflink-based bulk copy of every file (sans `.git/`).
 //
@@ -39,7 +39,7 @@ pub enum Error {
 }
 
 /// Env var that disables the CoW worktree-creation path even when the
-/// filesystem supports it. Set by `wt new --no-cow` or by config
+/// filesystem supports it. Set by `ws new --no-cow` or by config
 /// (`[create] use_cow = false`) before any dispatcher fires.
 ///
 /// Exposed as a const so all readers (dispatchers in `vcs::git` and
@@ -76,14 +76,14 @@ pub fn can_clone(src_dir: &Path, dst_parent: &Path) -> bool {
     // PID don't collide on the destination path. The previous PID-only
     // scheme would clobber a sibling probe in rapid-succession runs.
     let probe_src = match tempfile::Builder::new()
-        .prefix(".wt-cow-probe-src-")
+        .prefix(".ws-cow-probe-src-")
         .tempfile_in(dst_parent)
     {
         Ok(f) => f,
         Err(_) => return false,
     };
     let probe_dst = match tempfile::Builder::new()
-        .prefix(".wt-cow-probe-dst-")
+        .prefix(".ws-cow-probe-dst-")
         .tempfile_in(dst_parent)
     {
         Ok(f) => f,

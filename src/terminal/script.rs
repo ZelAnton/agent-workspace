@@ -5,12 +5,12 @@
 // Each terminal backend hands off to a fresh shell process; the script
 // generated here is what that shell runs. The shape:
 //
-//   1. Set `WT_SPAWNED_IN_TAB=1` (recursion guard).
-//   2. Allocate a temp `--path-file` and call our binary's `wt new` with
+//   1. Set `WS_SPAWNED_IN_TAB=1` (recursion guard).
+//   2. Allocate a temp `--path-file` and call our binary's `ws new` with
 //      the given args + the path file.
 //   3. If the binary wrote a path to line 1, `cd` to it.
 //   4. If snap mode, run the snap-resume loop (eval snap_cmd, then
-//      `wt snap-continue`, switch on exit code per the protocol in
+//      `ws snap-continue`, switch on exit code per the protocol in
 //      `src/cli/commands/snap/resume.rs`):
 //        - 0 → cd to the recorded "go back" path, break
 //        - 2 → reopen (next iteration of the loop)
@@ -78,7 +78,7 @@ pub fn build_pwsh(spec: &TabSpec) -> String {
     }
 }
 
-/// Minimal pwsh script for `wt cd` mode: set the recursion guard, emit
+/// Minimal pwsh script for `ws cd` mode: set the recursion guard, emit
 /// OSC 0 to lock the tab title against shell-prompt overrides, then exit
 /// the `-Command` script. The user lands at the shell prompt; cwd was
 /// already set by `wt.exe new-tab -d <cwd>` natively.
@@ -127,13 +127,13 @@ fn build_pwsh_wt_new(binary: &std::path::Path, args: &[String], is_snap: bool) -
                      if ($snap) {{ \
                          $reopen=0; \
                          while ($true) {{ \
-                             if ($reopen -gt 0) {{ Write-Host (\"[wt] Reopen #$reopen\") }} \
+                             if ($reopen -gt 0) {{ Write-Host (\"[ws] Reopen #$reopen\") }} \
                              Write-Host (\"Entering snap mode: $snap\"); \
                              Write-Host (\"Worktree: $(Split-Path $target -Leaf)\"); \
                              Write-Host \"---\"; \
                              Invoke-Expression $snap; \
                              $agentStatus=$LASTEXITCODE; \
-                             if ($agentStatus -ne 0) {{ Write-Host (\"[wt] Agent exited with status $agentStatus; checking worktree state...\") }} \
+                             if ($agentStatus -ne 0) {{ Write-Host (\"[ws] Agent exited with status $agentStatus; checking worktree state...\") }} \
                              & {exe} snap-continue --path-file $pf; \
                              $code=$LASTEXITCODE; \
                              if ($code -eq 0) {{ \
@@ -177,7 +177,7 @@ pub fn build_posix(spec: &TabSpec) -> String {
     }
 }
 
-/// Minimal POSIX script for `wt cd` mode: export the recursion guard,
+/// Minimal POSIX script for `ws cd` mode: export the recursion guard,
 /// emit OSC 0 to lock the tab title, then exec the user's login shell.
 /// The terminal already opened at the right cwd via its native flag.
 ///
@@ -218,13 +218,13 @@ fn build_posix_wt_new(binary: &std::path::Path, args: &[String], is_snap: bool) 
                  if [ -n \"$snap\" ]; then \
                      reopen=0; \
                      while true; do \
-                         [ $reopen -gt 0 ] && echo \"[wt] Reopen #$reopen\"; \
+                         [ $reopen -gt 0 ] && echo \"[ws] Reopen #$reopen\"; \
                          echo \"Entering snap mode: $snap\"; \
                          echo \"Worktree: $(basename \"$target\")\"; \
                          echo \"---\"; \
                          eval \"$snap\"; \
                          agent_status=$?; \
-                         [ $agent_status -ne 0 ] && echo \"[wt] Agent exited with status $agent_status; checking worktree state...\"; \
+                         [ $agent_status -ne 0 ] && echo \"[ws] Agent exited with status $agent_status; checking worktree state...\"; \
                          {exe} snap-continue --path-file \"$pf\"; \
                          code=$?; \
                          if [ $code -eq 0 ]; then \
@@ -272,7 +272,7 @@ mod tests {
             title: "t".into(),
             cwd: PathBuf::from("/tmp"),
             mode: TabMode::WtNew {
-                binary: PathBuf::from("/usr/bin/wt"),
+                binary: PathBuf::from("/usr/bin/ws"),
                 args: args.into_iter().map(String::from).collect(),
                 is_snap: snap,
             },
@@ -303,8 +303,8 @@ mod tests {
     fn pwsh_non_snap_invokes_binary_with_args_and_path_file() {
         let spec = make_spec(vec!["feat-x", "--base", "main"], false);
         let cmd = build_pwsh(&spec);
-        assert!(cmd.contains("$env:WT_SPAWNED_IN_TAB='1'"));
-        assert!(cmd.contains("'/usr/bin/wt'"));
+        assert!(cmd.contains("$env:WS_SPAWNED_IN_TAB='1'"));
+        assert!(cmd.contains("'/usr/bin/ws'"));
         assert!(cmd.contains("'feat-x'"));
         assert!(cmd.contains("'--base'"));
         assert!(cmd.contains("--path-file $pf"));
@@ -325,8 +325,8 @@ mod tests {
     fn posix_non_snap_exports_env_and_execs_shell() {
         let spec = make_spec(vec!["feat-x"], false);
         let cmd = build_posix(&spec);
-        assert!(cmd.contains("export WT_SPAWNED_IN_TAB=1"));
-        assert!(cmd.contains("'/usr/bin/wt' new 'feat-x'"));
+        assert!(cmd.contains("export WS_SPAWNED_IN_TAB=1"));
+        assert!(cmd.contains("'/usr/bin/ws' new 'feat-x'"));
         // After cd, exec the user's shell so the tab stays open.
         assert!(cmd.ends_with(r#"exec "$SHELL" -l"#));
     }
@@ -351,7 +351,7 @@ mod tests {
     #[test]
     fn pwsh_cd_mode_sets_guard_and_emits_osc() {
         let cmd = build_pwsh(&make_cd_spec("feat-x"));
-        assert!(cmd.contains("$env:WT_SPAWNED_IN_TAB='1'"));
+        assert!(cmd.contains("$env:WS_SPAWNED_IN_TAB='1'"));
         // Title embedded as single-quoted literal between ESC and BEL
         // char codes — defends against $/`/" injection from branch names.
         assert!(cmd.contains("[char]27 + ']0;' + 'feat-x' + [char]7"));
@@ -363,7 +363,7 @@ mod tests {
     #[test]
     fn posix_cd_mode_exports_guard_and_emits_osc() {
         let cmd = build_posix(&make_cd_spec("feat-x"));
-        assert!(cmd.contains("export WT_SPAWNED_IN_TAB=1"));
+        assert!(cmd.contains("export WS_SPAWNED_IN_TAB=1"));
         assert!(cmd.contains(r"\033]0;feat-x\007"));
         // No path-file dance, no binary re-exec.
         assert!(!cmd.contains("--path-file"));

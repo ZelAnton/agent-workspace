@@ -5,10 +5,10 @@
 // Runs after `npm install -g @zelanton/agent-workspace`. Responsibilities:
 //   1. Resolve the platform-specific binary that npm installed as an
 //      optional dependency.
-//   2. Invoke `wt setup` to install shell-wrapper functions in the user's
-//      rc files (the wrapper is required for `wt cd`, `wt new`, etc. to
+//   2. Invoke `ws setup` to install shell-wrapper functions in the user's
+//      rc files (the wrapper is required for `ws cd`, `ws new`, etc. to
 //      actually change shell cwd).
-//   3. Stamp the install-channel marker file so `wt update` knows to
+//   3. Stamp the install-channel marker file so `ws update` knows to
 //      re-invoke npm rather than self-replace from GitHub Releases.
 
 const { execFileSync } = require("child_process");
@@ -40,16 +40,16 @@ try {
   process.exit(0);
 }
 
-// Run 'wt setup' to install shell integration
-const exe = process.platform === "win32" ? "wt.exe" : "wt";
+// Run 'ws setup' to install shell integration
+const exe = process.platform === "win32" ? "ws.exe" : "ws";
 const binaryPath = join(pkgJsonPath, "..", "bin", exe);
 try {
   execFileSync(binaryPath, ["setup"], { stdio: "inherit" });
 } catch {
-  console.warn("[agent-workspace] Auto-setup failed. Run 'wt setup' manually.");
+  console.warn("[agent-workspace] Auto-setup failed. Run 'ws setup' manually.");
 }
 
-// Stamp the install-channel marker so `wt update` re-invokes npm rather than
+// Stamp the install-channel marker so `ws update` re-invokes npm rather than
 // self-replacing from GitHub Releases. Honors AGENT_WORKSPACE_DIR to match the
 // Rust side's Config::base_dir() resolution.
 try {

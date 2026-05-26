@@ -128,7 +128,7 @@ fn write_script_to_temp(body: &str) -> Result<PathBuf> {
     // unique name. We then `keep()` it so the file outlives this
     // process (the spawned tab needs to read it).
     let tmp = tempfile::Builder::new()
-        .prefix("wt-tab-")
+        .prefix("ws-tab-")
         .suffix(".ps1")
         .tempfile()
         .map_err(|e| Error::Spawn(format!("create temp script: {e}")))?;
@@ -156,33 +156,26 @@ fn write_script_to_temp(body: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
-/// Locate Windows Terminal's `wt.exe`.
+/// Locate Microsoft Windows Terminal's `wt.exe`.
 ///
 /// On a healthy Microsoft Store install, `wt.exe` is symlinked into
-/// `%LOCALAPPDATA%\Microsoft\WindowsApps`, which is usually first in PATH
-/// — so `Command::new("wt")` would find it. But we deliberately avoid the
-/// bare `wt` lookup because **our own binary is named `wt.exe`** and may
-/// also be on PATH (installed by `wt setup` / npm). The collision is
-/// real: if our binary is found first, `Command::new("wt")` would
-/// recursively invoke us, not Windows Terminal.
+/// `%LOCALAPPDATA%\Microsoft\WindowsApps`, which is usually first in PATH.
+/// Since v0.13.0 we renamed our binary to `ws.exe`, so there is no longer
+/// any naming collision with Microsoft's `wt.exe` — the elaborate
+/// "skip-our-own-binary" PATH-walk from earlier releases is gone.
 ///
 /// Strategy:
-///   1. Walk PATH, find an entry whose `wt.exe` is *not* our own binary.
-///   2. Fall back to the WindowsApps default location.
+///   1. Walk PATH for the first `wt.exe`.
+///   2. Fall back to `%LOCALAPPDATA%\Microsoft\WindowsApps\wt.exe` if the
+///      PATH lookup misses it (WindowsApps has unusual ACLs and the entry
+///      occasionally drops out of PATH resolution).
 fn locate_wt_binary() -> Option<PathBuf> {
-    let our_exe = std::env::current_exe().ok().and_then(|p| p.canonicalize().ok());
-
     if let Ok(path) = std::env::var("PATH") {
         for dir in std::env::split_paths(&path) {
             let candidate = dir.join("wt.exe");
-            if !candidate.is_file() {
-                continue;
+            if candidate.is_file() {
+                return Some(candidate);
             }
-            let canonical = candidate.canonicalize().ok();
-            if canonical.is_some() && canonical == our_exe {
-                continue; // skip our own binary
-            }
-            return Some(candidate);
         }
     }
 

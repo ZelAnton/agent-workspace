@@ -7,15 +7,15 @@
 #
 # Environment variables (all optional):
 #   AGENT_WORKSPACE_VERSION       Pin to a specific version (default: latest GitHub release)
-#   AGENT_WORKSPACE_INSTALL_DIR   Install dir for wt.exe
+#   AGENT_WORKSPACE_INSTALL_DIR   Install dir for ws.exe
 #                                 (default: $AGENT_WORKSPACE_DIR\bin = ~\.agent-workspace\bin)
 #   AGENT_WORKSPACE_DIR           Base dir for channel marker and worktrees
 #                                 (default: ~\.agent-workspace)
 #
 # This script mirrors install.sh for Windows: detects platform, downloads the
 # matching .tar.gz from GitHub Releases (uses Windows 10 1803+ built-in tar.exe),
-# installs wt.exe, adds the install dir to User PATH, stamps the channel
-# marker, and runs `wt setup`.
+# installs ws.exe, adds the install dir to User PATH, stamps the channel
+# marker, and runs `ws setup`.
 # ============================================================================
 
 $ErrorActionPreference = 'Stop'
@@ -97,15 +97,15 @@ try {
     & tar -xzf $archivePath -C $TmpDir
     if ($LASTEXITCODE -ne 0) { Fail "extraction failed (tar exit $LASTEXITCODE)" }
 
-    $newBin = Join-Path $TmpDir 'wt.exe'
-    if (-not (Test-Path $newBin)) { Fail "binary wt.exe not found in archive" }
+    $newBin = Join-Path $TmpDir 'ws.exe'
+    if (-not (Test-Path $newBin)) { Fail "binary ws.exe not found in archive" }
 
-    $targetExe = Join-Path $InstallDir 'wt.exe'
+    $targetExe = Join-Path $InstallDir 'ws.exe'
 
-    # If a wt.exe is already in place AND it's the one currently running
+    # If a ws.exe is already in place AND it's the one currently running
     # (somehow), Windows would refuse the overwrite with a lock error.
     # `Move-Item -Force` handles the common case; for the running-binary case
-    # users should use `wt update` instead of re-running install.ps1.
+    # users should use `ws update` instead of re-running install.ps1.
     Move-Item -Path $newBin -Destination $targetExe -Force
     Info "Installed $targetExe"
 } finally {
@@ -130,7 +130,7 @@ if ($pathParts -notcontains $InstallDir) {
     $newPath = if ($userPath) { "$userPath;$InstallDir" } else { $InstallDir }
     [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
     Info "Added $InstallDir to User PATH"
-    # Also update the current session so the user can run `wt` right away
+    # Also update the current session so the user can run `ws` right away
     # without opening a new shell.
     $env:Path = "$env:Path;$InstallDir"
 } else {
@@ -138,14 +138,14 @@ if ($pathParts -notcontains $InstallDir) {
 }
 
 # ---------------------------------------------------------------------------
-# Hand off to `wt setup` for shell wrapper installation (PowerShell profile)
+# Hand off to `ws setup` for shell wrapper installation (PowerShell profile)
 # ---------------------------------------------------------------------------
 
 try {
-    & (Join-Path $InstallDir 'wt.exe') setup
+    & (Join-Path $InstallDir 'ws.exe') setup
     Info "Shell integration installed."
 } catch {
-    Info "wt setup failed — run '$InstallDir\wt.exe setup' manually."
+    Info "ws setup failed — run '$InstallDir\ws.exe setup' manually."
 }
 
 # ---------------------------------------------------------------------------
@@ -156,5 +156,5 @@ Write-Host ""
 Write-Host "[agent-workspace] Done. Open a new PowerShell window (or restart"
 Write-Host "                  current shell to pick up PATH + wrapper), then verify:"
 Write-Host ""
-Write-Host "    wt --version"
+Write-Host "    ws --version"
 Write-Host ""

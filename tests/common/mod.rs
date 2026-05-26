@@ -7,13 +7,13 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub fn wt_binary() -> PathBuf {
+pub fn ws_binary() -> PathBuf {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("target/debug/wt");
+    path.push("target/debug/ws");
     path
 }
 
-/// Build a `Command` for the `wt` binary with test-isolation env vars applied.
+/// Build a `Command` for the `ws` binary with test-isolation env vars applied.
 ///
 /// Setting `HOME` is enough on Unix, where `directories::BaseDirs` reads it
 /// directly. On Windows that crate reads the user profile via the
@@ -21,23 +21,23 @@ pub fn wt_binary() -> PathBuf {
 /// set `AGENT_WORKSPACE_DIR`, which `Config::base_dir()` (in
 /// `src/config/mod.rs`) checks before falling back to `BaseDirs`. This makes
 /// tests isolate cross-platform.
-pub fn wt_command(home: &Path) -> Command {
-    let mut cmd = Command::new(wt_binary());
+pub fn ws_command(home: &Path) -> Command {
+    let mut cmd = Command::new(ws_binary());
     cmd.env("HOME", home);
     cmd.env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"));
     // Hard-disable the new-tab feature in integration tests. Without
     // this, running `cargo test` from inside Windows Terminal (or
     // iTerm2 / GNOME Terminal) inherits `WT_SESSION` etc. into the
-    // child process, `terminal::detect()` returns Some, and `wt new`
+    // child process, `terminal::detect()` returns Some, and `ws new`
     // attempts to spawn a tab — which hangs or pollutes the developer's
     // window. Setting the recursion guard short-circuits the spawn
     // dispatch regardless of which terminal env vars leaked in.
-    cmd.env("WT_SPAWNED_IN_TAB", "1");
+    cmd.env("WS_SPAWNED_IN_TAB", "1");
     cmd
 }
 
 pub fn create_path_file(dir: &Path) -> PathBuf {
-    dir.join(".wt-path")
+    dir.join(".ws-path")
 }
 
 pub fn read_path_file(path_file: &Path) -> String {

@@ -27,7 +27,7 @@ use crate::vcs::CWD_MUTEX;
 /// `None` if jj isn't on PATH (callers should skip the test).
 ///
 /// Sets up `jj git init --colocate` (matches the typical user workflow:
-/// a colocated repo where wt's auto-detect picks jj) plus a `main`
+/// a colocated repo where ws's auto-detect picks jj) plus a `main`
 /// bookmark on an initial commit. The colocated layout is intentional —
 /// it exercises the workspace_id-parity invariant from the plan.
 pub(super) fn jj_repo() -> Option<tempfile::TempDir> {

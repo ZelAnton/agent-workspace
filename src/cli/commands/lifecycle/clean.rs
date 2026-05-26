@@ -1,5 +1,5 @@
 // ===========================================================================
-// wt clean - Clean up worktrees with no diff from trunk
+// ws clean - Clean up worktrees with no diff from trunk
 // ===========================================================================
 
 use std::collections::HashSet;

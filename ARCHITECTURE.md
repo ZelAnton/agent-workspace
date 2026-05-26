@@ -48,27 +48,27 @@ base_branch = "main"             # 创建时的源分支（merge/sync 默认目�
 ### 1. Worktree 管理
 
 ```bash
-wt new [branch]              # 创建 worktree 并进入（base = current_branch；detached HEAD 时回退 trunk）
-wt new [branch] --base <br>  # 显式指定 base 分支（必须存在，覆盖默认；同时记录到 meta）
-wt new [branch] -s <cmd>     # 创建 + snap 模式
-wt cd [branch]               # 切换到指定 worktree（省略则回到主仓库）
-wt ls                        # 列出 worktree（按创建时间降序）
-wt status                    # 查看当前 worktree 详细信息
-wt mv <old> <new>            # 重命名 worktree 分支（old 可用 . 表示当前）
-wt rm <branch> [-f]          # 删除 worktree（branch 可用 . 表示当前）
-wt clean [--dry-run]         # 清理所有与 target 无差异的 worktree（target = base_branch > trunk）
+ws new [branch]              # 创建 worktree 并进入（base = current_branch；detached HEAD 时回退 trunk）
+ws new [branch] --base <br>  # 显式指定 base 分支（必须存在，覆盖默认；同时记录到 meta）
+ws new [branch] -s <cmd>     # 创建 + snap 模式
+ws cd [branch]               # 切换到指定 worktree（省略则回到主仓库）
+ws ls                        # 列出 worktree（按创建时间降序）
+ws status                    # 查看当前 worktree 详细信息
+ws mv <old> <new>            # 重命名 worktree 分支（old 可用 . 表示当前）
+ws rm <branch> [-f]          # 删除 worktree（branch 可用 . 表示当前）
+ws clean [--dry-run]         # 清理所有与 target 无差异的 worktree（target = base_branch > trunk）
 ```
 
 ### 2. 工作流
 
 ```bash
-wt merge [options]           # 合并当前 worktree（默认 merge 回 base branch，fallback trunk）
+ws merge [options]           # 合并当前 worktree（默认 merge 回 base branch，fallback trunk）
     -s, --strategy <squash|merge>  # 合并策略，默认 squash
     --into <branch>          # 合并到指定分支（覆盖 base branch / trunk，校验存在性）
     -d, --delete             # 合并后删除 worktree（默认保留）
     -H, --skip-hooks         # 跳过 pre-merge hook
 
-wt sync [options]            # 从 base branch 同步更新到当前 worktree（fallback trunk）
+ws sync [options]            # 从 base branch 同步更新到当前 worktree（fallback trunk）
     -s, --strategy <rebase|merge>  # 同步策略，默认 rebase（可被 sync_strategy 配置覆盖）
     --from <branch>          # 指定同步源分支（覆盖 base branch / trunk，校验存在性）
     --continue               # 解决冲突后继续
@@ -78,15 +78,15 @@ wt sync [options]            # 从 base branch 同步更新到当前 worktree（
 ### 3. 维护
 
 ```bash
-wt update                    # 更新到最新版本
+ws update                    # 更新到最新版本
 ```
 
 ### 4. 配置
 
 ```bash
-wt setup                     # 安装 shell 集成（自动检测 shell）
-wt setup --shell zsh         # 指定 shell
-wt init [options]            # 在当前项目初始化配置
+ws setup                     # 安装 shell 集成（自动检测 shell）
+ws setup --shell zsh         # 指定 shell
+ws init [options]            # 在当前项目初始化配置
     --trunk <branch>         # 主干分支
     --merge-strategy <squash|merge>  # 默认合并策略
     --sync-strategy <rebase|merge>   # 默认同步策略
@@ -97,9 +97,9 @@ wt init [options]            # 在当前项目初始化配置
 
 ## Shell 集成
 
-`wt cd`、`wt new`、`wt rm`、`wt mv`、`wt merge`、`wt clean` 等命令需要改变 shell 工作目录，因此需要 shell wrapper。
+`ws cd`、`ws new`、`ws rm`、`ws mv`、`ws merge`、`ws clean` 等命令需要改变 shell 工作目录，因此需要 shell wrapper。
 
-运行 `wt setup` 自动安装（npm 安装时会自动执行），会在 shell 配置文件中添加 wrapper 函数。
+运行 `ws setup` 自动安装（npm 安装时会自动执行），会在 shell 配置文件中添加 wrapper 函数。
 
 **支持的 shell**：bash、zsh、fish、powershell
 
@@ -111,19 +111,19 @@ wt init [options]            # 在当前项目初始化配置
 
 ### 集成约束
 
-- **Wrapper 必装才能 cd**：`wt cd` 检测无 `--path-file` 直接报错，提示 `wt setup`——不再静默 noop
-- **`wt rm .` 防误操**：cwd 在被删 worktree 内且无 wrapper → 拒绝（避免 dangling cwd）
-- **rc 文件 marker 严格配对**：`wt setup` 找到孤立 BEGIN/END 直接报错，不动 rc，避免截断
+- **Wrapper 必装才能 cd**：`ws cd` 检测无 `--path-file` 直接报错，提示 `ws setup`——不再静默 noop
+- **`ws rm .` 防误操**：cwd 在被删 worktree 内且无 wrapper → 拒绝（避免 dangling cwd）
+- **rc 文件 marker 严格配对**：`ws setup` 找到孤立 BEGIN/END 直接报错，不动 rc，避免截断
 - **path_file 唯一**：bash/zsh wrapper 用 `mktemp` 而非 `$$`（subshell 中 `$$` 是父 PID，并发会撞）
 - **agent 退出统一**：crash/SIGINT/非零状态都进 snap-continue
-- **Windows update**：`wt update` 调用 npm，运行中的 `wt.exe` 被 OS 锁定 → 先关闭所有 wt 进程
+- **Windows update**：`ws update` 调用 npm，运行中的 `wt.exe` 被 OS 锁定 → 先关闭所有 wt 进程
 
 ---
 
 ## 分支名生成
 
-1. **用户指定**：`wt new fix-auth-bug` → 使用 `fix-auth-bug`
-2. **自动生成**：`wt new` → 生成 `形容词-名词` 格式，如 `swift-fox`
+1. **用户指定**：`ws new fix-auth-bug` → 使用 `fix-auth-bug`
+2. **自动生成**：`ws new` → 生成 `形容词-名词` 格式，如 `swift-fox`
 
 词库内置约 100 个形容词 + 100 个名词。冲突时追加数字后缀（`swift-fox-2`）。
 
@@ -138,9 +138,9 @@ wt init [options]            # 在当前项目初始化配置
 ```
 
 ```bash
-wt new -s claude  # 简单命令，随机分支名
-wt new -s "aider --model sonnet"  # 带参数的命令需要引号
-wt new fix-bug -s cursor  # 指定分支名
+ws new -s claude  # 简单命令，随机分支名
+ws new -s "aider --model sonnet"  # 带参数的命令需要引号
+ws new fix-bug -s cursor  # 指定分支名
 ```
 
 ### Agent 退出处理
@@ -170,7 +170,7 @@ wt new fix-bug -s cursor  # 指定分支名
 - worktree 完整保留，后续可手动处理：
 ```bash
 git add . && git commit -m 'message'
-wt merge          # merge 并清理
+ws merge          # merge 并清理
 ```
 
 **异常退出**（crash / Ctrl+C），worktree 保留为普通 worktree
@@ -184,12 +184,12 @@ wt merge          # merge 并清理
 merge 为原子操作——要么成功，要么 HEAD 回到原分支。不残留中间状态。
 
 ```
-wt merge
+ws merge
   → 记录主 repo 当前分支为 original
   → checkout target（main repo）
   → dry-run（按真实策略：squash 用 --squash --no-commit，否则 --no-ff）
   → 有冲突？
-      YES → 清理 + checkout original → 报错 "先 wt sync 解决冲突"
+      YES → 清理 + checkout original → 报错 "先 ws sync 解决冲突"
       NO  → 清理 + 执行真实 merge
               失败 → reset_merge + checkout original → 抛错
               成功 → 跑 post_merge hook → 可选删 worktree
@@ -200,8 +200,8 @@ wt merge
 用户需在 worktree 中先 sync 对齐目标分支，再执行 merge：
 
 ```bash
-wt sync          # 在 worktree 中解决冲突
-wt merge         # 无冲突，原子完成
+ws sync          # 在 worktree 中解决冲突
+ws merge         # 无冲突，原子完成
 ```
 
 ### 安全检查与约束
@@ -215,16 +215,16 @@ wt merge         # 无冲突，原子完成
 
 ### merge 入口
 
-- `merge::execute_merge()` 处理 squash/merge 策略，`snap_continue` 和 `wt merge` 共用
+- `merge::execute_merge()` 处理 squash/merge 策略，`snap_continue` 和 `ws merge` 共用
 - `git::dry_run_merge(branch, squash)` 用于预检测冲突，按策略走 `--squash --no-commit` 或 `--no-ff --no-commit`
 
-> 不提供 `wt merge --continue/--abort`：原子语义保证失败 = HEAD 复位，无残留 git 状态需要续/弃。冲突恢复路径只有一条：在 worktree 中 `wt sync`，然后重新 `wt merge`。
+> 不提供 `ws merge --continue/--abort`：原子语义保证失败 = HEAD 复位，无残留 git 状态需要续/弃。冲突恢复路径只有一条：在 worktree 中 `ws sync`，然后重新 `ws merge`。
 
 ---
 
 ## Status 输出
 
-`wt status` 显示当前 worktree 的：
+`ws status` 显示当前 worktree 的：
 
 - Branch / Base branch（meta）/ Trunk / Merge target（CLI > base_branch（仍存在）> trunk）
 - Created at（meta）
@@ -235,17 +235,17 @@ wt merge         # 无冲突，原子完成
 
 ```
 State:        REBASE/MERGE IN PROGRESS (sync)
-  Resolve conflicts, then: wt sync --continue
-  Or abort: wt sync --abort
+  Resolve conflicts, then: ws sync --continue
+  Or abort: ws sync --abort
 ```
 
-> 仅识别 git-native 状态。`wt merge` 是原子的，不残留可识别状态。
+> 仅识别 git-native 状态。`ws merge` 是原子的，不残留可识别状态。
 
 ---
 
 ## Clean 行为
 
-`wt clean` 遍历当前项目所有 worktree（按 `workspaces_dir/{workspace_id}` 前缀过滤），按以下顺序判定：
+`ws clean` 遍历当前项目所有 worktree（按 `workspaces_dir/{workspace_id}` 前缀过滤），按以下顺序判定：
 
 1. 跳过 trunk worktree
 2. 解析 effective target：`base_branch`（仍存在时）> trunk

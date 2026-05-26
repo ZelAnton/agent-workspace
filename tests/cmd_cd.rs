@@ -14,8 +14,8 @@ fn test_cd_nonexistent() {
     let dir = tempdir().unwrap();
     setup_git_repo(dir.path());
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["cd", "nonexistent-branch"])
         .current_dir(dir.path())
         .output()
@@ -31,12 +31,12 @@ fn test_cd_without_print_path() {
     let dir = tempdir().unwrap();
     setup_git_repo(dir.path());
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["cd", "nonexistent"])
         .current_dir(dir.path())
         .output()
-        .expect("wt cd failed");
+        .expect("ws cd failed");
 
     assert!(!output.status.success());
 }
@@ -45,14 +45,14 @@ fn test_cd_without_print_path() {
 fn test_cd_to_existing_worktree() {
     let (dir, repo, home) = setup_worktree_test_env();
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["new", "cd-target"])
         .current_dir(&repo)
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
 
     assert!(
         output.status.success(),
@@ -61,8 +61,8 @@ fn test_cd_to_existing_worktree() {
     );
 
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "cd",
             "cd-target",
@@ -73,7 +73,7 @@ fn test_cd_to_existing_worktree() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt cd failed");
+        .expect("ws cd failed");
 
     if output.status.success() {
         let path = read_path_file(&path_file);
@@ -86,8 +86,8 @@ fn test_cd_returns_correct_path() {
     let (dir, repo, home) = setup_worktree_test_env();
 
     let path_file = create_path_file(dir.path());
-    let new_output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let new_output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "cd-check",
@@ -98,7 +98,7 @@ fn test_cd_returns_correct_path() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
 
     assert!(
         new_output.status.success(),
@@ -109,8 +109,8 @@ fn test_cd_returns_correct_path() {
     let created_path = read_path_file(&path_file).trim().to_string();
 
     let cd_path_file = dir.path().join(".wt-cd-path");
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "cd",
             "cd-check",
@@ -121,7 +121,7 @@ fn test_cd_returns_correct_path() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt cd failed");
+        .expect("ws cd failed");
 
     if output.status.success() {
         let cd_path = read_path_file(&cd_path_file).trim().to_string();
@@ -130,9 +130,9 @@ fn test_cd_returns_correct_path() {
 }
 
 // ---------------------------------------------------------------------------
-// Tab-integration flag handling for `wt cd`
+// Tab-integration flag handling for `ws cd`
 //
-// Per the test-infra convention (tests/common/mod.rs), `WT_SPAWNED_IN_TAB=1`
+// Per the test-infra convention (tests/common/mod.rs), `WS_SPAWNED_IN_TAB=1`
 // is set on every invocation — so the tab-spawn dispatcher always
 // short-circuits via the recursion-guard branch. These tests therefore
 // can't observe an actual tab spawn; they pin **flag acceptance and the
@@ -143,18 +143,18 @@ fn test_cd_returns_correct_path() {
 #[test]
 fn test_cd_accepts_no_tab_flag_and_writes_path_file() {
     let (dir, repo, home) = setup_worktree_test_env();
-    Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["new", "no-tab-target"])
         .current_dir(&repo)
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
 
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "cd",
             "no-tab-target",
@@ -166,7 +166,7 @@ fn test_cd_accepts_no_tab_flag_and_writes_path_file() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt cd --no-tab failed");
+        .expect("ws cd --no-tab failed");
 
     assert!(
         output.status.success(),
@@ -182,24 +182,24 @@ fn test_cd_accepts_no_tab_flag_and_writes_path_file() {
 
 #[test]
 fn test_cd_accepts_in_new_tab_flag() {
-    // With WT_SPAWNED_IN_TAB=1 the dispatcher's recursion guard
+    // With WS_SPAWNED_IN_TAB=1 the dispatcher's recursion guard
     // short-circuits before any terminal::detect() call — so even with
     // --in-new-tab passed, the path-file fallback runs. This test just
     // pins that the flag is accepted and doesn't break the wrapper
     // handshake.
     let (dir, repo, home) = setup_worktree_test_env();
-    Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["new", "in-tab-target"])
         .current_dir(&repo)
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
 
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "cd",
             "in-tab-target",
@@ -211,7 +211,7 @@ fn test_cd_accepts_in_new_tab_flag() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt cd --in-new-tab failed");
+        .expect("ws cd --in-new-tab failed");
 
     assert!(
         output.status.success(),
@@ -224,14 +224,14 @@ fn test_cd_accepts_in_new_tab_flag() {
 fn test_cd_in_new_tab_conflicts_with_no_tab() {
     // clap's `conflicts_with` should reject both flags at once.
     let (_dir, repo, home) = setup_worktree_test_env();
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["cd", "any", "--in-new-tab", "--no-tab"])
         .current_dir(&repo)
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt cd failed");
+        .expect("ws cd failed");
     assert!(
         !output.status.success(),
         "clap should reject mutually-exclusive flags"

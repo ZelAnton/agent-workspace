@@ -129,7 +129,7 @@ fn can_clone_runs_probe_without_panicking() {
         .filter(|e| {
             e.file_name()
                 .to_string_lossy()
-                .starts_with(".wt-cow-probe-")
+                .starts_with(".ws-cow-probe-")
         })
         .collect();
     assert!(leftover.is_empty(), "probe should clean up its sentinels");

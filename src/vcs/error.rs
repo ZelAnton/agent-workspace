@@ -20,7 +20,7 @@ pub enum Error {
     #[error("{0}")]
     Command(String),
 
-    /// `wt` was invoked outside any recognized repository.
+    /// `ws` was invoked outside any recognized repository.
     #[error("not in a version-controlled repository")]
     NotInRepo,
 

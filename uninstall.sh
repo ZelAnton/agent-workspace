@@ -6,13 +6,13 @@
 # Quick uninstall:
 #   curl -fsSL https://github.com/ZelAnton/agent-workspace/releases/latest/download/uninstall.sh | sh
 #
-# This script removes shell integration installed by `wt setup` or
+# This script removes shell integration installed by `ws setup` or
 # install.sh. It is the inverse of install.sh and works even if the
-# `wt` binary is broken or missing.
+# `ws` binary is broken or missing.
 #
 # What it does:
 #   1. Strip the `# === agent-workspace BEGIN/END ===` block from the
-#      detected shell rc (matches the markers written by `wt setup`).
+#      detected shell rc (matches the markers written by `ws setup`).
 #   2. Strip the `# === agent-workspace installer BEGIN/END ===` PATH
 #      block from the same rc (matches install.sh markers).
 #   3. Print instructions for the manual cleanup it deliberately skips:
@@ -127,7 +127,7 @@ if [ -n "$rc" ]; then
 fi
 
 # Fish has a separate completions file — clean it up too.
-fish_completions="$HOME/.config/fish/completions/wt.fish"
+fish_completions="$HOME/.config/fish/completions/ws.fish"
 if [ -f "$fish_completions" ]; then
     rm -f "$fish_completions"
     info "Removed fish completions: $fish_completions"

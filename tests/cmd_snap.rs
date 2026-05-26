@@ -17,8 +17,8 @@ fn test_new_with_snap_outputs_two_lines() {
     let home = setup_git_repo_with_home(&repo);
 
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "snap-test",
@@ -31,7 +31,7 @@ fn test_new_with_snap_outputs_two_lines() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
 
     assert!(output.status.success());
     let content = read_path_file(&path_file);
@@ -40,8 +40,8 @@ fn test_new_with_snap_outputs_two_lines() {
     assert!(lines[0].contains("snap-test"));
     assert_eq!(lines[1], "echo hello");
 
-    let _ = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let _ = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["rm", "snap-test", "-f"])
         .current_dir(&repo)
         .env("HOME", &home)
@@ -57,8 +57,8 @@ fn test_new_with_snap_creates_metadata() {
     let home = setup_git_repo_with_home(&repo);
 
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "snap-meta-test",
@@ -71,7 +71,7 @@ fn test_new_with_snap_creates_metadata() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
 
     assert!(output.status.success());
 
@@ -90,8 +90,8 @@ fn test_new_with_snap_creates_metadata() {
     assert!(content.contains("created_at"));
     assert!(!content.contains("snap_command"));
 
-    let _ = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let _ = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["rm", "snap-meta-test", "-f"])
         .current_dir(&repo)
         .env("HOME", &home)
@@ -104,12 +104,12 @@ fn test_snap_continue_not_in_worktree() {
     let dir = tempdir().unwrap();
     setup_git_repo(dir.path());
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["snap-continue"])
         .current_dir(dir.path())
         .output()
-        .expect("wt snap-continue failed");
+        .expect("ws snap-continue failed");
 
     assert!(
         !output.status.success(),

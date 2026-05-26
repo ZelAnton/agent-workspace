@@ -103,7 +103,7 @@ impl VcsChoice {
 ///   4. `vcs_runner::detect_vcs(cwd)` — colocated → `Jj`, jj-only → `Jj`,
 ///      git-only → `Git`.
 ///   5. Hard fallback: `Git`. Preserves behaviour for repos that
-///      `detect_vcs` can't classify (e.g. running `wt setup` outside any
+///      `detect_vcs` can't classify (e.g. running `ws setup` outside any
 ///      repo) — the resulting `GitBackend` will surface `NotInRepo` when
 ///      it tries to actually do anything.
 pub fn resolve_backend(
@@ -144,7 +144,7 @@ pub fn set_backend(b: Box<dyn VcsBackend>) {
 /// Short identifier of the active backend — `"git"` or `"jj"`.
 ///
 /// Intended for **UI-only branching** of help text and hint messages
-/// (e.g. `wt status` prints a jj-specific "conflicts in commits" line
+/// (e.g. `ws status` prints a jj-specific "conflicts in commits" line
 /// instead of git's "merge in progress"). Don't use this for behavioural
 /// switches in command logic — the trait abstraction is the right place
 /// for those. The free function is a deliberate, narrow leak of the

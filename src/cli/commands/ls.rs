@@ -1,5 +1,5 @@
 // ===========================================================================
-// wt ls - List worktrees with git status info
+// ws ls - List worktrees with git status info
 // ===========================================================================
 
 use std::collections::HashSet;

@@ -1,5 +1,5 @@
 // ===========================================================================
-// wt sync - Sync current worktree with trunk
+// ws sync - Sync current worktree with trunk
 // ===========================================================================
 
 use clap::Args;
@@ -47,7 +47,7 @@ pub fn run(args: SyncArgs, config: &Config) -> Result<()> {
             if is_jj {
                 return Err(Error::Other(
                     "jj records conflicts in commits — there's no in-progress merge to abort.\n\
-                     Resolve the conflict markers in your files, then re-run `wt sync` if needed.\n\
+                     Resolve the conflict markers in your files, then re-run `ws sync` if needed.\n\
                      To discard the conflicted change entirely, use `jj abandon @` (advanced)."
                         .into(),
                 ));

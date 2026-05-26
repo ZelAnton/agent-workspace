@@ -1,5 +1,5 @@
 // ===========================================================================
-// wt merge - Merge current worktree to trunk
+// ws merge - Merge current worktree to trunk
 // ===========================================================================
 
 use std::path::Path;
@@ -177,8 +177,8 @@ fn run_merge(
 
 pub fn print_conflict_hint() {
     eprintln!("Merge would conflict. Sync first to resolve:");
-    eprintln!("  wt sync");
-    eprintln!("  wt merge");
+    eprintln!("  ws sync");
+    eprintln!("  ws merge");
 }
 
 /// Build commit message for squash merge

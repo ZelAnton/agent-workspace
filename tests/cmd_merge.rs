@@ -15,8 +15,8 @@ fn test_merge_on_trunk_fails() {
     let dir = tempdir().unwrap();
     setup_git_repo(dir.path());
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .arg("merge")
         .current_dir(dir.path())
         .output()
@@ -32,8 +32,8 @@ fn test_merge_from_feature_branch() {
     let (dir, repo, home) = setup_worktree_test_env();
 
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "merge-feature",
@@ -44,7 +44,7 @@ fn test_merge_from_feature_branch() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
 
     assert!(
         output.status.success(),
@@ -66,14 +66,14 @@ fn test_merge_from_feature_branch() {
         .output()
         .unwrap();
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["merge", "--strategy", "squash"])
         .current_dir(&wt_path)
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt merge failed");
+        .expect("ws merge failed");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success() || !stderr.is_empty());
@@ -84,8 +84,8 @@ fn test_merge_with_changes() {
     let (dir, repo, home) = setup_worktree_test_env();
 
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "merge-changes",
@@ -96,7 +96,7 @@ fn test_merge_with_changes() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
 
     assert!(
         output.status.success(),
@@ -118,14 +118,14 @@ fn test_merge_with_changes() {
         .output()
         .unwrap();
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["merge"])
         .current_dir(&wt_path)
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt merge failed");
+        .expect("ws merge failed");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "merge failed: {}", stderr);
@@ -137,8 +137,8 @@ fn test_merge_delete_removes_worktree() {
     let (dir, repo, home) = setup_worktree_test_env();
 
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "merge-delete",
@@ -149,7 +149,7 @@ fn test_merge_delete_removes_worktree() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
     assert!(
         output.status.success(),
         "Command failed: {}",
@@ -170,14 +170,14 @@ fn test_merge_delete_removes_worktree() {
         .output()
         .unwrap();
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["merge", "--delete"])
         .current_dir(&wt_path)
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt merge --delete failed");
+        .expect("ws merge --delete failed");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "merge --delete failed: {}", stderr);
@@ -194,8 +194,8 @@ fn test_merge_conflict_rejected() {
     let (dir, repo, home) = setup_worktree_test_env();
 
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "merge-conflict",
@@ -206,7 +206,7 @@ fn test_merge_conflict_rejected() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
 
     assert!(
         output.status.success(),
@@ -240,14 +240,14 @@ fn test_merge_conflict_rejected() {
         .output()
         .unwrap();
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["merge"])
         .current_dir(&wt_path)
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt merge failed");
+        .expect("ws merge failed");
 
     // Merge should fail (non-zero exit) due to conflict precheck
     assert!(!output.status.success());
@@ -270,8 +270,8 @@ fn test_merge_into_nonexistent_branch_fails() {
     let (_dir, repo, home) = setup_worktree_test_env();
 
     let path_file = create_path_file(repo.parent().unwrap());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "merge-into-test",
@@ -282,19 +282,19 @@ fn test_merge_into_nonexistent_branch_fails() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
     assert!(output.status.success());
 
     let wt_path = PathBuf::from(read_path_file(&path_file).trim());
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["merge", "--into", "nonexistent-branch-xyz"])
         .current_dir(&wt_path)
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt merge --into failed");
+        .expect("ws merge --into failed");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -306,15 +306,15 @@ fn test_merge_into_nonexistent_branch_fails() {
 
 #[test]
 fn test_merge_into_branch_held_by_another_worktree_fails() {
-    // `wt merge --into X` must refuse upfront if X is already checked out by
+    // `ws merge --into X` must refuse upfront if X is already checked out by
     // another worktree — git would error mid-merge with a confusing
     // low-level message and potentially leave HEAD detached.
     let (dir, repo, home) = setup_worktree_test_env();
 
     // Create source worktree
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "merge-into-busy-src",
@@ -325,7 +325,7 @@ fn test_merge_into_branch_held_by_another_worktree_fails() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new src failed");
+        .expect("ws new src failed");
     assert!(output.status.success());
     let src_wt = PathBuf::from(read_path_file(&path_file).trim());
 
@@ -346,8 +346,8 @@ fn test_merge_into_branch_held_by_another_worktree_fails() {
     let path_file2 = create_path_file(dir.path());
     let target_path_file = path_file2.with_extension("2");
     std::fs::write(&target_path_file, "").unwrap();
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "busy-target",
@@ -358,18 +358,18 @@ fn test_merge_into_branch_held_by_another_worktree_fails() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new busy failed");
+        .expect("ws new busy failed");
     assert!(output.status.success());
 
     // Try to merge src into busy-target — should fail upfront
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["merge", "--into", "busy-target"])
         .current_dir(&src_wt)
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt merge --into busy failed");
+        .expect("ws merge --into busy failed");
 
     assert!(
         !output.status.success(),
@@ -390,8 +390,8 @@ fn test_merge_already_up_to_date_with_merge_strategy() {
     let (dir, repo, home) = setup_worktree_test_env();
 
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "noop-merge",
@@ -402,20 +402,20 @@ fn test_merge_already_up_to_date_with_merge_strategy() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
     assert!(output.status.success());
 
     let wt_path = PathBuf::from(read_path_file(&path_file).trim());
 
     // Don't add any commits to wt_path. Merge strategy=Merge, expect "Nothing to merge".
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["merge", "--strategy", "merge", "-d"])
         .current_dir(&wt_path)
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt merge failed");
+        .expect("ws merge failed");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "merge should succeed: {stderr}");

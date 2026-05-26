@@ -117,9 +117,9 @@ for platform in darwin-arm64 linux-x64 win32-x64; do
     pkg_name="@zelanton/agent-workspace-$platform"
     # Windows uses .exe extension
     if [[ "$platform" == "win32-x64" ]]; then
-        binary="$pkg_dir/bin/wt.exe"
+        binary="$pkg_dir/bin/ws.exe"
     else
-        binary="$pkg_dir/bin/wt"
+        binary="$pkg_dir/bin/ws"
     fi
     if [[ -f "$binary" && -s "$binary" ]]; then
         publish_package "$pkg_dir" "$pkg_name" "$VERSION" "$DRY_RUN"

@@ -6,12 +6,12 @@ mod common;
 
 use std::process::Command;
 
-use common::wt_binary;
+use common::ws_binary;
 
 #[test]
 fn test_help_output() {
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .arg("--help")
         .output()
         .expect("Failed to execute wt --help");
@@ -26,8 +26,8 @@ fn test_help_output() {
 
 #[test]
 fn test_new_help() {
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["new", "--help"])
         .output()
         .expect("Failed to execute wt new --help");
@@ -40,8 +40,8 @@ fn test_new_help() {
 
 #[test]
 fn test_merge_help() {
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["merge", "--help"])
         .output()
         .expect("Failed to execute wt merge --help");
@@ -55,8 +55,8 @@ fn test_merge_help() {
 
 #[test]
 fn test_sync_help() {
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["sync", "--help"])
         .output()
         .expect("Failed to execute wt sync --help");
@@ -70,8 +70,8 @@ fn test_sync_help() {
 
 #[test]
 fn test_mv_help() {
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["mv", "--help"])
         .output()
         .expect("Failed to execute wt mv --help");
@@ -84,8 +84,8 @@ fn test_mv_help() {
 
 #[test]
 fn test_clean_help() {
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["clean", "--help"])
         .output()
         .expect("Failed to execute wt clean --help");
@@ -96,11 +96,11 @@ fn test_clean_help() {
 
 #[test]
 fn test_setup_help() {
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["setup", "--help"])
         .output()
-        .expect("Failed to execute wt setup --help");
+        .expect("Failed to execute ws setup --help");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("shell"));
@@ -109,11 +109,11 @@ fn test_setup_help() {
 
 #[test]
 fn test_merge_help_shows_strategies() {
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["merge", "--help"])
         .output()
-        .expect("wt merge --help failed");
+        .expect("ws merge --help failed");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("squash") || stdout.contains("strategy"));
@@ -121,11 +121,11 @@ fn test_merge_help_shows_strategies() {
 
 #[test]
 fn test_merge_strategy_squash() {
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["merge", "--help"])
         .output()
-        .expect("wt merge --help failed");
+        .expect("ws merge --help failed");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("squash"));
@@ -133,11 +133,11 @@ fn test_merge_strategy_squash() {
 
 #[test]
 fn test_merge_strategy_merge() {
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["merge", "--help"])
         .output()
-        .expect("wt merge --help failed");
+        .expect("ws merge --help failed");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("merge"));
@@ -145,11 +145,11 @@ fn test_merge_strategy_merge() {
 
 #[test]
 fn test_sync_strategy_options() {
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["sync", "--help"])
         .output()
-        .expect("wt sync --help failed");
+        .expect("ws sync --help failed");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("rebase") || stdout.contains("strategy"));

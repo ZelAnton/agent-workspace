@@ -30,7 +30,7 @@ function getPlatformPackage() {
 
 function getBinaryPath() {
   const pkg = getPlatformPackage();
-  const exe = process.platform === "win32" ? "wt.exe" : "wt";
+  const exe = process.platform === "win32" ? "ws.exe" : "ws";
   try {
     const pkgPath = require.resolve(`${pkg}/package.json`);
     return join(pkgPath, "..", "bin", exe);
@@ -64,6 +64,6 @@ try {
     console.error("Try: chmod +x " + binary);
     process.exit(1);
   }
-  console.error(`Failed to execute wt: ${err.message}`);
+  console.error(`Failed to execute ws: ${err.message}`);
   process.exit(1);
 }

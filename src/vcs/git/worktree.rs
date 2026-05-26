@@ -141,7 +141,7 @@ fn create_worktree_cow(
     // hits two consecutive CoW failures would see two stashes with
     // identical names and have to drop them by index alone.
     let stash_message = format!(
-        "wt-cow-create-{}-{}",
+        "ws-cow-create-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

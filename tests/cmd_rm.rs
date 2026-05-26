@@ -15,8 +15,8 @@ fn test_rm_nonexistent() {
     let dir = tempdir().unwrap();
     setup_git_repo(dir.path());
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["rm", "nonexistent-branch"])
         .current_dir(dir.path())
         .output()
@@ -32,12 +32,12 @@ fn test_rm_with_force() {
     let dir = tempdir().unwrap();
     setup_git_repo(dir.path());
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["rm", "nonexistent", "--force"])
         .current_dir(dir.path())
         .output()
-        .expect("wt rm failed");
+        .expect("ws rm failed");
 
     assert!(!output.status.success());
 }
@@ -47,8 +47,8 @@ fn test_rm_force_dirty_worktree() {
     let (dir, repo, home) = setup_worktree_test_env();
 
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "rm-dirty",
@@ -59,7 +59,7 @@ fn test_rm_force_dirty_worktree() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
 
     assert!(
         output.status.success(),
@@ -71,14 +71,14 @@ fn test_rm_force_dirty_worktree() {
 
     std::fs::write(PathBuf::from(&wt_path).join("dirty.txt"), "uncommitted").unwrap();
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["rm", "rm-dirty", "--force"])
         .current_dir(&repo)
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt rm failed");
+        .expect("ws rm failed");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success() || stderr.contains("force") || stderr.contains("error"));
@@ -86,13 +86,13 @@ fn test_rm_force_dirty_worktree() {
 
 #[test]
 fn test_rm_dot_without_wrapper_is_rejected() {
-    // `wt rm .` from inside a worktree without shell wrapper installed
+    // `ws rm .` from inside a worktree without shell wrapper installed
     // would leave the parent shell stranded in a deleted directory.
     let (dir, repo, home) = setup_worktree_test_env();
 
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "rm-dot-stranded",
@@ -103,23 +103,23 @@ fn test_rm_dot_without_wrapper_is_rejected() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
     assert!(output.status.success());
     let wt_path = PathBuf::from(read_path_file(&path_file).trim());
 
-    // From inside the worktree, `wt rm .` without --path-file must be refused
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    // From inside the worktree, `ws rm .` without --path-file must be refused
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["rm", "."])
         .current_dir(&wt_path)
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt rm . failed");
+        .expect("ws rm . failed");
 
     assert!(
         !output.status.success(),
-        "wt rm . without wrapper should be rejected"
+        "ws rm . without wrapper should be rejected"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -136,8 +136,8 @@ fn test_rm_dot_with_wrapper_works() {
     let (dir, repo, home) = setup_worktree_test_env();
 
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args([
             "new",
             "rm-dot-ok",
@@ -148,24 +148,24 @@ fn test_rm_dot_with_wrapper_works() {
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt new failed");
+        .expect("ws new failed");
     assert!(output.status.success());
     let wt_path = PathBuf::from(read_path_file(&path_file).trim());
 
     let rm_path_file = create_path_file(dir.path());
-    let rm_path_file = rm_path_file.with_file_name(".wt-path-rm");
+    let rm_path_file = rm_path_file.with_file_name(".ws-path-rm");
     std::fs::write(&rm_path_file, "").unwrap();
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["rm", ".", "--path-file", rm_path_file.to_str().unwrap()])
         .current_dir(&wt_path)
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
         .output()
-        .expect("wt rm . failed");
+        .expect("ws rm . failed");
     assert!(
         output.status.success(),
-        "wt rm . with --path-file should succeed: {}",
+        "ws rm . with --path-file should succeed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(!wt_path.exists(), "worktree should be removed");

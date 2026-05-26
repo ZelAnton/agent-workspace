@@ -5,13 +5,13 @@
 # Quick uninstall:
 #   iwr https://github.com/ZelAnton/agent-workspace/releases/latest/download/uninstall.ps1 -UseBasicParsing | iex
 #
-# This script removes shell integration installed by `wt setup` or
+# This script removes shell integration installed by `ws setup` or
 # install.ps1. It is the inverse of install.ps1 and works even if the
-# `wt.exe` binary is broken or missing.
+# `ws.exe` binary is broken or missing.
 #
 # What it does:
 #   1. Strip the `# === agent-workspace BEGIN/END ===` block from the
-#      PowerShell profile (matching the markers used by `wt setup`).
+#      PowerShell profile (matching the markers used by `ws setup`).
 #   2. Remove the install dir from the User PATH (if AGENT_WORKSPACE_DIR
 #      or the default ~\.agent-workspace\bin is present).
 #   3. Print instructions for the manual cleanup it deliberately skips:

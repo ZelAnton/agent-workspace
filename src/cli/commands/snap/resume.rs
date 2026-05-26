@@ -1,5 +1,5 @@
 // ===========================================================================
-// wt snap-continue - Continue snap mode after agent exits
+// ws snap-continue - Continue snap mode after agent exits
 // ===========================================================================
 
 use std::path::{Path, PathBuf};
@@ -78,13 +78,13 @@ pub fn gather_context(config: &Config) -> Result<SnapContext> {
     // If the worktree was created from a real base branch that has since
     // been deleted, refuse rather than silently merging into trunk —
     // landing commits on the wrong branch is a worse failure mode than an
-    // explicit error that points the user at `wt merge --into <branch>`.
+    // explicit error that points the user at `ws merge --into <branch>`.
     let merge_target = match loaded_meta.as_ref().map(|m| m.base_branch.as_str()) {
         Some(bb) if vcs::branch_exists(bb).unwrap_or(false) => bb.to_string(),
         Some(bb) => {
             return Err(Error::Other(format!(
                 "Base branch '{bb}' no longer exists.\n\
-                 Resolve manually with: wt merge --into <branch>"
+                 Resolve manually with: ws merge --into <branch>"
             )));
         }
         None => config.resolve_trunk(),
@@ -208,7 +208,7 @@ fn execute_action(
                 super::super::merge::print_conflict_hint();
                 eprintln!();
                 eprintln!(
-                    "Conflicts in worktree '{}'. Resolve there, then 'wt merge'.",
+                    "Conflicts in worktree '{}'. Resolve there, then 'ws merge'.",
                     ctx.branch
                 );
                 std::process::exit(EXIT_PRESERVE);
@@ -253,7 +253,7 @@ fn execute_action(
             eprintln!();
             eprintln!("Your changes are safe. To continue later:");
             eprintln!("  git add . && git commit -m 'your message'");
-            eprintln!("  wt merge    # merge and cleanup");
+            eprintln!("  ws merge    # merge and cleanup");
             eprintln!();
             std::process::exit(EXIT_PRESERVE);
         }

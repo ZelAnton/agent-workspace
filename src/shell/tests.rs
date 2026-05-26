@@ -135,13 +135,13 @@ fn test_wrapper_script_bash_zsh_same() {
 #[test]
 fn test_wrapper_script_contains_wt_function() {
     let bash = Shell::Bash.wrapper_script();
-    assert!(bash.contains("wt()"));
+    assert!(bash.contains("ws()"));
 
     let fish = Shell::Fish.wrapper_script();
-    assert!(fish.contains("function wt"));
+    assert!(fish.contains("function ws"));
 
     let ps = Shell::PowerShell.wrapper_script();
-    assert!(ps.contains("function wt"));
+    assert!(ps.contains("function ws"));
 }
 
 #[test]
@@ -176,7 +176,7 @@ fn test_remove_wrapper_no_wrapper() {
 fn test_remove_wrapper_with_wrapper() {
     let content = r#"alias ll='ls -la'
 # === agent-workspace BEGIN ===
-wt() { ... }
+ws() { ... }
 # === agent-workspace END ===
 export PATH=$PATH:/usr/local/bin
 "#;
@@ -184,13 +184,13 @@ export PATH=$PATH:/usr/local/bin
     assert!(result.contains("alias ll"));
     assert!(result.contains("export PATH"));
     assert!(!result.contains("agent-workspace"));
-    assert!(!result.contains("wt()"));
+    assert!(!result.contains("ws()"));
 }
 
 #[test]
 fn test_remove_wrapper_only_wrapper() {
     let content = r#"# === agent-workspace BEGIN ===
-wt() { ... }
+ws() { ... }
 # === agent-workspace END ===
 "#;
     let result = remove_wrapper(content).unwrap();
@@ -200,7 +200,7 @@ wt() { ... }
 #[test]
 fn test_remove_wrapper_at_start() {
     let content = r#"# === agent-workspace BEGIN ===
-wt() { ... }
+ws() { ... }
 # === agent-workspace END ===
 alias ll='ls -la'
 "#;
@@ -213,7 +213,7 @@ alias ll='ls -la'
 fn test_remove_wrapper_preserves_content_order() {
     let content = r#"line1
 # === agent-workspace BEGIN ===
-wt() { ... }
+ws() { ... }
 # === agent-workspace END ===
 line2
 "#;
@@ -227,7 +227,7 @@ line2
 fn test_remove_wrapper_unmatched_begin_errors() {
     let content = r#"line1
 # === agent-workspace BEGIN ===
-wt() { ... }
+ws() { ... }
 line2
 "#;
     let err = remove_wrapper(content).unwrap_err();
@@ -238,7 +238,7 @@ line2
 #[test]
 fn test_remove_wrapper_unmatched_end_errors() {
     let content = r#"line1
-wt() { ... }
+ws() { ... }
 # === agent-workspace END ===
 line2
 "#;
@@ -289,7 +289,7 @@ fn test_install_creates_wrapper() {
     let result = std::fs::read_to_string(&config_path).unwrap();
     assert!(result.contains(MARKER_BEGIN));
     assert!(result.contains(MARKER_END));
-    assert!(result.contains("wt()"));
+    assert!(result.contains("ws()"));
 }
 
 #[test]
@@ -317,7 +317,7 @@ export PATH=/usr/local/bin
     assert!(result.contains("alias ll"));
     assert!(result.contains("export PATH"));
     assert!(!result.contains("old_wt_function"));
-    assert!(result.contains("wt()"));
+    assert!(result.contains("ws()"));
     // Should only have one set of markers
     assert_eq!(result.matches(MARKER_BEGIN).count(), 1);
     assert_eq!(result.matches(MARKER_END).count(), 1);
@@ -413,7 +413,7 @@ fn test_remove_wrapper_trailing_newlines() {
 fn test_fish_wrapper_script_syntax() {
     let wrapper = Shell::Fish.wrapper_script();
     // Fish uses 'function' and 'end' keywords
-    assert!(wrapper.contains("function wt"));
+    assert!(wrapper.contains("function ws"));
     assert!(wrapper.contains("end"));
     assert!(wrapper.contains("switch"));
 }
@@ -422,7 +422,7 @@ fn test_fish_wrapper_script_syntax() {
 fn test_powershell_wrapper_script_syntax() {
     let wrapper = Shell::PowerShell.wrapper_script();
     // PowerShell uses function {} and switch
-    assert!(wrapper.contains("function wt {"));
+    assert!(wrapper.contains("function ws {"));
     assert!(wrapper.contains("switch"));
     assert!(wrapper.contains("Set-Location"));
 }
@@ -462,7 +462,7 @@ fn test_bash_zsh_wrapper_contains_completion_init() {
         "bash/zsh wrapper should contain COMPLETE env var for dynamic completions"
     );
     assert!(
-        wrapper.contains("_wt_bin"),
+        wrapper.contains("_ws_bin"),
         "bash/zsh wrapper should locate binary for completions"
     );
 }
@@ -493,7 +493,7 @@ fn test_fish_completions_path() {
     let path = fish_completions_path();
     assert!(path.is_ok());
     let path = path.unwrap();
-    assert!(path.to_string_lossy().contains("completions/wt.fish"));
+    assert!(path.to_string_lossy().contains("completions/ws.fish"));
 }
 
 // =========================================================================
@@ -512,7 +512,7 @@ fn test_uninstall_logic_strips_block_keeps_other_content() {
 
     let original = r#"alias ll='ls -la'
 # === agent-workspace BEGIN ===
-wt() { real wrapper here }
+ws() { real wrapper here }
 # === agent-workspace END ===
 export PATH=/opt/bin:$PATH
 "#;
@@ -556,7 +556,7 @@ fn test_uninstall_logic_detects_no_wrapper() {
 #[test]
 fn test_uninstall_logic_wrapper_only_yields_empty_file() {
     let content = r#"# === agent-workspace BEGIN ===
-wt() { ... }
+ws() { ... }
 # === agent-workspace END ===
 "#;
     let stripped = remove_wrapper(content).unwrap();
@@ -570,7 +570,7 @@ wt() { ... }
 #[test]
 fn test_uninstall_logic_orphan_marker_errors() {
     // Mirror the unpaired-marker safety net the uninstaller relies on.
-    let orphan = "# === agent-workspace BEGIN ===\nwt() { ... }\n";
+    let orphan = "# === agent-workspace BEGIN ===\nws() { ... }\n";
     let err = remove_wrapper(orphan).unwrap_err();
     assert!(err.to_string().contains("BEGIN"));
 }

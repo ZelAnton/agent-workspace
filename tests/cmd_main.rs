@@ -15,8 +15,8 @@ fn test_cd_no_args_returns_repo_root() {
     setup_git_repo(dir.path());
 
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["cd", "--path-file", path_file.to_str().unwrap()])
         .current_dir(dir.path())
         .output()
@@ -32,23 +32,23 @@ fn test_cd_no_args_returns_repo_root() {
 
 #[test]
 fn test_cd_no_args_without_path_file_is_rejected() {
-    // `wt cd` directly (no shell wrapper) cannot change the parent shell's
+    // `ws cd` directly (no shell wrapper) cannot change the parent shell's
     // CWD, so the binary should refuse rather than silently no-op.
     let dir = tempdir().unwrap();
     setup_git_repo(dir.path());
 
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .arg("cd")
         .current_dir(dir.path())
         .output()
-        .expect("wt cd failed");
+        .expect("ws cd failed");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("setup"),
-        "stderr should mention 'wt setup': {stderr}"
+        "stderr should mention 'ws setup': {stderr}"
     );
 }
 
@@ -61,12 +61,12 @@ fn test_cd_no_args_from_subdirectory() {
     std::fs::create_dir_all(&sub).unwrap();
 
     let path_file = create_path_file(dir.path());
-    let output = Command::new(wt_binary())
-        .env("WT_SPAWNED_IN_TAB", "1")
+    let output = Command::new(ws_binary())
+        .env("WS_SPAWNED_IN_TAB", "1")
         .args(["cd", "--path-file", path_file.to_str().unwrap()])
         .current_dir(&sub)
         .output()
-        .expect("wt cd failed");
+        .expect("ws cd failed");
 
     assert!(output.status.success());
     let path = read_path_file(&path_file);

@@ -70,11 +70,11 @@ pub fn mark_checked(base_dir: &Path) -> Result<()> {
 // Install channel detection
 // ---------------------------------------------------------------------------
 
-/// How this `wt` binary was installed. Determines how `wt update` performs
+/// How this `ws` binary was installed. Determines how `ws update` performs
 /// the actual update.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Channel {
-    /// Installed via `npm install -g agent-workspace`. Update by re-running npm.
+    /// Installed via `npm install -g @zelanton/agent-workspace`. Update by re-running npm.
     Npm,
     /// Installed via the shell installer script. Update by downloading from
     /// GitHub Releases and self-replacing.
@@ -110,12 +110,12 @@ pub fn write_channel(base_dir: &Path, channel: Channel) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Platform key — canonical mapping shared with npm/agent-workspace/bin/wt.js
+// Platform key — canonical mapping shared with npm/agent-workspace/bin/ws.js
 // and the CI release archive naming.
 // ---------------------------------------------------------------------------
 
 /// Returns the canonical platform key (e.g. "darwin-arm64") for the current
-/// host, matching the keys used in npm's `wt.js`, release archive names, and
+/// host, matching the keys used in npm's `ws.js`, release archive names, and
 /// installer scripts. `None` if the host isn't supported.
 pub fn platform_key() -> Option<&'static str> {
     use std::env::consts::{ARCH, OS};
@@ -138,7 +138,7 @@ pub fn platform_key() -> Option<&'static str> {
 ///
 /// Pre-release tags (e.g. "0.11.0-rc1") have any non-numeric suffix stripped
 /// before comparison — so "0.11.0-rc1" parses as "0.11.0" for ordering. This
-/// matches the loose semver tolerance expected for `wt update`.
+/// matches the loose semver tolerance expected for `ws update`.
 pub fn compare_versions(current: &str, latest: &str) -> bool {
     let parse = |v: &str| -> Vec<u32> {
         v.split(['.', '-', '+'])
@@ -221,10 +221,10 @@ pub fn check_update(current_version: &str) -> Result<Option<String>> {
 // Self-update (shell channel)
 // ---------------------------------------------------------------------------
 
-/// Download the release archive for `version`, extract `wt`/`wt.exe`, and
+/// Download the release archive for `version`, extract `ws`/`ws.exe`, and
 /// atomically replace the currently running binary via `self_replace`.
 ///
-/// Caller is expected to re-invoke `wt setup` afterwards if shell wrappers
+/// Caller is expected to re-invoke `ws setup` afterwards if shell wrappers
 /// might have changed.
 pub fn self_update(version: &str) -> Result<()> {
     let platform = platform_key().ok_or(Error::UnsupportedPlatform(
@@ -237,7 +237,7 @@ pub fn self_update(version: &str) -> Result<()> {
     let temp_dir = tempfile::Builder::new()
         .prefix("agent-workspace-update-")
         .tempdir()?;
-    let archive_path = temp_dir.path().join("wt.tar.gz");
+    let archive_path = temp_dir.path().join("ws.tar.gz");
 
     let mut response = http_agent()
         .get(&url)
@@ -254,8 +254,8 @@ pub fn self_update(version: &str) -> Result<()> {
     let mut archive = tar::Archive::new(tar);
     archive.unpack(temp_dir.path())?;
 
-    // The archive places `wt` (or `wt.exe`) at the top level.
-    let bin_name = if cfg!(windows) { "wt.exe" } else { "wt" };
+    // The archive places `ws` (or `ws.exe`) at the top level.
+    let bin_name = if cfg!(windows) { "ws.exe" } else { "ws" };
     let new_binary = temp_dir.path().join(bin_name);
     if !new_binary.exists() {
         return Err(Error::Parse(format!(

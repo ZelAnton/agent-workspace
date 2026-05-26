@@ -47,7 +47,7 @@ pub(super) fn repo_name(runner: &dyn Runner) -> Result<String> {
 
 /// Workspace ID — identical hashing to `GitBackend::workspace_id()` so
 /// colocated repos keep the same `$AGENT_WORKSPACE_DIR/workspaces/<id>/`
-/// directory whether `wt` resolves to git or jj. **Don't change the
+/// directory whether `ws` resolves to git or jj. **Don't change the
 /// algorithm in isolation** — both backends must move in lockstep.
 pub(super) fn workspace_id(runner: &dyn Runner) -> Result<String> {
     use std::collections::hash_map::DefaultHasher;
@@ -93,7 +93,7 @@ pub(super) fn current_branch(runner: &dyn Runner) -> Result<String> {
         // exactly what to fix.
         Error::Command(
             "no bookmark on @; jj-managed worktrees must have a named bookmark — \
-             run `wt new` to create one, or `jj bookmark create <name>` manually"
+             run `ws new` to create one, or `jj bookmark create <name>` manually"
                 .into(),
         )
     })
@@ -148,7 +148,7 @@ pub(super) fn current_commit(runner: &dyn Runner) -> Result<String> {
 /// multiple bookmarks attached (e.g. both `main` and `master`): prefer
 /// `main` → `master` → lex-smallest. jj's internal bookmark iteration
 /// order is implementation-defined and could shift across versions; we
-/// pin a stable choice so `wt status`/`wt cd` output doesn't flicker.
+/// pin a stable choice so `ws status`/`ws cd` output doesn't flicker.
 pub(super) fn detect_trunk(runner: &dyn Runner) -> Result<String> {
     let cwd = std::env::current_dir()?;
     if let Ok(out) = runner.run(Cmd::new("jj").in_dir(&cwd).args([
