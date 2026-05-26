@@ -50,23 +50,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Migrated off dtolnay/rust-toolchain in v0.12.10. The upstream
-      # maintainer removed the @stable / @nightly / @beta moving tags in
-      # mid-2026, AND GitHub Actions' codeload was returning 404 for every
-      # SHA in that repo (works via direct curl — Actions-specific routing
-      # issue we couldn't get around). actions-rust-lang/setup-rust-toolchain
-      # is the official successor: same API surface, actively maintained,
-      # different codeload entry that resolves fine.
-      - name: Setup Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: stable
-          target: ${{ matrix.target }}
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
+      # No third-party Rust setup action — GitHub Actions codeload had a
+      # multi-day outage in May 2026 where it served 404 for every SHA of
+      # `dtolnay/rust-toolchain`, then for its successor
+      # `actions-rust-lang/setup-rust-toolchain`, while the same SHAs worked
+      # via direct curl. The only resilient path is to use the pre-installed
+      # rustup that ships with every GH-hosted runner image (ubuntu-latest /
+      # macos-latest / windows-latest). `rustup target add` is a no-op when
+      # building for the host target, but kept explicit for cross-target
+      # safety / clarity. Same reasoning drops `Swatinem/rust-cache@v2` —
+      # release builds happen rarely enough that a cold cargo cache is fine.
+      - name: Setup Rust (rustup native, no third-party actions)
+        shell: bash
+        run: |
+          set -eu
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustup target add "${{ matrix.target }}"
+          rustc --version
+          cargo --version
 
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }}
@@ -153,20 +155,37 @@ jobs:
             echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Publish GitHub Release
-        # Only run on tag pushes; for manual dispatch, skip the GH release
-        # step (use case is npm-republish without re-tagging).
+      # Publish GH Release via the gh CLI (pre-installed on ubuntu-latest)
+      # — replaces softprops/action-gh-release which we dropped during the
+      # May 2026 codeload outage that took out third-party actions. Only
+      # runs on tag pushes; manual dispatch is for npm-republish without
+      # re-tagging.
+      - name: Publish GitHub Release (gh CLI)
         if: github.event_name == 'push'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/agent-workspace-*.tar.gz
-            install.sh
-            install.ps1
-            uninstall.sh
-            uninstall.ps1
-          generate_release_notes: true
-          fail_on_unmatched_files: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -eu
+          TAG="${GITHUB_REF_NAME}"
+          # Stage all assets in a flat list so `gh release create` picks them up.
+          mapfile -t archives < <(ls dist/agent-workspace-*.tar.gz)
+          if [[ ${#archives[@]} -eq 0 ]]; then
+            echo "::error::no archives staged in dist/"
+            exit 1
+          fi
+          # Verify each expected install/uninstall script is present at repo root.
+          for f in install.sh install.ps1 uninstall.sh uninstall.ps1; do
+            if [[ ! -f "$f" ]]; then
+              echo "::error::missing $f at repo root"
+              exit 1
+            fi
+          done
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            "${archives[@]}" \
+            install.sh install.ps1 uninstall.sh uninstall.ps1
 
   publish-npm:
     name: Publish to npm
