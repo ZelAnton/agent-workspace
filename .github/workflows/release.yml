@@ -86,7 +86,7 @@ jobs:
           fi
 
       # Package the single binary as tar.gz. Windows 10 1803+ ships bsdtar, so
-      # using tar.gz for all platforms keeps `wt update` and install scripts
+      # using tar.gz for all platforms keeps `ws update` and install scripts
       # simple (one archive format, one extractor).
       - name: Package (Unix)
         if: matrix.os != 'windows-latest'
@@ -101,7 +101,7 @@ jobs:
           # Strip debug symbols to shrink the archive.
           strip "target/${{ matrix.target }}/release/${BIN}" || true
 
-          # tar from inside the release dir so the archive has wt at top level.
+          # tar from inside the release dir so the archive has ws at top level.
           tar -czf "${ARCHIVE}" -C "target/${{ matrix.target }}/release" "${BIN}"
           echo "archive=${ARCHIVE}" >> "$GITHUB_OUTPUT"
         id: package_unix
@@ -256,7 +256,7 @@ jobs:
             tar -xzf "$archive" -C "$target"
             # Ensure the unix binaries are executable post-extract.
             if [[ "$platform" != "win32-x64" ]]; then
-              chmod +x "$target/wt"
+              chmod +x "$target/ws"
             fi
             echo "Staged $platform → $target"
             ls -la "$target"
