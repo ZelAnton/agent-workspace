@@ -64,6 +64,7 @@ fn create_worktree_plain(
     branch_already_exists: bool,
 ) -> Result<CreateOutcome> {
     let path_arg = path_str(path)?;
+    eprintln!("  Running git worktree add...");
     if branch_already_exists {
         super::exec(runner, &["worktree", "add", path_arg, branch])?;
     } else {
@@ -133,6 +134,8 @@ fn create_worktree_cow(
     let is_detached = orig_branch == "HEAD";
     let needs_stash = super::branch::has_uncommitted_changes(runner)?;
 
+    eprintln!("  Using CoW (reflink) clone...");
+
     // 2. Stash if dirty. `-u` includes untracked.
     //
     // The stash message includes both PID and a nanosecond timestamp so
@@ -149,6 +152,7 @@ fn create_worktree_cow(
             .unwrap_or(0)
     );
     if needs_stash {
+        eprintln!("  Stashing uncommitted changes...");
         super::exec(runner, &["stash", "push", "-u", "-m", &stash_message])?;
     }
 
@@ -158,12 +162,14 @@ fn create_worktree_cow(
     let inner: Result<()> = (|| {
         // 3. Checkout base if not already there.
         if orig_branch != base {
+            eprintln!("  Switching to '{base}'...");
             super::exec(runner, &["checkout", base])?;
         }
 
         // 4. Create worktree with --no-checkout. git creates the `.git`
         // gitlink file at `path` and registers the worktree, but doesn't
         // write any working-tree files.
+        eprintln!("  Creating worktree skeleton...");
         let add_result = if branch_already_exists {
             super::exec(runner, &["worktree", "add", "--no-checkout", path_arg, branch])
         } else {
@@ -176,6 +182,7 @@ fn create_worktree_cow(
 
         // 5. Reflink-copy every file/dir from repo root to `path`, except
         // `.git/` (which `--no-checkout` already created as a gitlink).
+        eprintln!("  Cloning files via reflink...");
         if let Err(e) = crate::cow::try_clone_dir_except(repo_root, path, &[".git"]) {
             // CoW failed mid-walk. Remove the half-populated worktree dir
             // and run `git worktree prune` so git's registry stays clean.
@@ -191,6 +198,9 @@ fn create_worktree_cow(
 
     // 6. Restore source repo. Order matters: checkout BEFORE stash pop so
     // pop applies to the right branch.
+    if inner.is_ok() {
+        eprintln!("  Restoring source branch...");
+    }
     //
     // Detached HEAD: `git checkout HEAD` would be a no-op (leaving us on
     // `base`). Use the captured commit hash to restore the actual

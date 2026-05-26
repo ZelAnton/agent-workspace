@@ -147,6 +147,7 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
     // Create workspace directory if needed
     std::fs::create_dir_all(wt_dir).map_err(|e| Error::Other(e.to_string()))?;
 
+    eprintln!("Creating worktree '{branch}' from '{base_branch}'...");
     let create_outcome = vcs::create_worktree(&wt_path, &branch, &base_branch)?;
 
     let meta = WorktreeMeta::new(base_branch);
@@ -163,6 +164,9 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
     // already in `wt_path`. Running copy_files again would be redundant
     // work (and would overwrite identical files).
     if matches!(create_outcome, vcs::CreateOutcome::Plain) {
+        if !config.copy_files.is_empty() {
+            eprintln!("Copying project files ({} pattern(s))...", config.copy_files.len());
+        }
         copy_files(&repo_root, &wt_path, config)?;
     }
 
@@ -183,6 +187,7 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
     // Handle snap mode - write path + command for shell wrapper to execute
     if let Some(cmd) = args.snap {
         if path_file.is_some() {
+            eprintln!("Worktree '{branch}' ready — starting snap mode...");
             write_path_file_lines(path_file, &[&wt_path.display().to_string(), &cmd])?;
         } else {
             return Err(Error::Other(
@@ -194,6 +199,7 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
 
     // Write path for shell integration
     if path_file.is_some() {
+        eprintln!("Worktree '{branch}' ready at {}", wt_path.display());
         write_path_file(path_file, &wt_path)?;
     } else {
         eprintln!("Created worktree: {branch} (from {})", meta.base_branch);

@@ -113,6 +113,7 @@ fn create_worktree_plain(
     let path_arg = path_str(path)?;
 
     // Step 1: add the workspace.
+    eprintln!("  Running jj workspace add...");
     super::exec(
         runner,
         &["workspace", "add", "--name", &ws_name, "-r", base, path_arg],
@@ -121,6 +122,7 @@ fn create_worktree_plain(
     // Step 2: attach the bookmark to the new workspace's @. Use the
     // `<workspace-name>@` revset which always resolves to that workspace's
     // working-copy commit regardless of where we're running from.
+    eprintln!("  Creating bookmark...");
     let revset = format!("{ws_name}@");
     super::exec(runner, &["bookmark", "create", branch, "-r", &revset])?;
 
@@ -194,11 +196,14 @@ fn create_worktree_cow(
     let orig_commit = super::repo::current_commit(runner)?;
     let needs_move = orig_commit != base_commit;
     if needs_move {
+        eprintln!("  Switching to base revision...");
         super::exec(runner, &["edit", &base_commit])?;
     }
 
+    eprintln!("  Using CoW (reflink) clone...");
     let inner: Result<()> = (|| {
         // 5. Create the empty workspace.
+        eprintln!("  Creating workspace skeleton...");
         super::exec(
             runner,
             &[
@@ -218,6 +223,7 @@ fn create_worktree_cow(
         //    into the new workspace. Skip BOTH `.jj/` (jj's metadata that
         //    new workspace already set up) AND `.git/` (colocated repos
         //    have it too; new workspace doesn't need a copy).
+        eprintln!("  Cloning files via reflink...");
         crate::cow::try_clone_dir_except(repo_root, path, &[".jj", ".git"])
             .map_err(Error::from)?;
 
@@ -229,6 +235,7 @@ fn create_worktree_cow(
         //
         // `.in_dir(path)` sets the child's cwd; the parent process's cwd
         // is untouched, so no save/restore needed here.
+        eprintln!("  Configuring sparse patterns and snapshotting...");
         runner
             .run(
                 Cmd::new("jj")
@@ -243,6 +250,7 @@ fn create_worktree_cow(
         let _ = runner.run(Cmd::new("jj").in_dir(path).args(["status"]));
 
         // 8. Attach the bookmark to the new workspace's @.
+        eprintln!("  Creating bookmark...");
         let revset = format!("{ws_name}@");
         super::exec(runner, &["bookmark", "create", branch, "-r", &revset])?;
 
@@ -263,12 +271,13 @@ fn create_worktree_cow(
     // the op log.
     match &inner {
         Ok(_) => {
-            if needs_move
-                && let Err(e) = super::exec(runner, &["edit", &orig_change_id])
-            {
-                eprintln!(
-                    "Warning: failed to restore source workspace @ '{orig_change_id}': {e}"
-                );
+            if needs_move {
+                eprintln!("  Restoring source workspace...");
+                if let Err(e) = super::exec(runner, &["edit", &orig_change_id]) {
+                    eprintln!(
+                        "Warning: failed to restore source workspace @ '{orig_change_id}': {e}"
+                    );
+                }
             }
         }
         Err(_) => {
