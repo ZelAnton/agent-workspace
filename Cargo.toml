@@ -1,6 +1,6 @@
 [package]
 name = "agent-workspace"
-version = "0.13.1"
+version = "0.13.2"
 edition = "2024"
 rust-version = "1.91"
 description = "Git worktree workflow tool for AI coding agents"
@@ -41,6 +41,12 @@ reflink-copy = "0.1"
 # (#63010); winapi-util wraps `GetFileInformationByHandle` on stable.
 # Already in our dep tree transitively via `ignore` → `walkdir`.
 winapi-util = "0.1"
+
+# Read the Windows Internet Settings registry key so `ws update` (and any
+# future HTTP call) automatically routes through the IT-managed corporate
+# proxy. Without this feature ureq only reads HTTPS_PROXY / HTTP_PROXY env
+# vars, which corporate machines typically don't set.
+ureq = { version = "3", features = ["win-system-proxy"] }
 
 [dev-dependencies]
 filetime = "0.2"

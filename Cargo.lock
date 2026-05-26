@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agent-workspace"
-version = "0.13.1"
+version = "0.13.2"
 dependencies = [
  "chrono",
  "clap",
@@ -1169,6 +1169,7 @@ dependencies = [
  "ureq-proto",
  "utf8-zero",
  "webpki-roots",
+ "winreg",
 ]
 
 [[package]]
@@ -1618,6 +1619,16 @@ name = "winnow"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0592e1c9d151f854e6fd382574c3a0855250e1d9b2f99d9281c6e6391af352f1"
+
+[[package]]
+name = "winreg"
+version = "0.56.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
+dependencies = [
+ "cfg-if",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "wit-bindgen"
