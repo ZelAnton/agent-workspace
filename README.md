@@ -64,6 +64,26 @@ wt setup
 
 Supported shells: bash, zsh, fish, PowerShell
 
+### Uninstall
+
+Remove the shell wrapper installed by `wt setup`:
+
+```bash
+wt uninstall
+```
+
+If the `wt` binary is missing or broken, run the standalone script instead — it works without a functioning binary:
+
+```bash
+# macOS / Linux
+curl -fsSL https://github.com/ZelAnton/agent-workspace/releases/latest/download/uninstall.sh | sh
+
+# Windows (PowerShell)
+iwr https://github.com/ZelAnton/agent-workspace/releases/latest/download/uninstall.ps1 -UseBasicParsing | iex
+```
+
+The uninstall step does **not** delete `~/.agent-workspace/` (binary, channel marker, cached config) or any worktrees you created — both scripts print follow-up commands for those. If installed via npm, also run `npm uninstall -g @zelanton/agent-workspace`.
+
 ## Quick Start
 
 ```bash
@@ -169,6 +189,7 @@ checks the worktree state:
 |---------|-------------|
 | `wt setup` | Install shell integration (auto-detect) |
 | `wt setup --shell zsh` | Install for specific shell |
+| `wt uninstall` | Remove shell integration (inverse of `setup`) |
 | `wt init` | Initialize project config |
 | `wt init --trunk <branch>` | Initialize with specific trunk branch |
 | `wt init --merge-strategy <strategy>` | Set default merge strategy (squash/merge) |

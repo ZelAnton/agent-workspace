@@ -478,6 +478,82 @@ pub fn install(shell: Shell) -> Result<()> {
     Ok(())
 }
 
+/// Outcome of an uninstall operation — distinguishes "nothing to do" from
+/// "stripped the wrapper" so the CLI can print appropriate feedback without
+/// re-reading the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UninstallOutcome {
+    /// rc file didn't exist, was empty, or had no wrapper block — no write happened.
+    NotInstalled,
+    /// Wrapper block was stripped and rc file rewritten.
+    Removed,
+}
+
+/// Remove shell wrapper block from config file.
+///
+/// Mirror of [`install`]: reads the rc file, strips the BEGIN/END block via
+/// [`remove_wrapper`] (which refuses unpaired markers — the same discipline
+/// that protects unrelated config during `wt setup`), writes the result back.
+/// For Fish, also deletes the dedicated completions file.
+///
+/// Returns [`UninstallOutcome::NotInstalled`] when the rc file is missing or
+/// has no wrapper block — non-fatal; the CLI surfaces this as a friendly
+/// "nothing to remove" message rather than an error.
+pub fn uninstall(shell: Shell) -> Result<UninstallOutcome> {
+    let config_path = shell.config_file()?;
+
+    // Missing rc file = nothing to do. Symmetric with `install` creating it.
+    if !config_path.exists() {
+        // Still clean up fish completions if they somehow exist standalone.
+        if shell == Shell::Fish {
+            let _ = remove_fish_completions();
+        }
+        return Ok(UninstallOutcome::NotInstalled);
+    }
+
+    let content = std::fs::read_to_string(&config_path)?;
+    let stripped = remove_wrapper(&content)?;
+
+    // remove_wrapper trims trailing newlines; if nothing changed, skip the
+    // write. Compare line-stripped vs original-stripped to handle the case
+    // where the file ends with a single trailing newline (always added by
+    // most editors) but contained no wrapper block.
+    let original_trimmed = content.trim_end_matches('\n');
+    let stripped_trimmed = stripped.trim_end_matches('\n');
+
+    let outcome = if original_trimmed == stripped_trimmed {
+        UninstallOutcome::NotInstalled
+    } else {
+        // Restore a single trailing newline (POSIX convention) when the
+        // result is non-empty; otherwise leave file empty.
+        let to_write = if stripped_trimmed.is_empty() {
+            String::new()
+        } else {
+            format!("{stripped_trimmed}\n")
+        };
+        std::fs::write(&config_path, to_write)?;
+        UninstallOutcome::Removed
+    };
+
+    // Fish: also remove the dedicated completions file installed by `install`.
+    if shell == Shell::Fish {
+        let _ = remove_fish_completions();
+    }
+
+    Ok(outcome)
+}
+
+/// Best-effort removal of the fish completions file. `NotFound` is silently
+/// ignored — the file is optional and may have been deleted already.
+fn remove_fish_completions() -> Result<()> {
+    let path = fish_completions_path()?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Error::Io(e)),
+    }
+}
+
 /// Strip an existing wrapper block from rc-file content.
 ///
 /// Refuses to touch the file if BEGIN/END markers don't pair up cleanly —

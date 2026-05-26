@@ -100,6 +100,9 @@ enum Command {
     /// Install shell integration (bash/zsh/fish)
     Setup(commands::SetupArgs),
 
+    /// Remove shell integration (inverse of `wt setup`)
+    Uninstall(commands::UninstallArgs),
+
     /// Create .agent-workspace.toml config file
     Init(commands::InitArgs),
 
@@ -141,6 +144,7 @@ impl Cli {
             Command::Sync(args) => commands::sync::run(args, &config),
             Command::Mv(args) => commands::r#move::run(args, &config, path_file),
             Command::Setup(args) => commands::sys::setup::run(args),
+            Command::Uninstall(args) => commands::sys::uninstall::run(args),
             Command::Init(args) => commands::sys::init::run(args),
             Command::Update => commands::sys::update::run(),
             Command::SnapContinue => commands::snap::resume::run(&config, path_file),
@@ -285,6 +289,18 @@ mod tests {
     #[test]
     fn test_cli_parse_setup_with_shell() {
         let cli = Cli::try_parse_from(["wt", "setup", "--shell", "bash"]);
+        assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn test_cli_parse_uninstall() {
+        let cli = Cli::try_parse_from(["wt", "uninstall"]);
+        assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn test_cli_parse_uninstall_with_shell() {
+        let cli = Cli::try_parse_from(["wt", "uninstall", "--shell", "powershell"]);
         assert!(cli.is_ok());
     }
 

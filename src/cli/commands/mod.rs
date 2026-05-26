@@ -20,4 +20,4 @@ pub use merge::MergeArgs;
 pub use nav::CdArgs;
 pub use r#move::MoveArgs;
 pub use sync::SyncArgs;
-pub use sys::{InitArgs, SetupArgs};
+pub use sys::{InitArgs, SetupArgs, UninstallArgs};

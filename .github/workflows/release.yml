@@ -155,6 +155,8 @@ jobs:
             dist/agent-workspace-*.tar.gz
             install.sh
             install.ps1
+            uninstall.sh
+            uninstall.ps1
           generate_release_notes: true
           fail_on_unmatched_files: true
 
