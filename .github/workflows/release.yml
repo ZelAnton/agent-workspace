@@ -50,17 +50,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # dtolnay/rust-toolchain — the @stable / @nightly / @beta moving tags
-      # were removed by the upstream maintainer in mid-2026; tracking @master
-      # keeps us on the latest stable Rust (the action picks up a new commit
-      # per rustc release). The action itself is tiny and well-trusted —
-      # we accept the rolling-ref risk for now and can pin to a SHA if
-      # upstream ever breaks.
+      # Migrated off dtolnay/rust-toolchain in v0.12.10. The upstream
+      # maintainer removed the @stable / @nightly / @beta moving tags in
+      # mid-2026, AND GitHub Actions' codeload was returning 404 for every
+      # SHA in that repo (works via direct curl — Actions-specific routing
+      # issue we couldn't get around). actions-rust-lang/setup-rust-toolchain
+      # is the official successor: same API surface, actively maintained,
+      # different codeload entry that resolves fine.
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
-          targets: ${{ matrix.target }}
+          target: ${{ matrix.target }}
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
