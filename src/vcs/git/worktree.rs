@@ -182,7 +182,8 @@ fn create_worktree_cow(
 
         // 5. Reflink-copy every file/dir from repo root to `path`, except
         // `.git/` (which `--no-checkout` already created as a gitlink).
-        eprintln!("  Cloning files via reflink...");
+        // `try_clone_dir_except` prints its own scan-spinner + progress bar
+        // and a "Cloned N files (X GB) via reflink." summary on completion.
         if let Err(e) = crate::cow::try_clone_dir_except(repo_root, path, &[".git"]) {
             // CoW failed mid-walk. Remove the half-populated worktree dir
             // and run `git worktree prune` so git's registry stays clean.

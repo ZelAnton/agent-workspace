@@ -223,7 +223,8 @@ fn create_worktree_cow(
         //    into the new workspace. Skip BOTH `.jj/` (jj's metadata that
         //    new workspace already set up) AND `.git/` (colocated repos
         //    have it too; new workspace doesn't need a copy).
-        eprintln!("  Cloning files via reflink...");
+        // `try_clone_dir_except` prints its own scan-spinner + progress bar
+        // and a "Cloned N files (X GB) via reflink." summary on completion.
         crate::cow::try_clone_dir_except(repo_root, path, &[".jj", ".git"])
             .map_err(Error::from)?;
 

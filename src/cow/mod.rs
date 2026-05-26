@@ -116,6 +116,38 @@ impl Drop for Cleanup<'_> {
     }
 }
 
+/// Build the `ignore::Walk` used by both the scan and copy passes of
+/// [`try_clone_dir_except`]. Single source of truth for filter rules —
+/// the scan pass MUST visit the same set the copy pass will, otherwise
+/// the total-bytes denominator would diverge from the actual work and the
+/// progress bar would over- or under-shoot.
+fn build_clone_walker(src: &Path, excludes: &[String]) -> ignore::Walk {
+    use ignore::WalkBuilder;
+
+    let excludes_owned = excludes.to_vec();
+    WalkBuilder::new(src)
+        // Walk everything — including hidden files. We want a complete
+        // mirror, not a gitignore-filtered subset.
+        .standard_filters(false)
+        .hidden(false)
+        .git_ignore(false)
+        .git_global(false)
+        .git_exclude(false)
+        // Don't follow symlinks; copy them as-is below.
+        .follow_links(false)
+        // Filter the immediate-child excludes (`.git/`, `.jj/`).
+        .filter_entry(move |entry| {
+            if entry.depth() == 1
+                && let Some(name) = entry.file_name().to_str()
+                && excludes_owned.iter().any(|ex| ex == name)
+            {
+                return false;
+            }
+            true
+        })
+        .build()
+}
+
 /// Recursively clone every file/dir from `src` into `dst`, skipping any
 /// top-level directory whose name matches an entry in `excludes`.
 ///
@@ -128,50 +160,97 @@ impl Drop for Cleanup<'_> {
 /// Excludes are matched against the immediate child name only — nested
 /// directories named `.git` deeper in the tree are NOT skipped (mirrors
 /// git's worktree semantics: only the root `.git` is special).
+///
+/// **Progress UI** — two-pass for accurate ETA on large monorepos:
+///   1. Scan pass walks every entry, counting files and summing sizes.
+///      Shown as a spinner with live "N files, M GB" message. On a 20+ GB
+///      tree this takes a few seconds (metadata stats only, no file I/O).
+///   2. Copy pass does the actual reflink + per-file fallback, updating a
+///      byte-based progress bar with ETA, current path, and file count.
+///
+/// `indicatif` auto-detects TTY on stderr — when piped, both pass UIs are
+/// no-op draw targets and only the regular `eprintln!` warnings surface.
 pub fn try_clone_dir_except(src: &Path, dst: &Path, excludes: &[&str]) -> Result<()> {
-    use ignore::WalkBuilder;
+    use indicatif::{HumanBytes, ProgressBar, ProgressStyle};
+    use std::time::Duration;
 
-    let walker = WalkBuilder::new(src)
-        // Walk everything — including hidden files. We want a complete
-        // mirror, not a gitignore-filtered subset (user's spec: "копируем
-        // всё, включая неотслеживаемые файлы").
-        .standard_filters(false)
-        .hidden(false)
-        .git_ignore(false)
-        .git_global(false)
-        .git_exclude(false)
-        // Don't follow symlinks; copy them as-is below.
-        .follow_links(false)
-        // Filter the immediate-child excludes (`.git/`, `.jj/`).
-        .filter_entry({
-            let src_owned = src.to_path_buf();
-            let excludes_owned: Vec<String> = excludes.iter().map(|s| s.to_string()).collect();
-            move |entry| {
-                if entry.depth() == 1
-                    && let Some(name) = entry.file_name().to_str()
-                    && excludes_owned.iter().any(|ex| ex == name)
-                {
-                    return false;
-                }
-                // Skip the root entry itself only when... actually we never
-                // want to skip it. `WalkBuilder` yields the root first;
-                // it's a directory we treat as no-op below.
-                let _ = src_owned;
-                true
+    let excludes_owned: Vec<String> = excludes.iter().map(|s| s.to_string()).collect();
+
+    // ------------------------------------------------------------------
+    // Phase 1: scan to learn total files + total bytes.
+    // ------------------------------------------------------------------
+    // The spinner ticks on a steady timer so even very slow filesystems
+    // (network drives, antivirus-scanned NTFS) give the user constant
+    // visual feedback. We push `set_message` only every 256 files so the
+    // formatter doesn't dominate the scan-loop cost on fast SSDs.
+    let scan_pb = ProgressBar::new_spinner();
+    scan_pb.set_style(
+        ProgressStyle::with_template("  {spinner:.cyan} Scanning files... {msg}")
+            .unwrap()
+            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
+    );
+    scan_pb.enable_steady_tick(Duration::from_millis(80));
+
+    let mut total_files: u64 = 0;
+    let mut total_bytes: u64 = 0;
+    for entry_result in build_clone_walker(src, &excludes_owned) {
+        let entry = match entry_result {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let ft = match entry.file_type() {
+            Some(ft) => ft,
+            None => continue,
+        };
+        if ft.is_file() {
+            total_files += 1;
+            if let Ok(meta) = entry.metadata() {
+                total_bytes += meta.len();
             }
-        })
-        .build();
+            if total_files.is_multiple_of(256) {
+                scan_pb.set_message(format!(
+                    "{} files, {}",
+                    total_files,
+                    HumanBytes(total_bytes)
+                ));
+            }
+        }
+    }
+    scan_pb.finish_and_clear();
 
-    for entry_result in walker {
+    // ------------------------------------------------------------------
+    // Phase 2: actual copy, with byte-based progress + per-file count.
+    // ------------------------------------------------------------------
+    // Byte-based (not file-based) progress because file sizes in a real
+    // monorepo are wildly skewed — a 4 GB `node_modules.tar` next to
+    // 50,000 1-KB sources. File-count percent would jump from 1% to 99%
+    // in three big files; byte-count tracks actual disk throughput.
+    let pb = ProgressBar::new(total_bytes);
+    pb.set_style(
+        ProgressStyle::with_template(
+            "  {spinner:.cyan} [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({percent}%) | {msg} | ETA {eta}",
+        )
+        .unwrap()
+        .progress_chars("█▉▊▋▌▍▎▏ ")
+        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
+    );
+    pb.enable_steady_tick(Duration::from_millis(80));
+    pb.set_message(format!("0/{} files", total_files));
+
+    let mut copied_files: u64 = 0;
+    for entry_result in build_clone_walker(src, &excludes_owned) {
         // Walker errors are per-entry (permission denied on one file,
         // broken symlink during traversal, etc.). Log and continue
         // instead of aborting the whole clone — a partial worktree with
         // explicit warnings is more useful than a hard failure that
         // forces the user to fall back to `--no-cow` and retry.
+        //
+        // `pb.suspend` temporarily hides the bar so the warning line
+        // doesn't get overdrawn on the next tick.
         let entry = match entry_result {
             Ok(e) => e,
             Err(e) => {
-                eprintln!("Warning: cow walk skipped entry: {e}");
+                pb.suspend(|| eprintln!("Warning: cow walk skipped entry: {e}"));
                 continue;
             }
         };
@@ -187,6 +266,15 @@ pub fn try_clone_dir_except(src: &Path, dst: &Path, excludes: &[&str]) -> Result
         let file_type = match entry.file_type() {
             Some(ft) => ft,
             None => continue,
+        };
+
+        // Cache the file size before the copy: we need it for `pb.inc()`
+        // after a successful reflink (the reflink call itself doesn't
+        // return a byte count when it actually reflinks vs falls back).
+        let file_size = if file_type.is_file() {
+            entry.metadata().map(|m| m.len()).unwrap_or(0)
+        } else {
+            0
         };
 
         let copy_result = if file_type.is_dir() {
@@ -216,10 +304,32 @@ pub fn try_clone_dir_except(src: &Path, dst: &Path, excludes: &[&str]) -> Result
             Ok(())
         };
 
-        if let Err(e) = copy_result {
-            eprintln!("Warning: cow copy {}: {e}", rel.display());
+        match copy_result {
+            Ok(()) => {
+                if file_type.is_file() {
+                    copied_files += 1;
+                    pb.inc(file_size);
+                    // Throttle the message update — set_message redraws,
+                    // and on a fast reflink path we'd otherwise spend more
+                    // CPU formatting strings than copying. Every 16 files
+                    // is visually smooth and cheap.
+                    if copied_files.is_multiple_of(16) || copied_files == total_files {
+                        pb.set_message(format!("{copied_files}/{total_files} files"));
+                    }
+                }
+            }
+            Err(e) => {
+                pb.suspend(|| eprintln!("Warning: cow copy {}: {e}", rel.display()));
+            }
         }
     }
+
+    pb.finish_and_clear();
+    eprintln!(
+        "  Cloned {} files ({}) via reflink.",
+        copied_files,
+        HumanBytes(total_bytes)
+    );
 
     Ok(())
 }

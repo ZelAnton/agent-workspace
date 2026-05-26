@@ -1,6 +1,6 @@
 [package]
 name = "agent-workspace"
-version = "0.13.2"
+version = "0.13.3"
 edition = "2024"
 rust-version = "1.91"
 description = "Git worktree workflow tool for AI coding agents"
@@ -34,6 +34,12 @@ flate2 = "1"
 tempfile = "3"
 vcs-runner = "0.13"
 reflink-copy = "0.1"
+
+# Progress bars for the CoW reflink clone in `ws new`. On 20+ GB monorepos
+# the clone can take meaningful wall time; a visual progress bar makes the
+# wait obvious instead of a blank tab. Auto-detects TTY (no-op when stderr
+# is piped, so scripts stay quiet).
+indicatif = "0.17"
 
 [target.'cfg(windows)'.dependencies]
 # Volume-serial-number lookup for the CoW same-volume probe.
