@@ -50,9 +50,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # dtolnay/rust-toolchain — the @stable / @nightly / @beta moving tags
+      # were removed by the upstream maintainer in mid-2026; tracking @master
+      # keeps us on the latest stable Rust (the action picks up a new commit
+      # per rustc release). The action itself is tiny and well-trusted —
+      # we accept the rolling-ref risk for now and can pin to a SHA if
+      # upstream ever breaks.
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Cache cargo
