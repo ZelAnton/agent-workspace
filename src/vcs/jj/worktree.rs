@@ -200,6 +200,12 @@ fn create_worktree_cow(
         super::exec(runner, &["edit", &base_commit])?;
     }
 
+    // Windows uses CopyFileExW which transparently block-clones on ReFS.
+    // Linux/macOS use the explicit reflink IOCTLs (ioctl_ficlone /
+    // clonefile). Same outcome, different surfacing.
+    #[cfg(windows)]
+    eprintln!("  Using ReFS block clone...");
+    #[cfg(not(windows))]
     eprintln!("  Using CoW (reflink) clone...");
     let inner: Result<()> = (|| {
         // 5. Create the empty workspace.

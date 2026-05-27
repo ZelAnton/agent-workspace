@@ -134,6 +134,12 @@ fn create_worktree_cow(
     let is_detached = orig_branch == "HEAD";
     let needs_stash = super::branch::has_uncommitted_changes(runner)?;
 
+    // Windows uses CopyFileExW via robocopy which transparently
+    // block-clones on ReFS. Linux/macOS use the explicit reflink IOCTLs
+    // (ioctl_ficlone / clonefile). Same outcome, different surfacing.
+    #[cfg(windows)]
+    eprintln!("  Using ReFS block clone...");
+    #[cfg(not(windows))]
     eprintln!("  Using CoW (reflink) clone...");
 
     // 2. Stash if dirty. `-u` includes untracked.

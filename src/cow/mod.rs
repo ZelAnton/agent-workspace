@@ -430,6 +430,16 @@ fn try_clone_via_robocopy(
     }
     scan_pb.finish_and_clear();
 
+    // Heads-up line so the user knows the multi-minute work that's
+    // about to happen — and what scale of work it is. Without this the
+    // bar appears mysteriously after the scan spinner clears, with no
+    // human-readable preface explaining what's being copied.
+    eprintln!(
+        "  Copying repository: {} files, {}",
+        total_files,
+        HumanBytes(total_bytes)
+    );
+
     // ------------------------------------------------------------------
     // Phase 2: set up the MultiProgress UI — main bar + 10 tail bars.
     // ------------------------------------------------------------------
@@ -701,6 +711,13 @@ fn try_clone_dir_except_inproc(src: &Path, dst: &Path, excludes: &[&str]) -> Res
         // Other file types (sockets, devices, fifos) are skipped silently.
     }
     scan_pb.finish_and_clear();
+
+    // Heads-up line — see the matching block in `try_clone_via_robocopy`.
+    eprintln!(
+        "  Copying repository: {} files, {}",
+        total_files,
+        HumanBytes(total_bytes)
+    );
 
     // ------------------------------------------------------------------
     // Phase 2: create directories in parallel.
