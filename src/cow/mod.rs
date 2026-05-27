@@ -60,7 +60,8 @@ pub const DISABLE_COW_ENV: &str = "WT_DISABLE_COW";
 ///     versions of the crate; the probe is portable.
 ///
 /// `dst_parent` must exist (we don't create it). Caller typically passes
-/// the workspace dir under `$AGENT_WORKSPACE_DIR/workspaces/<id>/`.
+/// the workspace dir under `$AGENT_WORKSPACE_DIR/<id>/` (pre-v0.13.6
+/// installs used `$AGENT_WORKSPACE_DIR/workspaces/<id>/`).
 pub fn can_clone(src_dir: &Path, dst_parent: &Path) -> bool {
     if !same_volume(src_dir, dst_parent).unwrap_or(false) {
         return false;

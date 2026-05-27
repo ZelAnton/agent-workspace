@@ -236,7 +236,51 @@ impl Config {
         // /var-style symlinks in user-data paths.
         let base_dir = base_dir.canonicalize().unwrap_or(base_dir);
         let base_dir = strip_verbatim_prefix(base_dir);
-        let workspaces_dir = base_dir.join("workspaces");
+
+        // v0.13.6+: project worktree directories live DIRECTLY under
+        // `base_dir` (e.g. `~/.agent-workspace/<project>-<hash>/<branch>/`)
+        // — the historical intermediate `workspaces/` subdirectory is gone.
+        // Rationale: one fewer directory level in every shown path, and
+        // it matches the user mental model when `AGENT_WORKSPACE_DIR` is
+        // explicitly set to a dedicated path like `D:/ws/` ("worktrees
+        // live in this drive root, not in this drive root's `workspaces/`
+        // subfolder").
+        //
+        // Reserved top-level names that are NOT project directories:
+        //   - `bin/`               — the binary (installer + ws update)
+        //   - `config.toml`        — global config
+        //   - `install_channel`    — npm / shell channel marker
+        //   - `last_update_check`  — update-check throttle marker
+        //   - `workspaces/`        — legacy pre-0.13.6 worktrees (kept
+        //                            intact for backwards inspection; see
+        //                            the migration warning below)
+        // Project IDs are `<repo-name>-<6-hex-hash>` so collisions with
+        // the reserved names are effectively impossible.
+        let workspaces_dir = base_dir.clone();
+
+        // Migration nudge: if the legacy `workspaces/` subdirectory
+        // exists and has any project dirs in it, the user has worktrees
+        // that this version won't see via `ws ls`. Tell them where to
+        // look and let them decide whether to move/remove. We don't
+        // auto-migrate because worktree internals (git gitlinks, jj
+        // workspace registrations) store absolute paths that would
+        // break on relocation.
+        let legacy_dir = base_dir.join("workspaces");
+        if legacy_dir.is_dir()
+            && let Ok(mut entries) = std::fs::read_dir(&legacy_dir)
+            && entries.next().is_some()
+        {
+            // Print once per process invocation — quiet enough that it
+            // doesn't spam users who just haven't gotten around to
+            // cleaning up.
+            eprintln!(
+                "Note: legacy worktrees in `{}` are not visible to this version of `ws`.\n\
+                 Run `ws rm <branch>` from inside each old worktree to clean up,\n\
+                 or `rm -rf {}` if you don't need them.",
+                legacy_dir.display(),
+                legacy_dir.display(),
+            );
+        }
 
         let global = Self::load_global(&base_dir)?;
         let project = Self::load_project()?;

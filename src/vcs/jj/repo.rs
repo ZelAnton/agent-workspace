@@ -46,9 +46,9 @@ pub(super) fn repo_name(runner: &dyn Runner) -> Result<String> {
 }
 
 /// Workspace ID — identical hashing to `GitBackend::workspace_id()` so
-/// colocated repos keep the same `$AGENT_WORKSPACE_DIR/workspaces/<id>/`
-/// directory whether `ws` resolves to git or jj. **Don't change the
-/// algorithm in isolation** — both backends must move in lockstep.
+/// colocated repos keep the same `$AGENT_WORKSPACE_DIR/<id>/` directory
+/// whether `ws` resolves to git or jj. **Don't change the algorithm in
+/// isolation** — both backends must move in lockstep.
 pub(super) fn workspace_id(runner: &dyn Runner) -> Result<String> {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};

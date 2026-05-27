@@ -250,13 +250,26 @@ post_create = ["pnpm install"]  # Replaces global hooks if set
 
 ```
 ~/.agent-workspace/
+├── bin/                           # ws binary (shell installer)
 ├── config.toml                    # Global config
-└── workspaces/
-    └── {project}/
-        ├── {branch_name}.toml     # Worktree metadata
-        ├── {branch_name}/         # Worktree directory
-        └── ...
+├── install_channel                # 'npm' or 'shell'
+└── {project}-{hash}/              # one dir per source repo
+    ├── {branch_name}.toml         # Worktree metadata
+    ├── {branch_name}/             # Worktree directory
+    └── ...
 ```
+
+> **v0.13.6 layout change** — earlier versions added an extra `workspaces/`
+> directory between the base and the per-project dirs
+> (`~/.agent-workspace/workspaces/{project}-{hash}/{branch}/`). That
+> intermediate level is gone now. Existing `workspaces/` directories from
+> pre-0.13.6 installs are NOT migrated automatically — the worktrees
+> inside have absolute paths baked into git's gitlink / jj's workspace
+> registration that would break on relocation. `ws` prints a one-line
+> migration nudge on startup whenever it spots a non-empty legacy
+> `workspaces/` dir. Run `ws rm <branch>` from inside each old worktree
+> to clean up, or `rm -rf ~/.agent-workspace/workspaces` if you don't
+> need them.
 
 ## License
 
