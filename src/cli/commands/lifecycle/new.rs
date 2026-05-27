@@ -49,6 +49,14 @@ pub struct NewArgs {
 }
 
 pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<()> {
+    // Wall-clock measurement of the full `ws new` body. Printed at the
+    // end as `Elapsed: HH:MM:SS` so the user knows how long a clone of
+    // their repo actually takes (useful when comparing CoW vs plain
+    // checkout, ReFS vs non-ReFS volumes, before/after perf changes).
+    // Started AFTER the terminal-tab dispatch so it measures the
+    // actual-work invocation, not the parent that just spawned a tab.
+    let total_start = std::time::Instant::now();
+
     // Terminal-tab dispatch happens FIRST, before any VCS work, so the
     // user sees the new tab open immediately instead of after the
     // (sometimes slow) workspace-id hash + repo discovery. The spawned
@@ -188,6 +196,7 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
     if let Some(cmd) = args.snap {
         if path_file.is_some() {
             eprintln!("Worktree '{branch}' ready — starting snap mode...");
+            eprintln!("Elapsed: {}", format_elapsed(total_start.elapsed()));
             write_path_file_lines(path_file, &[&wt_path.display().to_string(), &cmd])?;
         } else {
             return Err(Error::Other(
@@ -200,13 +209,36 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
     // Write path for shell integration
     if path_file.is_some() {
         eprintln!("Worktree '{branch}' ready at {}", wt_path.display());
+        eprintln!("Elapsed: {}", format_elapsed(total_start.elapsed()));
         write_path_file(path_file, &wt_path)?;
     } else {
         eprintln!("Created worktree: {branch} (from {})", meta.base_branch);
         eprintln!("Path: {}", wt_path.display());
+        eprintln!("Elapsed: {}", format_elapsed(total_start.elapsed()));
     }
 
     Ok(())
+}
+
+/// Human-friendly duration formatter. Examples:
+///   - 5s        → "5s"
+///   - 47s       → "47s"
+///   - 95s       → "1m 35s"
+///   - 4920s     → "1h 22m 0s"
+/// Lets the user compare wall times across `ws new` invocations at a
+/// glance without doing the H/M/S math themselves.
+fn format_elapsed(d: std::time::Duration) -> String {
+    let total = d.as_secs();
+    let h = total / 3600;
+    let m = (total % 3600) / 60;
+    let s = total % 60;
+    if h > 0 {
+        format!("{h}h {m}m {s}s")
+    } else if m > 0 {
+        format!("{m}m {s}s")
+    } else {
+        format!("{s}s")
+    }
 }
 
 /// Reject patterns that could escape the repo root.

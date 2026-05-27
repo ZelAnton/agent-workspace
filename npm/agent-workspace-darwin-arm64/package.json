@@ -1,6 +1,6 @@
 {
   "name": "@zelanton/agent-workspace-darwin-arm64",
-  "version": "0.13.11",
+  "version": "0.13.12",
   "description": "agent-workspace binary for macOS ARM64",
   "license": "MIT",
   "repository": {

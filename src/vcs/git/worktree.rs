@@ -286,90 +286,87 @@ fn create_worktree_cow(
     Ok(CreateOutcome::CowCloned)
 }
 
-/// Run `git read-tree HEAD` followed by `git update-index --verbose
-/// --really-refresh` in `path`, with a progress bar driven by the
-/// per-entry lines that `--verbose` emits.
+/// Run `git read-tree HEAD` followed by `git update-index --refresh
+/// -q` in `path`, with an elapsed-time spinner so the user sees the
+/// step is alive while it runs (10-30+ s on a 300k-entry index).
 ///
-/// **Why bypass `runner` for the second command**: `runner.run()` buffers
-/// stdout to completion before returning, which means we can't stream
-/// per-line progress out of `update-index`. We use `std::process::Command`
-/// directly to spawn with a piped stdout and read line-by-line.
+/// **Why a spinner and not a progress bar**: an earlier attempt drove
+/// a real progress bar by parsing `git update-index --verbose
+/// --really-refresh` stdout line-by-line. It didn't work on Windows:
+/// when git's stdout is piped to a child process (rather than a TTY),
+/// glibc/MSVCRT buffers the stream in full-block mode (typically 4 KB),
+/// so the per-entry lines pile up in the buffer and flush only when
+/// the process exits. Net effect: the bar stays at 0% for the entire
+/// 20-second refresh and then jumps to 100% at the very end. Worse
+/// than no bar.
 ///
-/// **Why `--really-refresh`** (instead of plain `--refresh`): plain
-/// `--refresh` refuses to update entries with merge conflicts. We just
-/// populated the index from a clean tree so no conflicts exist, but
-/// `--really-refresh` is the no-questions-asked variant that always
-/// processes every entry — which is what we want and what gives us the
-/// reliable per-entry output to count.
-///
-/// **Line format**: with `--verbose`, every refreshed entry prints
-/// either `<path>: needs update` (followed by re-stat that does the
-/// update) or no output if already-clean. After `read-tree HEAD` zero-
-/// stats every entry, ALL of them need update, so we get exactly one
-/// "needs update" line per index entry. Counting them gives us
-/// progress with the total = number of files in HEAD's tree.
+/// Real per-entry progress would need either a PTY (heavyweight dep)
+/// or batched `--stdin`-driven refresh calls. A spinner with elapsed
+/// time gives the user the same liveness signal at zero implementation
+/// cost.
 fn refresh_index_with_progress(runner: &dyn Runner, path: &Path) -> Result<()> {
     use indicatif::{ProgressBar, ProgressStyle};
-    use std::io::{BufRead, BufReader};
-    use std::process::{Command, Stdio};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
-    // Step 1: populate index from HEAD. Fast (no file I/O), no progress
-    // needed.
+    // Step 1: populate index from HEAD. Fast (one file write, no
+    // per-entry I/O), no progress needed.
     runner
         .run(Cmd::new("git").in_dir(path).args(["read-tree", "HEAD"]))
         .map(|_| ())
         .map_err(map_run_err)?;
 
-    // Step 2: discover how many entries are in the index. `git ls-files`
-    // is the cheapest source — one line per entry, exits in well under
-    // a second on a 300k-entry index. We use this as the progress
-    // bar's total.
+    // Step 2: discover how many entries we're about to refresh. Cheap
+    // (under a second even on a 300k-entry index) and gives the spinner
+    // a useful denominator to display.
     let ls_out = runner
         .run(Cmd::new("git").in_dir(path).args(["ls-files"]))
         .map_err(map_run_err)?;
     let total_entries = ls_out.stdout_lossy().lines().count() as u64;
 
-    // Step 3: spawn `git update-index --verbose --really-refresh` with
-    // piped stdout, drain it line-by-line, count "needs update" lines
-    // to drive the bar.
-    let pb = ProgressBar::new(total_entries);
-    pb.set_style(
-        ProgressStyle::with_template(
-            "  {spinner:.cyan} [{wide_bar:.cyan/blue}] {pos}/{len} entries ({percent}%) | ETA {eta}",
-        )
-        .unwrap()
-        .progress_chars("█▉▊▋▌▍▎▏ ")
-        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
-    );
-    pb.set_message("Refreshing git index...");
-    pb.enable_steady_tick(Duration::from_millis(80));
-
     eprintln!("  Refreshing git index ({total_entries} entries)...");
 
-    let mut child = Command::new("git")
-        .current_dir(path)
-        .args(["update-index", "--verbose", "--really-refresh"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| Error::Command(format!("spawn git update-index: {e}")))?;
+    // Step 3: spinner with elapsed-time message, ticking on a steady
+    // timer so it animates even though nothing else updates it. We
+    // attach a background thread that updates `{msg}` once a second
+    // with the wall-clock elapsed seconds — gives a continuously
+    // ticking "Xs elapsed" indicator without requiring real progress
+    // signal from git.
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::with_template("  {spinner:.cyan} {msg}")
+            .unwrap()
+            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
+    );
+    pb.set_message("0s elapsed");
+    pb.enable_steady_tick(Duration::from_millis(80));
 
-    let stdout = child.stdout.take().expect("stdout piped");
-    let pb_clone = pb.clone();
-    let reader_thread = std::thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        for _line in reader.lines().map_while(|r| r.ok()) {
-            pb_clone.inc(1);
+    let started = Instant::now();
+    let pb_for_thread = pb.clone();
+    let stop_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop_flag_for_thread = std::sync::Arc::clone(&stop_flag);
+    let ticker = std::thread::spawn(move || {
+        while !stop_flag_for_thread.load(std::sync::atomic::Ordering::Relaxed) {
+            let elapsed = started.elapsed().as_secs();
+            pb_for_thread.set_message(format!("{elapsed}s elapsed"));
+            std::thread::sleep(Duration::from_millis(500));
         }
     });
 
-    // update-index returns non-zero whenever any entry needed updating
-    // (which is true for every entry here since read-tree just zero-
-    // stat'd them). That's expected — discard the status.
-    let _ = child.wait();
-    let _ = reader_thread.join();
+    // Step 4: do the actual refresh. `-q` suppresses every per-entry
+    // warning so the terminal stays clean. update-index returns
+    // non-zero whenever any entry needed updating (i.e. always after
+    // read-tree zero-stat'd everything), so we discard the status.
+    let _ = runner.run(
+        Cmd::new("git")
+            .in_dir(path)
+            .args(["update-index", "--refresh", "-q"]),
+    );
+
+    stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+    let _ = ticker.join();
     pb.finish_and_clear();
+    let elapsed = started.elapsed().as_secs();
+    eprintln!("  Refreshed {total_entries} entries in {elapsed}s.");
     Ok(())
 }
 
