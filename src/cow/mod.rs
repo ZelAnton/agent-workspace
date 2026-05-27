@@ -286,7 +286,11 @@ fn copy_file(src: &Path, dst: &Path, stats: &CopyStats) -> bool {
 /// `indicatif` auto-detects TTY on stderr — when piped, both pass UIs are
 /// no-op draw targets and only the regular `eprintln!` warnings + final
 /// summary line surface.
-pub fn try_clone_dir_except(src: &Path, dst: &Path, excludes: &[&str]) -> Result<()> {
+/// Returns the total bytes scanned + copied. Callers use this to size
+/// follow-up work (e.g. the git index refresh that runs over every
+/// entry — for >2 GiB trees we batch it for progress; for small trees
+/// a plain spinner is enough).
+pub fn try_clone_dir_except(src: &Path, dst: &Path, excludes: &[&str]) -> Result<u64> {
     // Windows fast path: hand the entire copy off to robocopy. It's the
     // empirically fastest copier on this platform — beats both our
     // parallel `std::fs::copy` and `reflink_copy::reflink_or_copy` on
@@ -296,7 +300,7 @@ pub fn try_clone_dir_except(src: &Path, dst: &Path, excludes: &[&str]) -> Result
     // below.
     #[cfg(windows)]
     match try_clone_via_robocopy(src, dst, excludes) {
-        Ok(()) => return Ok(()),
+        Ok(bytes) => return Ok(bytes),
         Err(RobocopyError::SpawnFailed(e)) => {
             eprintln!(
                 "Note: failed to spawn robocopy ({e}); falling back to in-process copy."
@@ -375,7 +379,7 @@ fn try_clone_via_robocopy(
     src: &Path,
     dst: &Path,
     excludes: &[&str],
-) -> std::result::Result<(), RobocopyError> {
+) -> std::result::Result<u64, RobocopyError> {
     use indicatif::{HumanBytes, MultiProgress, ProgressBar, ProgressStyle};
     use std::collections::VecDeque;
     use std::io::{BufRead, BufReader};
@@ -621,14 +625,14 @@ fn try_clone_via_robocopy(
         total_files,
         HumanBytes(total_bytes)
     );
-    Ok(())
+    Ok(total_bytes)
 }
 
 
 /// In-process fallback used on non-Windows and when robocopy fails to
 /// spawn. Identical to the v0.13.5 implementation — see the trait-level
 /// doc for the 3-phase architecture.
-fn try_clone_dir_except_inproc(src: &Path, dst: &Path, excludes: &[&str]) -> Result<()> {
+fn try_clone_dir_except_inproc(src: &Path, dst: &Path, excludes: &[&str]) -> Result<u64> {
     use indicatif::{HumanBytes, ProgressBar, ProgressStyle};
     use rayon::prelude::*;
     use std::sync::atomic::Ordering;
@@ -836,7 +840,7 @@ fn try_clone_dir_except_inproc(src: &Path, dst: &Path, excludes: &[&str]) -> Res
         );
     }
 
-    Ok(())
+    Ok(total_bytes)
 }
 
 #[cfg(unix)]

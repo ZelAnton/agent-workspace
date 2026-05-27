@@ -1,6 +1,6 @@
 {
   "name": "@zelanton/agent-workspace",
-  "version": "0.13.12",
+  "version": "0.13.13",
   "description": "Git worktree workflow tool for AI agents",
   "keywords": ["cli", "git", "worktree", "ai", "agent"],
   "license": "MIT",

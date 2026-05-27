@@ -231,7 +231,11 @@ fn create_worktree_cow(
         //    have it too; new workspace doesn't need a copy).
         // `try_clone_dir_except` prints its own scan-spinner + progress bar
         // and a "Cloned N files (X GB) via reflink." summary on completion.
+        // We don't care about the returned byte count here — jj's
+        // post-copy reconciliation (`jj sparse set` + `jj status`) does
+        // its own snapshot/refresh that's both small and well-instrumented.
         crate::cow::try_clone_dir_except(repo_root, path, &[".jj", ".git"])
+            .map(|_bytes| ())
             .map_err(Error::from)?;
 
         // 7. Restore sparse-pattern set to "all files" in the new

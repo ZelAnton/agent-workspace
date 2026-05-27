@@ -190,15 +190,18 @@ fn create_worktree_cow(
         // `.git/` (which `--no-checkout` already created as a gitlink).
         // `try_clone_dir_except` prints its own scan-spinner + progress bar
         // and a "Cloned N files (X GB) via reflink." summary on completion.
-        if let Err(e) = crate::cow::try_clone_dir_except(repo_root, path, &[".git"]) {
-            // CoW failed mid-walk. Remove the half-populated worktree dir
-            // and run `git worktree prune` so git's registry stays clean.
-            // Preserve the structured `cow::Error` via `Error::Cow` so
-            // callers/tests can match the underlying cause.
-            let _ = std::fs::remove_dir_all(path);
-            let _ = super::exec(runner, &["worktree", "prune"]);
-            return Err(Error::Cow(e));
-        }
+        let copied_bytes = match crate::cow::try_clone_dir_except(repo_root, path, &[".git"]) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                // CoW failed mid-walk. Remove the half-populated worktree dir
+                // and run `git worktree prune` so git's registry stays clean.
+                // Preserve the structured `cow::Error` via `Error::Cow` so
+                // callers/tests can match the underlying cause.
+                let _ = std::fs::remove_dir_all(path);
+                let _ = super::exec(runner, &["worktree", "prune"]);
+                return Err(Error::Cow(e));
+            }
+        };
 
         // 6. Reconcile the new worktree's index with the actual files on
         //    disk. `git worktree add --no-checkout` leaves the worktree's
@@ -221,12 +224,11 @@ fn create_worktree_cow(
         //    expected here (every entry will), so we ignore it.
         //
         //    Cost: O(num_files) stat() calls, dominated by the same FS
-        //    metadata bandwidth that the copy itself uses. On a 300k-
-        //    file CargoWise repo this adds ~10-30 seconds — slow enough
-        //    that a spinner alone leaves the user wondering if `ws` has
-        //    hung, hence the explicit progress bar driven by `git
-        //    update-index --verbose` line-counting (see helper below).
-        refresh_index_with_progress(runner, path)?;
+        //    metadata bandwidth that the copy itself uses. For small
+        //    repos this is a quick spinner; for >2 GiB repos the helper
+        //    switches to batched `--stdin` mode that drives a real
+        //    progress bar (see helper).
+        refresh_index_with_progress(runner, path, copied_bytes)?;
 
         Ok(())
     })();
@@ -286,27 +288,42 @@ fn create_worktree_cow(
     Ok(CreateOutcome::CowCloned)
 }
 
-/// Run `git read-tree HEAD` followed by `git update-index --refresh
-/// -q` in `path`, with an elapsed-time spinner so the user sees the
-/// step is alive while it runs (10-30+ s on a 300k-entry index).
+/// Strategy threshold: above this many bytes copied, the index refresh
+/// switches to the batched-stdin mode (real progress bar, real cost in
+/// per-batch process spawns) instead of the single-process spinner. On
+/// repos smaller than this the single process finishes fast enough that
+/// the spinner-only path is the better UX — no point eating ~3 s of
+/// spawn overhead to show progress for a 5-second refresh.
+const INDEX_REFRESH_BATCHED_THRESHOLD: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB
+
+/// Run `git read-tree HEAD` to populate the index, then refresh stat
+/// info for every entry. Two implementations:
 ///
-/// **Why a spinner and not a progress bar**: an earlier attempt drove
-/// a real progress bar by parsing `git update-index --verbose
-/// --really-refresh` stdout line-by-line. It didn't work on Windows:
-/// when git's stdout is piped to a child process (rather than a TTY),
-/// glibc/MSVCRT buffers the stream in full-block mode (typically 4 KB),
-/// so the per-entry lines pile up in the buffer and flush only when
-/// the process exits. Net effect: the bar stays at 0% for the entire
-/// 20-second refresh and then jumps to 100% at the very end. Worse
-/// than no bar.
+///   - **Small repos (< 2 GiB copied)**: single `git update-index
+///     --refresh -q` invocation, fronted by an elapsed-time spinner.
+///     Cheap, simple, finishes in 1-5 s.
 ///
-/// Real per-entry progress would need either a PTY (heavyweight dep)
-/// or batched `--stdin`-driven refresh calls. A spinner with elapsed
-/// time gives the user the same liveness signal at zero implementation
-/// cost.
-fn refresh_index_with_progress(runner: &dyn Runner, path: &Path) -> Result<()> {
-    use indicatif::{ProgressBar, ProgressStyle};
-    use std::time::{Duration, Instant};
+///   - **Large repos (≥ 2 GiB copied)**: read the entry list once
+///     (`git ls-files -z`), then run `git update-index --stdin -z
+///     --refresh -q` in batches of `BATCH_SIZE` entries — feeding each
+///     batch's paths via stdin and incrementing a real progress bar
+///     after each batch returns. Spawn overhead is ~50 ms × 60 batches
+///     ≈ 3 s extra wall time on a 300k-entry CargoWise repo, which is
+///     a fair price for visible progress across what would otherwise be
+///     a silent 2-minute step.
+///
+/// **Why not parse `update-index --verbose` stdout for progress in the
+/// single-process path**: tried it in v0.13.11 and confirmed it doesn't
+/// work on Windows. When git's stdout is piped (rather than connected
+/// to a TTY) MSVCRT puts the stream into full-block buffering, so
+/// per-entry verbose lines pile up in the buffer and only flush when
+/// git exits — bar stays at 0% for the entire refresh, jumps to 100%
+/// at the end. Real per-entry progress on a single process would need
+/// a PTY allocation. The batched-stdin approach gets us progress at the
+/// granularity of batches (5 k entries each) without any extra deps —
+/// good enough.
+fn refresh_index_with_progress(runner: &dyn Runner, path: &Path, copied_bytes: u64) -> Result<()> {
+    use std::time::Instant;
 
     // Step 1: populate index from HEAD. Fast (one file write, no
     // per-entry I/O), no progress needed.
@@ -315,9 +332,22 @@ fn refresh_index_with_progress(runner: &dyn Runner, path: &Path) -> Result<()> {
         .map(|_| ())
         .map_err(map_run_err)?;
 
-    // Step 2: discover how many entries we're about to refresh. Cheap
-    // (under a second even on a 300k-entry index) and gives the spinner
-    // a useful denominator to display.
+    let started = Instant::now();
+    if copied_bytes < INDEX_REFRESH_BATCHED_THRESHOLD {
+        refresh_index_spinner(runner, path, started)
+    } else {
+        refresh_index_batched(path, started)
+    }
+}
+
+/// Small-repo path: one `git update-index --refresh -q` call with a
+/// spinner ticking elapsed seconds while it runs.
+fn refresh_index_spinner(runner: &dyn Runner, path: &Path, started: std::time::Instant) -> Result<()> {
+    use indicatif::{ProgressBar, ProgressStyle};
+    use std::time::Duration;
+
+    // Cheap entry count for the user-facing heading; we don't need
+    // it to drive the spinner itself.
     let ls_out = runner
         .run(Cmd::new("git").in_dir(path).args(["ls-files"]))
         .map_err(map_run_err)?;
@@ -325,12 +355,6 @@ fn refresh_index_with_progress(runner: &dyn Runner, path: &Path) -> Result<()> {
 
     eprintln!("  Refreshing git index ({total_entries} entries)...");
 
-    // Step 3: spinner with elapsed-time message, ticking on a steady
-    // timer so it animates even though nothing else updates it. We
-    // attach a background thread that updates `{msg}` once a second
-    // with the wall-clock elapsed seconds — gives a continuously
-    // ticking "Xs elapsed" indicator without requiring real progress
-    // signal from git.
     let pb = ProgressBar::new_spinner();
     pb.set_style(
         ProgressStyle::with_template("  {spinner:.cyan} {msg}")
@@ -340,7 +364,6 @@ fn refresh_index_with_progress(runner: &dyn Runner, path: &Path) -> Result<()> {
     pb.set_message("0s elapsed");
     pb.enable_steady_tick(Duration::from_millis(80));
 
-    let started = Instant::now();
     let pb_for_thread = pb.clone();
     let stop_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stop_flag_for_thread = std::sync::Arc::clone(&stop_flag);
@@ -352,10 +375,6 @@ fn refresh_index_with_progress(runner: &dyn Runner, path: &Path) -> Result<()> {
         }
     });
 
-    // Step 4: do the actual refresh. `-q` suppresses every per-entry
-    // warning so the terminal stays clean. update-index returns
-    // non-zero whenever any entry needed updating (i.e. always after
-    // read-tree zero-stat'd everything), so we discard the status.
     let _ = runner.run(
         Cmd::new("git")
             .in_dir(path)
@@ -364,6 +383,98 @@ fn refresh_index_with_progress(runner: &dyn Runner, path: &Path) -> Result<()> {
 
     stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
     let _ = ticker.join();
+    pb.finish_and_clear();
+    let elapsed = started.elapsed().as_secs();
+    eprintln!("  Refreshed {total_entries} entries in {elapsed}s.");
+    Ok(())
+}
+
+/// Large-repo path: batched `update-index --stdin --refresh` invocations
+/// with a real progress bar incrementing after each batch.
+///
+/// Bypasses `runner` because we need direct stdin access (the runner
+/// API doesn't expose it) and we want raw byte output from `ls-files`
+/// (paths can contain bytes that aren't valid UTF-8 on Unix).
+fn refresh_index_batched(path: &Path, started: std::time::Instant) -> Result<()> {
+    use indicatif::{ProgressBar, ProgressStyle};
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
+
+    // Tuning: 5000 entries per batch gives ~60 progress updates on the
+    // CargoWise 300k-entry repo (one every ~2 s during the ~2-minute
+    // run). Smaller batches = smoother progress + more spawn overhead;
+    // larger batches = chunkier progress + less overhead. 5 k is the
+    // empirical sweet spot.
+    const BATCH_SIZE: usize = 5000;
+
+    // Read entry list with raw bytes (paths can be non-UTF-8 on Unix).
+    let ls_output = Command::new("git")
+        .current_dir(path)
+        .args(["ls-files", "-z"])
+        .output()
+        .map_err(|e| Error::Command(format!("spawn git ls-files: {e}")))?;
+    if !ls_output.status.success() {
+        return Err(Error::Command(format!(
+            "git ls-files exited with {}",
+            ls_output.status.code().unwrap_or(-1)
+        )));
+    }
+    let all_paths: Vec<&[u8]> = ls_output
+        .stdout
+        .split(|&b| b == 0)
+        .filter(|p| !p.is_empty())
+        .collect();
+    let total_entries = all_paths.len() as u64;
+
+    eprintln!("  Refreshing git index ({total_entries} entries, batched)...");
+
+    let pb = ProgressBar::new(total_entries);
+    pb.set_style(
+        ProgressStyle::with_template(
+            "  {spinner:.cyan} [{wide_bar:.cyan/blue}] {pos}/{len} entries ({percent}%) | ETA {eta}",
+        )
+        .unwrap()
+        .progress_chars("█▉▊▋▌▍▎▏ ")
+        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
+    );
+    pb.enable_steady_tick(Duration::from_millis(80));
+
+    for chunk in all_paths.chunks(BATCH_SIZE) {
+        // Spawn one `git update-index --stdin -z --refresh -q` per
+        // batch. Each invocation reads paths from stdin (NUL-separated
+        // via `-z`), refreshes their stat info, writes the index, and
+        // exits. We swallow stderr because update-index emits warnings
+        // for entries that "needed update" — every entry needs update
+        // after read-tree zero-stat'd them, so the warnings would be
+        // 5000 lines of noise per batch.
+        let mut child = Command::new("git")
+            .current_dir(path)
+            .args(["update-index", "--stdin", "-z", "--refresh", "-q"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| Error::Command(format!("spawn git update-index: {e}")))?;
+
+        {
+            let mut stdin = child.stdin.take().expect("stdin piped");
+            for &path_bytes in chunk {
+                // `.ok()` because if the child died early (e.g. SIGPIPE)
+                // we'd rather move on than abort the whole refresh.
+                stdin.write_all(path_bytes).ok();
+                stdin.write_all(&[0]).ok();
+            }
+            // stdin dropped here, closing the pipe → EOF signal to git.
+        }
+
+        // update-index --refresh returns non-zero whenever any entry
+        // needed updating (i.e. always after read-tree zero-stat'd
+        // everything), so the status is uninformative for our purposes.
+        let _ = child.wait();
+        pb.inc(chunk.len() as u64);
+    }
+
     pb.finish_and_clear();
     let elapsed = started.elapsed().as_secs();
     eprintln!("  Refreshed {total_entries} entries in {elapsed}s.");
