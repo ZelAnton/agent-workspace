@@ -194,6 +194,44 @@ fn create_worktree_cow(
             return Err(Error::Cow(e));
         }
 
+        // 6. Reconcile the new worktree's index with the actual files on
+        //    disk. `git worktree add --no-checkout` leaves the worktree's
+        //    INDEX empty — it skips the index-population step that the
+        //    default checkout does. Then we materialise files outside of
+        //    git's view (via reflink / robocopy / fs::copy). Result:
+        //    HEAD has all files, index is empty, working tree has all
+        //    files — and `git status` reports every file as both
+        //    "staged deletion" (HEAD → index) and "untracked"
+        //    (working-tree → index).
+        //
+        //    `git read-tree HEAD` populates the index with HEAD's tree
+        //    (no I/O on file contents, just metadata). Then
+        //    `git update-index --refresh -q` walks the index, stats
+        //    every file, and records the actual mtime/size/inode so
+        //    `git status` knows the working tree is in sync. `-q`
+        //    suppresses the "needs update" lines that --refresh
+        //    normally prints for every entry it touches. The exit code
+        //    is non-zero whenever any entry needed updating, which is
+        //    expected here (every entry will), so we ignore it.
+        //
+        //    Cost: O(num_files) stat() calls, dominated by the same FS
+        //    metadata bandwidth that the copy itself uses. On a 300k-
+        //    file CargoWise repo this adds ~3-5 seconds.
+        eprintln!("  Refreshing git index...");
+        runner
+            .run(Cmd::new("git").in_dir(path).args(["read-tree", "HEAD"]))
+            .map(|_| ())
+            .map_err(map_run_err)?;
+        // update-index returns non-zero whenever any entry needed
+        // refreshing (which is true for every entry here, since
+        // read-tree just populated them with zero-stat). Discard
+        // the result so it doesn't trip up callers.
+        let _ = runner.run(
+            Cmd::new("git")
+                .in_dir(path)
+                .args(["update-index", "--refresh", "-q"]),
+        );
+
         Ok(())
     })();
 
