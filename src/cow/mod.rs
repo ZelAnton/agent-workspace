@@ -148,6 +148,41 @@ fn build_clone_walker(src: &Path, excludes: &[String]) -> ignore::Walk {
         .build()
 }
 
+/// One planned filesystem operation captured during the scan pass.
+///
+/// Collecting these up-front (rather than walking twice) means:
+///   - The scan pass already knows every byte we need to copy → accurate
+///     progress bar denominator.
+///   - The copy pass can be driven by `rayon::par_iter` over a `Vec`,
+///     which is trivially parallelisable without re-entering the walker.
+enum PlannedOp {
+    Dir(std::path::PathBuf),
+    File {
+        src: std::path::PathBuf,
+        dst: std::path::PathBuf,
+        size: u64,
+    },
+    Symlink {
+        src: std::path::PathBuf,
+        dst: std::path::PathBuf,
+    },
+}
+
+/// Outcome of a single `reflink_copy::reflink_or_copy` invocation.
+/// Lets the caller report `N reflinked, M copied` instead of an opaque
+/// "cloned X files" — important for verifying that the ReFS block-clone
+/// fast path is actually firing (the crate falls back silently to
+/// `fs::copy` on any per-file error, and historically we threw away the
+/// `Ok(None)` vs `Ok(Some(_))` signal).
+#[derive(Default)]
+struct CopyStats {
+    reflinked: std::sync::atomic::AtomicU64,
+    copied: std::sync::atomic::AtomicU64,
+    errors: std::sync::atomic::AtomicU64,
+    done_files: std::sync::atomic::AtomicU64,
+    done_bytes: std::sync::atomic::AtomicU64,
+}
+
 /// Recursively clone every file/dir from `src` into `dst`, skipping any
 /// top-level directory whose name matches an entry in `excludes`.
 ///
@@ -161,28 +196,48 @@ fn build_clone_walker(src: &Path, excludes: &[String]) -> ignore::Walk {
 /// directories named `.git` deeper in the tree are NOT skipped (mirrors
 /// git's worktree semantics: only the root `.git` is special).
 ///
-/// **Progress UI** — two-pass for accurate ETA on large monorepos:
-///   1. Scan pass walks every entry, counting files and summing sizes.
-///      Shown as a spinner with live "N files, M GB" message. On a 20+ GB
-///      tree this takes a few seconds (metadata stats only, no file I/O).
-///   2. Copy pass does the actual reflink + per-file fallback, updating a
-///      byte-based progress bar with ETA, current path, and file count.
+/// **Architecture** — three phases for accurate ETA and good throughput
+/// on large monorepos:
+///
+///   1. **Scan** (single-threaded walk): visit every entry, record paths,
+///      sizes, and types into a `Vec<PlannedOp>`. Spinner shows live
+///      "N files, M GB" so the user sees progress even during this
+///      metadata-only pass. On a 20+ GB tree this takes a few seconds.
+///
+///   2. **Create dirs** (serial): walk the planned ops and `create_dir_all`
+///      every `PlannedOp::Dir` so parallel file copies in phase 3 don't
+///      race on parent-dir creation. `create_dir_all` is idempotent — we
+///      also call it defensively before each file copy — but doing it
+///      once up-front cuts down on duplicate syscalls.
+///
+///   3. **Parallel copy** (rayon): `par_iter` over the planned files +
+///      symlinks. Each task calls `reflink_copy::reflink_or_copy` and
+///      classifies the result into `reflinked` / `copied` / `error`
+///      counters. The progress bar is shared via `Arc` and updated under
+///      its internal lock — `indicatif::ProgressBar` is `Sync`.
+///
+/// Parallelisation matters: even when the underlying ReFS block-clone
+/// FSCTL is near-instant, the per-file path (open src, stat, create dst,
+/// `set_sparse`, `get_integrity_information`, `set_len`, FSCTL) is 5–7
+/// syscalls. Sequential at ~0.5 ms per file × 100k files ≈ 50 seconds
+/// before any actual data movement — the very bottleneck robocopy works
+/// around with `/MT`.
 ///
 /// `indicatif` auto-detects TTY on stderr — when piped, both pass UIs are
-/// no-op draw targets and only the regular `eprintln!` warnings surface.
+/// no-op draw targets and only the regular `eprintln!` warnings + final
+/// summary line surface.
 pub fn try_clone_dir_except(src: &Path, dst: &Path, excludes: &[&str]) -> Result<()> {
     use indicatif::{HumanBytes, ProgressBar, ProgressStyle};
+    use rayon::prelude::*;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
     use std::time::Duration;
 
     let excludes_owned: Vec<String> = excludes.iter().map(|s| s.to_string()).collect();
 
     // ------------------------------------------------------------------
-    // Phase 1: scan to learn total files + total bytes.
+    // Phase 1: scan + plan.
     // ------------------------------------------------------------------
-    // The spinner ticks on a steady timer so even very slow filesystems
-    // (network drives, antivirus-scanned NTFS) give the user constant
-    // visual feedback. We push `set_message` only every 256 files so the
-    // formatter doesn't dominate the scan-loop cost on fast SSDs.
     let scan_pb = ProgressBar::new_spinner();
     scan_pb.set_style(
         ProgressStyle::with_template("  {spinner:.cyan} Scanning files... {msg}")
@@ -191,66 +246,15 @@ pub fn try_clone_dir_except(src: &Path, dst: &Path, excludes: &[&str]) -> Result
     );
     scan_pb.enable_steady_tick(Duration::from_millis(80));
 
+    let mut planned: Vec<PlannedOp> = Vec::new();
     let mut total_files: u64 = 0;
     let mut total_bytes: u64 = 0;
-    for entry_result in build_clone_walker(src, &excludes_owned) {
-        let entry = match entry_result {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let ft = match entry.file_type() {
-            Some(ft) => ft,
-            None => continue,
-        };
-        if ft.is_file() {
-            total_files += 1;
-            if let Ok(meta) = entry.metadata() {
-                total_bytes += meta.len();
-            }
-            if total_files.is_multiple_of(256) {
-                scan_pb.set_message(format!(
-                    "{} files, {}",
-                    total_files,
-                    HumanBytes(total_bytes)
-                ));
-            }
-        }
-    }
-    scan_pb.finish_and_clear();
 
-    // ------------------------------------------------------------------
-    // Phase 2: actual copy, with byte-based progress + per-file count.
-    // ------------------------------------------------------------------
-    // Byte-based (not file-based) progress because file sizes in a real
-    // monorepo are wildly skewed — a 4 GB `node_modules.tar` next to
-    // 50,000 1-KB sources. File-count percent would jump from 1% to 99%
-    // in three big files; byte-count tracks actual disk throughput.
-    let pb = ProgressBar::new(total_bytes);
-    pb.set_style(
-        ProgressStyle::with_template(
-            "  {spinner:.cyan} [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({percent}%) | {msg} | ETA {eta}",
-        )
-        .unwrap()
-        .progress_chars("█▉▊▋▌▍▎▏ ")
-        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
-    );
-    pb.enable_steady_tick(Duration::from_millis(80));
-    pb.set_message(format!("0/{} files", total_files));
-
-    let mut copied_files: u64 = 0;
     for entry_result in build_clone_walker(src, &excludes_owned) {
-        // Walker errors are per-entry (permission denied on one file,
-        // broken symlink during traversal, etc.). Log and continue
-        // instead of aborting the whole clone — a partial worktree with
-        // explicit warnings is more useful than a hard failure that
-        // forces the user to fall back to `--no-cow` and retry.
-        //
-        // `pb.suspend` temporarily hides the bar so the warning line
-        // doesn't get overdrawn on the next tick.
         let entry = match entry_result {
             Ok(e) => e,
             Err(e) => {
-                pb.suspend(|| eprintln!("Warning: cow walk skipped entry: {e}"));
+                scan_pb.suspend(|| eprintln!("Warning: cow walk skipped entry: {e}"));
                 continue;
             }
         };
@@ -268,68 +272,162 @@ pub fn try_clone_dir_except(src: &Path, dst: &Path, excludes: &[&str]) -> Result
             None => continue,
         };
 
-        // Cache the file size before the copy: we need it for `pb.inc()`
-        // after a successful reflink (the reflink call itself doesn't
-        // return a byte count when it actually reflinks vs falls back).
-        let file_size = if file_type.is_file() {
-            entry.metadata().map(|m| m.len()).unwrap_or(0)
-        } else {
-            0
-        };
-
-        let copy_result = if file_type.is_dir() {
-            std::fs::create_dir_all(&dest).map_err(Error::from)
+        if file_type.is_dir() {
+            planned.push(PlannedOp::Dir(dest));
         } else if file_type.is_file() {
-            // Parent-dir creation MUST be part of `copy_result` (not a bare
-            // `?`) — otherwise a permission failure on `mkdir parent` aborts
-            // the whole walk, contradicting the per-entry-logged contract
-            // that walker errors and reflink errors follow.
-            let mkdir_result = match dest.parent() {
-                Some(parent) => std::fs::create_dir_all(parent).map_err(Error::from),
-                None => Ok(()),
-            };
-            mkdir_result.and_then(|()| {
-                // Reflink with per-file fallback to plain copy. The crate
-                // handles "this kernel/FS doesn't support reflink" by
-                // copying — we don't need to distinguish here.
-                reflink_copy::reflink_or_copy(entry.path(), &dest)
-                    .map(|_| ())
-                    .map_err(Error::from)
-            })
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            total_files += 1;
+            total_bytes += size;
+            planned.push(PlannedOp::File {
+                src: entry.path().to_path_buf(),
+                dst: dest,
+                size,
+            });
+            if total_files.is_multiple_of(256) {
+                scan_pb.set_message(format!(
+                    "{} files, {}",
+                    total_files,
+                    HumanBytes(total_bytes)
+                ));
+            }
         } else if file_type.is_symlink() {
-            copy_symlink(entry.path(), &dest)
-        } else {
-            // Other types (sockets, devices, fifos) are skipped silently —
-            // they don't belong in a worktree.
-            Ok(())
-        };
+            planned.push(PlannedOp::Symlink {
+                src: entry.path().to_path_buf(),
+                dst: dest,
+            });
+        }
+        // Other file types (sockets, devices, fifos) are skipped silently.
+    }
+    scan_pb.finish_and_clear();
 
-        match copy_result {
-            Ok(()) => {
-                if file_type.is_file() {
-                    copied_files += 1;
-                    pb.inc(file_size);
-                    // Throttle the message update — set_message redraws,
-                    // and on a fast reflink path we'd otherwise spend more
-                    // CPU formatting strings than copying. Every 16 files
-                    // is visually smooth and cheap.
-                    if copied_files.is_multiple_of(16) || copied_files == total_files {
-                        pb.set_message(format!("{copied_files}/{total_files} files"));
-                    }
-                }
-            }
-            Err(e) => {
-                pb.suspend(|| eprintln!("Warning: cow copy {}: {e}", rel.display()));
-            }
+    // ------------------------------------------------------------------
+    // Phase 2: create directories serially.
+    // ------------------------------------------------------------------
+    // Doing this up-front means the parallel copy phase doesn't race on
+    // `create_dir_all`. The defensive `create_dir_all(parent)` before
+    // each file copy below stays — it costs only a single stat per file
+    // on the happy path and protects against unusual nesting orders.
+    for op in &planned {
+        if let PlannedOp::Dir(d) = op
+            && let Err(e) = std::fs::create_dir_all(d)
+        {
+            eprintln!("Warning: cow mkdir {}: {e}", d.display());
         }
     }
 
-    pb.finish_and_clear();
-    eprintln!(
-        "  Cloned {} files ({}) via reflink.",
-        copied_files,
-        HumanBytes(total_bytes)
+    // ------------------------------------------------------------------
+    // Phase 3: parallel file copy.
+    // ------------------------------------------------------------------
+    // Byte-based (not file-based) progress because file sizes in a real
+    // monorepo are wildly skewed — a 4 GB `node_modules.tar` next to
+    // 50,000 1-KB sources. File-count percent would jump from 1% to 99%
+    // in three big files; byte-count tracks actual disk throughput.
+    let pb = Arc::new(ProgressBar::new(total_bytes));
+    pb.set_style(
+        ProgressStyle::with_template(
+            "  {spinner:.cyan} [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({percent}%) | {msg} | ETA {eta}",
+        )
+        .unwrap()
+        .progress_chars("█▉▊▋▌▍▎▏ ")
+        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
     );
+    pb.enable_steady_tick(Duration::from_millis(80));
+    pb.set_message(format!("0/{total_files} files"));
+
+    let stats = Arc::new(CopyStats::default());
+
+    planned.par_iter().for_each(|op| {
+        let pb = Arc::clone(&pb);
+        let stats = Arc::clone(&stats);
+        match op {
+            PlannedOp::Dir(_) => {
+                // Already created in phase 2.
+            }
+            PlannedOp::File { src, dst, size } => {
+                // Defensive parent-dir create — `create_dir_all` is a
+                // no-op stat when the directory already exists.
+                if let Some(parent) = dst.parent()
+                    && let Err(e) = std::fs::create_dir_all(parent)
+                {
+                    stats.errors.fetch_add(1, Ordering::Relaxed);
+                    pb.suspend(|| {
+                        eprintln!("Warning: cow mkdir {}: {e}", parent.display())
+                    });
+                    return;
+                }
+                match reflink_copy::reflink_or_copy(src, dst) {
+                    Ok(None) => {
+                        stats.reflinked.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Ok(Some(_bytes)) => {
+                        stats.copied.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(e) => {
+                        stats.errors.fetch_add(1, Ordering::Relaxed);
+                        pb.suspend(|| {
+                            eprintln!("Warning: cow copy {}: {e}", src.display())
+                        });
+                    }
+                }
+                let done_files = stats.done_files.fetch_add(1, Ordering::Relaxed) + 1;
+                stats.done_bytes.fetch_add(*size, Ordering::Relaxed);
+                pb.inc(*size);
+                // Throttle message updates — set_message redraws, and on
+                // the reflink fast path we'd spend more CPU formatting
+                // than cloning. Every 16 files is visually smooth.
+                if done_files.is_multiple_of(16) || done_files == total_files {
+                    pb.set_message(format!("{done_files}/{total_files} files"));
+                }
+            }
+            PlannedOp::Symlink { src, dst } => {
+                if let Some(parent) = dst.parent()
+                    && let Err(e) = std::fs::create_dir_all(parent)
+                {
+                    stats.errors.fetch_add(1, Ordering::Relaxed);
+                    pb.suspend(|| {
+                        eprintln!("Warning: cow mkdir {}: {e}", parent.display())
+                    });
+                    return;
+                }
+                if let Err(e) = copy_symlink(src, dst) {
+                    stats.errors.fetch_add(1, Ordering::Relaxed);
+                    pb.suspend(|| {
+                        eprintln!("Warning: cow symlink {}: {e}", src.display())
+                    });
+                }
+            }
+        }
+    });
+
+    pb.finish_and_clear();
+
+    let reflinked = stats.reflinked.load(Ordering::Relaxed);
+    let copied = stats.copied.load(Ordering::Relaxed);
+    let errors = stats.errors.load(Ordering::Relaxed);
+    let total_done = reflinked + copied;
+
+    // Three reported categories so the user can see whether ReFS
+    // block-clone actually fired:
+    //   - "reflinked": kernel succeeded with FSCTL_DUPLICATE_EXTENTS_TO_FILE
+    //     (or the platform equivalent) — near-instant, share extents.
+    //   - "copied":   reflink_or_copy fell back to fs::copy — real bytes
+    //     moved. Expected for files on volumes that don't support
+    //     block-clone (NTFS, ext4 w/o reflink, etc.) and for the small
+    //     edge cases the reflink-copy crate refuses (cluster-size
+    //     mismatch, etc.).
+    //   - "errors":   neither reflink nor copy worked. Per-file warning
+    //     was already printed; reported here as a final summary count.
+    if errors > 0 {
+        eprintln!(
+            "  Cloned {total_done} files ({}): {reflinked} reflinked, {copied} copied, {errors} errors.",
+            HumanBytes(total_bytes)
+        );
+    } else {
+        eprintln!(
+            "  Cloned {total_done} files ({}): {reflinked} reflinked, {copied} copied.",
+            HumanBytes(total_bytes)
+        );
+    }
 
     Ok(())
 }

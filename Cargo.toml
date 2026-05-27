@@ -1,6 +1,6 @@
 [package]
 name = "agent-workspace"
-version = "0.13.3"
+version = "0.13.4"
 edition = "2024"
 rust-version = "1.91"
 description = "Git worktree workflow tool for AI coding agents"
@@ -40,6 +40,14 @@ reflink-copy = "0.1"
 # wait obvious instead of a blank tab. Auto-detects TTY (no-op when stderr
 # is piped, so scripts stay quiet).
 indicatif = "0.17"
+
+# Parallel file copy in the CoW clone path. Sequential reflinking is
+# bottlenecked by per-file syscall overhead (open + stat + create + sparse
+# IOCTL + integrity IOCTL + set_len + FSCTL_DUPLICATE_EXTENTS_TO_FILE — 7
+# syscalls per file even on ReFS fast-path), so wall time scales linearly
+# with file count even when the actual block-clone is near-instant. rayon
+# distributes that over all cores; matches robocopy's `/MT:N` model.
+rayon = "1"
 
 [target.'cfg(windows)'.dependencies]
 # Volume-serial-number lookup for the CoW same-volume probe.
