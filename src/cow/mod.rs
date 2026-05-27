@@ -538,6 +538,15 @@ fn try_clone_via_robocopy(
             captured_clone.lock().unwrap().push(line.clone());
 
             // Update rolling tail window + redraw the 10 bars.
+            //
+            // The displayed line is left-trimmed (robocopy indents file
+            // entries with several spaces of padding that just waste
+            // tail-frame width) but otherwise untouched — the full
+            // robocopy path needs to be visible so the user can tell
+            // *which* file is currently being copied. indicatif itself
+            // clips the message to terminal width if needed; we don't
+            // pre-cap with our own MAX since on a wide terminal the
+            // cap was throwing away path information that fit fine.
             {
                 let mut w = tail_window_clone.lock().unwrap();
                 if w.len() >= TAIL_LINES {
@@ -545,7 +554,7 @@ fn try_clone_via_robocopy(
                 }
                 w.push_back(line.clone());
                 for (i, msg) in w.iter().enumerate() {
-                    tail_bars_for_thread[i].set_message(truncate_for_display(msg));
+                    tail_bars_for_thread[i].set_message(msg.trim_start().to_string());
                 }
             }
 
@@ -615,25 +624,6 @@ fn try_clone_via_robocopy(
     Ok(())
 }
 
-/// Trim a robocopy line for display in a single tail-frame row.
-///
-/// Robocopy file lines can be longer than the terminal width (e.g.
-/// deep paths in monorepos). The progress bar's terminal-width detection
-/// handles its own wrapping, but the tail bars use a fixed `"{msg}"`
-/// template that would wrap visibly and shift the entire frame. We cap
-/// at ~120 chars and trim from the LEFT (path tails are usually more
-/// informative than the lead-in action word + size).
-#[cfg(windows)]
-fn truncate_for_display(line: &str) -> String {
-    const MAX: usize = 120;
-    if line.chars().count() <= MAX {
-        line.to_string()
-    } else {
-        let trimmed: String = line.chars().rev().take(MAX - 3).collect::<String>()
-            .chars().rev().collect();
-        format!("...{trimmed}")
-    }
-}
 
 /// In-process fallback used on non-Windows and when robocopy fails to
 /// spawn. Identical to the v0.13.5 implementation — see the trait-level

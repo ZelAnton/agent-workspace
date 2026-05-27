@@ -258,29 +258,12 @@ impl Config {
         // the reserved names are effectively impossible.
         let workspaces_dir = base_dir.clone();
 
-        // Migration nudge: if the legacy `workspaces/` subdirectory
-        // exists and has any project dirs in it, the user has worktrees
-        // that this version won't see via `ws ls`. Tell them where to
-        // look and let them decide whether to move/remove. We don't
-        // auto-migrate because worktree internals (git gitlinks, jj
-        // workspace registrations) store absolute paths that would
-        // break on relocation.
-        let legacy_dir = base_dir.join("workspaces");
-        if legacy_dir.is_dir()
-            && let Ok(mut entries) = std::fs::read_dir(&legacy_dir)
-            && entries.next().is_some()
-        {
-            // Print once per process invocation — quiet enough that it
-            // doesn't spam users who just haven't gotten around to
-            // cleaning up.
-            eprintln!(
-                "Note: legacy worktrees in `{}` are not visible to this version of `ws`.\n\
-                 Run `ws rm <branch>` from inside each old worktree to clean up,\n\
-                 or `rm -rf {}` if you don't need them.",
-                legacy_dir.display(),
-                legacy_dir.display(),
-            );
-        }
+        // (Earlier versions printed a legacy-workspaces migration nudge
+        // on every `Config::load()`. Removed in v0.13.11 because the
+        // banner had outlived its usefulness — most users on this
+        // version did the cleanup once and never needed to see it
+        // again, and on the rare upgrade case the nudge in the
+        // README's storage-layout section is sufficient guidance.)
 
         let global = Self::load_global(&base_dir)?;
         let project = Self::load_project()?;
