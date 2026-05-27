@@ -287,6 +287,171 @@ fn copy_file(src: &Path, dst: &Path, stats: &CopyStats) -> bool {
 /// no-op draw targets and only the regular `eprintln!` warnings + final
 /// summary line surface.
 pub fn try_clone_dir_except(src: &Path, dst: &Path, excludes: &[&str]) -> Result<()> {
+    // Windows fast path: hand the entire copy off to robocopy. It's the
+    // empirically fastest copier on this platform — beats both our
+    // parallel `std::fs::copy` and `reflink_copy::reflink_or_copy` on
+    // multi-100k-file repos. Robocopy ships with every Windows since
+    // Vista, so the spawn essentially never fails for a missing binary;
+    // if it does, we fall through to the in-process implementation
+    // below.
+    #[cfg(windows)]
+    match try_clone_via_robocopy(src, dst, excludes) {
+        Ok(()) => return Ok(()),
+        Err(RobocopyError::SpawnFailed(e)) => {
+            eprintln!(
+                "Note: failed to spawn robocopy ({e}); falling back to in-process copy."
+            );
+            // fall through to in-process path
+        }
+        Err(RobocopyError::ExitCode(code)) => {
+            return Err(Error::Io(std::io::Error::other(format!(
+                "robocopy exited with code {code} (>= 8 indicates real errors; \
+                 try `ws new --no-cow` to bypass robocopy)"
+            ))));
+        }
+    }
+
+    try_clone_dir_except_inproc(src, dst, excludes)
+}
+
+#[cfg(windows)]
+enum RobocopyError {
+    /// `Command::new("robocopy").status()` itself failed — typically
+    /// `NotFound` if robocopy somehow isn't on PATH. We fall back to the
+    /// in-process implementation in this case.
+    SpawnFailed(std::io::Error),
+    /// robocopy ran to completion but returned an exit code >= 8
+    /// (real error). The dst may have partial data; don't retry.
+    ExitCode(i32),
+}
+
+/// Copy `src` to `dst` via robocopy. Wall time on a 300k-file / 13 GB
+/// CargoWise repo on a 20-core ReFS DevDrive: ~180s, versus ~263s for
+/// our parallel `std::fs::copy` and ~675s for `reflink_or_copy`.
+///
+/// Robocopy is faster because:
+///   - **/MT:16** — process-internal thread pool with per-file work
+///     stealing, plus larger OS-level I/O batching than rayon gets.
+///   - On modern Windows + ReFS it still triggers the kernel's
+///     auto-block-clone path (same as `CopyFileExW`), so source/dest
+///     extents are shared after copy — disk usage grows only with the
+///     diff, identical to manual reflink.
+///   - Native UTF-16 path handling; no Rust ↔ Win32 marshalling per
+///     file.
+///
+/// **Flags** (concise reference):
+///   - `/E`     — copy all subdirectories, including empty ones
+///   - `/MT:16` — 16-thread parallel copier (matches the user-validated
+///                fastest setting; robocopy's max useful is around
+///                16-32, with diminishing returns past that)
+///   - `/R:1 /W:1` — retry once with a 1-second wait. Default is /R:1M
+///                  which would hang for ~1M minutes on permission
+///                  errors; the override is critical for unattended
+///                  worktree creation.
+///   - `/NFL /NDL /NJH /NJS /NP /NC` — suppress per-file output, job
+///                                     header/summary, percentage, and
+///                                     class column. The spinner above
+///                                     conveys liveness instead.
+///   - `/XD <src>\<excl>` — exclude TOP-LEVEL only (full path makes the
+///                          match exact; a bare name would also exclude
+///                          any deeply-nested directory of the same
+///                          name, which differs from our in-process
+///                          walker's semantics).
+///
+/// **Exit code semantics**: robocopy uses a bitmap, NOT POSIX 0/non-0.
+///   - 0     — nothing to do (source == dest, idempotent)
+///   - 1     — files copied successfully (the happy path)
+///   - 2     — extra files in dst (won't happen for us — dst is fresh)
+///   - 3     — 1+2
+///   - 4-7   — file mismatches (won't happen for us)
+///   - 8+    — real failure (one or more files could not be copied)
+///   - 16    — fatal error (robocopy never started anything)
+///
+/// We treat any code < 8 as success.
+#[cfg(windows)]
+fn try_clone_via_robocopy(
+    src: &Path,
+    dst: &Path,
+    excludes: &[&str],
+) -> std::result::Result<(), RobocopyError> {
+    use indicatif::{ProgressBar, ProgressStyle};
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
+
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::with_template("  {spinner:.cyan} Copying via robocopy /MT:16 ... {msg}")
+            .unwrap()
+            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
+    );
+    pb.enable_steady_tick(Duration::from_millis(80));
+
+    // Robocopy refuses verbatim Windows paths (`\\?\C:\…`) — it errors
+    // out with "ERROR 53 The network path was not found" because it
+    // tries to treat them as UNC. Rust's `canonicalize()` returns
+    // verbatim paths by default on Windows; some callers pass already-
+    // canonicalized paths into us. Strip the prefix here so robocopy
+    // sees plain drive-letter paths regardless of how the caller got
+    // here. See also `config::strip_verbatim_prefix`.
+    let src_stripped = crate::config::strip_verbatim_prefix(src.to_path_buf());
+    let dst_stripped = crate::config::strip_verbatim_prefix(dst.to_path_buf());
+
+    let mut cmd = Command::new("robocopy");
+    cmd.arg(&src_stripped);
+    cmd.arg(&dst_stripped);
+    cmd.arg("/E");
+    cmd.arg("/MT:16");
+    cmd.arg("/R:1");
+    cmd.arg("/W:1");
+    cmd.arg("/NFL");
+    cmd.arg("/NDL");
+    cmd.arg("/NJH");
+    cmd.arg("/NJS");
+    cmd.arg("/NP");
+    cmd.arg("/NC");
+    for exc in excludes {
+        cmd.arg("/XD");
+        // Pass full path so robocopy only excludes the TOP-LEVEL
+        // directory of that name — matching our in-process walker's
+        // semantics. A bare name would also exclude any nested `.git`
+        // (e.g. inside a submodule), which the in-process path keeps.
+        cmd.arg(src_stripped.join(exc));
+    }
+    // Capture robocopy's output so we can surface its diagnostic
+    // text on failure. On success we drop it (the spinner is the only
+    // UI). robocopy's banner / per-file lines / final stats would
+    // otherwise scroll past the spinner and clutter the terminal.
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+
+    let output = cmd.output().map_err(RobocopyError::SpawnFailed)?;
+    pb.finish_and_clear();
+
+    let code = output.status.code().unwrap_or(-1);
+    if code >= 8 {
+        // Re-surface robocopy's diagnostic text — without this the
+        // user sees only "robocopy exited with code 16" with no clue
+        // what went wrong. Robocopy writes its error explanation to
+        // stdout (NOT stderr), so dump stdout primarily.
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprintln!("--- robocopy stdout ---");
+        eprintln!("{}", stdout.trim_end());
+        if !stderr.trim().is_empty() {
+            eprintln!("--- robocopy stderr ---");
+            eprintln!("{}", stderr.trim_end());
+        }
+        eprintln!("-----------------------");
+        return Err(RobocopyError::ExitCode(code));
+    }
+    eprintln!("  Cloned via robocopy /MT:16 (exit {code}).");
+    Ok(())
+}
+
+/// In-process fallback used on non-Windows and when robocopy fails to
+/// spawn. Identical to the v0.13.5 implementation — see the trait-level
+/// doc for the 3-phase architecture.
+fn try_clone_dir_except_inproc(src: &Path, dst: &Path, excludes: &[&str]) -> Result<()> {
     use indicatif::{HumanBytes, ProgressBar, ProgressStyle};
     use rayon::prelude::*;
     use std::sync::atomic::Ordering;
