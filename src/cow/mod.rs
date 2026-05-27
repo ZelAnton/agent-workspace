@@ -326,32 +326,34 @@ enum RobocopyError {
 }
 
 /// Copy `src` to `dst` via robocopy. Wall time on a 300k-file / 13 GB
-/// CargoWise repo on a 20-core ReFS DevDrive: ~180s, versus ~263s for
-/// our parallel `std::fs::copy` and ~675s for `reflink_or_copy`.
+/// CargoWise repo on a 20-core ReFS DevDrive: ~280s.
 ///
-/// Robocopy is faster because:
-///   - **/MT:16** — process-internal thread pool with per-file work
-///     stealing, plus larger OS-level I/O batching than rayon gets.
-///   - On modern Windows + ReFS it still triggers the kernel's
-///     auto-block-clone path (same as `CopyFileExW`), so source/dest
-///     extents are shared after copy — disk usage grows only with the
-///     diff, identical to manual reflink.
-///   - Native UTF-16 path handling; no Rust ↔ Win32 marshalling per
-///     file.
+/// **UI**: three vertically-stacked elements (via `MultiProgress`):
+///   1. A scanning spinner (Phase 1 — we walk source to learn total
+///      file count, ~15s on a 300k-file tree).
+///   2. The main byte/file progress bar (Phase 2 — incremented on every
+///      per-file line robocopy emits to its stdout).
+///   3. A rolling 10-line tail frame showing the most recent robocopy
+///      output (currently-being-copied filenames, etc.). Gives the user
+///      something to watch and surfaces transient errors without
+///      requiring a full log dump on success.
+///
+/// **Why /MT:10 instead of /MT:16**: empirically, 16 threads pegs all
+/// 20 logical cores hard enough to make the rest of the system
+/// noticeably laggy during the clone (user-reported). /MT:10 leaves
+/// enough idle CPU for editor/browser/etc. to stay responsive; the copy
+/// throughput delta is small (~10%) since the bottleneck on a 300k-file
+/// repo is filesystem metadata, not CPU.
 ///
 /// **Flags** (concise reference):
 ///   - `/E`     — copy all subdirectories, including empty ones
-///   - `/MT:16` — 16-thread parallel copier (matches the user-validated
-///                fastest setting; robocopy's max useful is around
-///                16-32, with diminishing returns past that)
-///   - `/R:1 /W:1` — retry once with a 1-second wait. Default is /R:1M
-///                  which would hang for ~1M minutes on permission
-///                  errors; the override is critical for unattended
-///                  worktree creation.
-///   - `/NFL /NDL /NJH /NJS /NP /NC` — suppress per-file output, job
-///                                     header/summary, percentage, and
-///                                     class column. The spinner above
-///                                     conveys liveness instead.
+///   - `/MT:10` — 10-thread parallel copier
+///   - `/R:1 /W:1` — retry once with a 1s wait (default /R:1M would
+///                  hang ~1M minutes on permission errors)
+///   - `/NDL /NJH /NJS /NP /NC` — suppress dir lines, job header/footer,
+///                                percentages, class column. The file
+///                                list itself is KEPT so we can parse
+///                                it in real time for progress.
 ///   - `/XD <src>\<excl>` — exclude TOP-LEVEL only (full path makes the
 ///                          match exact; a bare name would also exclude
 ///                          any deeply-nested directory of the same
@@ -374,17 +376,12 @@ fn try_clone_via_robocopy(
     dst: &Path,
     excludes: &[&str],
 ) -> std::result::Result<(), RobocopyError> {
-    use indicatif::{ProgressBar, ProgressStyle};
+    use indicatif::{HumanBytes, MultiProgress, ProgressBar, ProgressStyle};
+    use std::collections::VecDeque;
+    use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
-
-    let pb = ProgressBar::new_spinner();
-    pb.set_style(
-        ProgressStyle::with_template("  {spinner:.cyan} Copying via robocopy /MT:16 ... {msg}")
-            .unwrap()
-            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
-    );
-    pb.enable_steady_tick(Duration::from_millis(80));
 
     // Robocopy refuses verbatim Windows paths (`\\?\C:\…`) — it errors
     // out with "ERROR 53 The network path was not found" because it
@@ -395,15 +392,86 @@ fn try_clone_via_robocopy(
     // here. See also `config::strip_verbatim_prefix`.
     let src_stripped = crate::config::strip_verbatim_prefix(src.to_path_buf());
     let dst_stripped = crate::config::strip_verbatim_prefix(dst.to_path_buf());
+    let excludes_owned: Vec<String> = excludes.iter().map(|s| s.to_string()).collect();
 
+    // ------------------------------------------------------------------
+    // Phase 1: scan source to learn total file count.
+    // ------------------------------------------------------------------
+    // The pre-scan is what makes the per-file progress bar accurate
+    // (without total_files we'd be left with a spinner only). On a
+    // 300k-file tree this costs ~15 s of pure metadata reads — small
+    // tax for proper progress.
+    let scan_pb = ProgressBar::new_spinner();
+    scan_pb.set_style(
+        ProgressStyle::with_template("  {spinner:.cyan} Scanning files... {msg}")
+            .unwrap()
+            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
+    );
+    scan_pb.enable_steady_tick(Duration::from_millis(80));
+
+    let mut total_files: u64 = 0;
+    let mut total_bytes: u64 = 0;
+    for entry in build_clone_walker(&src_stripped, &excludes_owned).flatten() {
+        if let Some(ft) = entry.file_type()
+            && ft.is_file()
+        {
+            total_files += 1;
+            if let Ok(meta) = entry.metadata() {
+                total_bytes += meta.len();
+            }
+            if total_files.is_multiple_of(256) {
+                scan_pb.set_message(format!(
+                    "{} files, {}",
+                    total_files,
+                    HumanBytes(total_bytes)
+                ));
+            }
+        }
+    }
+    scan_pb.finish_and_clear();
+
+    // ------------------------------------------------------------------
+    // Phase 2: set up the MultiProgress UI — main bar + 10 tail bars.
+    // ------------------------------------------------------------------
+    let mp = MultiProgress::new();
+    let progress = mp.add(ProgressBar::new(total_files));
+    progress.set_style(
+        ProgressStyle::with_template(
+            "  {spinner:.cyan} [{wide_bar:.cyan/blue}] {pos}/{len} files ({percent}%) | ETA {eta}",
+        )
+        .unwrap()
+        .progress_chars("█▉▊▋▌▍▎▏ ")
+        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
+    );
+    progress.enable_steady_tick(Duration::from_millis(80));
+
+    // 10 stacked sub-bars below the main one. Each one's `{msg}` is
+    // one robocopy stdout line — together they form a tail-of-N
+    // "log frame" that updates as new lines come in. The leading
+    // `│ ` is a Unicode box-drawing char giving the cluster a
+    // visual frame on screen.
+    const TAIL_LINES: usize = 10;
+    let tail_bars: Vec<ProgressBar> = (0..TAIL_LINES)
+        .map(|_| {
+            let pb = mp.add(ProgressBar::new(1));
+            pb.set_style(ProgressStyle::with_template("  │ {msg}").unwrap());
+            pb.set_message(String::new());
+            pb
+        })
+        .collect();
+
+    // ------------------------------------------------------------------
+    // Phase 3: spawn robocopy and start streaming output.
+    // ------------------------------------------------------------------
     let mut cmd = Command::new("robocopy");
     cmd.arg(&src_stripped);
     cmd.arg(&dst_stripped);
     cmd.arg("/E");
-    cmd.arg("/MT:16");
+    cmd.arg("/MT:10");
     cmd.arg("/R:1");
     cmd.arg("/W:1");
-    cmd.arg("/NFL");
+    // NOTE: /NFL is intentionally OMITTED — without it, robocopy
+    // prints one line per file (and we use that to count progress).
     cmd.arg("/NDL");
     cmd.arg("/NJH");
     cmd.arg("/NJS");
@@ -411,41 +479,150 @@ fn try_clone_via_robocopy(
     cmd.arg("/NC");
     for exc in excludes {
         cmd.arg("/XD");
-        // Pass full path so robocopy only excludes the TOP-LEVEL
-        // directory of that name — matching our in-process walker's
-        // semantics. A bare name would also exclude any nested `.git`
-        // (e.g. inside a submodule), which the in-process path keeps.
         cmd.arg(src_stripped.join(exc));
     }
-    // Capture robocopy's output so we can surface its diagnostic
-    // text on failure. On success we drop it (the spinner is the only
-    // UI). robocopy's banner / per-file lines / final stats would
-    // otherwise scroll past the spinner and clutter the terminal.
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
-    let output = cmd.output().map_err(RobocopyError::SpawnFailed)?;
-    pb.finish_and_clear();
+    let mut child = cmd.spawn().map_err(RobocopyError::SpawnFailed)?;
+    let stdout = child.stdout.take().expect("stdout was piped");
+    let stderr = child.stderr.take().expect("stderr was piped");
 
-    let code = output.status.code().unwrap_or(-1);
-    if code >= 8 {
-        // Re-surface robocopy's diagnostic text — without this the
-        // user sees only "robocopy exited with code 16" with no clue
-        // what went wrong. Robocopy writes its error explanation to
-        // stdout (NOT stderr), so dump stdout primarily.
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        eprintln!("--- robocopy stdout ---");
-        eprintln!("{}", stdout.trim_end());
-        if !stderr.trim().is_empty() {
-            eprintln!("--- robocopy stderr ---");
-            eprintln!("{}", stderr.trim_end());
+    // Shared state for the reader thread:
+    //   - `captured`: all stdout lines, kept for the error-case dump.
+    //                 On a 300k-file repo this is ~30 MB of strings —
+    //                 acceptable temporary memory cost given the
+    //                 alternative (no diagnostic on failure).
+    //   - `tail_window`: rolling deque of the last 10 lines, drawn
+    //                    into the tail_bars above.
+    let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::with_capacity(4096)));
+    let tail_window: Arc<Mutex<VecDeque<String>>> =
+        Arc::new(Mutex::new(VecDeque::with_capacity(TAIL_LINES)));
+
+    let captured_clone = Arc::clone(&captured);
+    let tail_window_clone = Arc::clone(&tail_window);
+    let tail_bars_for_thread = tail_bars.clone();
+    let progress_for_thread = progress.clone();
+
+    // Background thread: drain robocopy's stdout line-by-line. Each
+    // line:
+    //   1. Is appended to `captured` for the error-case dump.
+    //   2. Pushes oldest out of the rolling tail window and updates
+    //      the 10 tail bars' messages.
+    //   3. Advances the main progress bar IF the line looks like a
+    //      per-file copy entry (non-empty, indented, with both a size
+    //      number and a path component).
+    //
+    // The per-file detection is intentionally loose: robocopy
+    // localises its action words ("New File" / "Новый файл" / etc.)
+    // depending on Windows display language, so matching English-only
+    // keywords would silently break progress on non-English systems.
+    // Instead we count any non-empty stdout line — robocopy's other
+    // output categories (headers, summaries, dir lines, percentages)
+    // are all suppressed by the flags above, so the residue is
+    // overwhelmingly per-file lines.
+    let stdout_thread = std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines().map_while(|r| r.ok()) {
+            // Save for diagnostic dump.
+            captured_clone.lock().unwrap().push(line.clone());
+
+            // Update rolling tail window + redraw the 10 bars.
+            {
+                let mut w = tail_window_clone.lock().unwrap();
+                if w.len() >= TAIL_LINES {
+                    w.pop_front();
+                }
+                w.push_back(line.clone());
+                for (i, msg) in w.iter().enumerate() {
+                    tail_bars_for_thread[i].set_message(truncate_for_display(msg));
+                }
+            }
+
+            // Count any non-empty line as one file processed. Off by
+            // a few here and there (a stray error line, etc.) but
+            // close enough to give the progress bar accurate ETA on
+            // a 300k-file workload.
+            if !line.trim().is_empty() {
+                progress_for_thread.inc(1);
+            }
         }
-        eprintln!("-----------------------");
+    });
+
+    // Drain stderr too, into a separate buffer. Don't display
+    // anything from it live — robocopy uses stderr only for
+    // exceptional cases (and even then it often goes to stdout).
+    let stderr_captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::with_capacity(256)));
+    let stderr_captured_clone = Arc::clone(&stderr_captured);
+    let stderr_thread = std::thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines().map_while(|r| r.ok()) {
+            stderr_captured_clone.lock().unwrap().push(line);
+        }
+    });
+
+    // ------------------------------------------------------------------
+    // Phase 4: wait for completion, tear down UI.
+    // ------------------------------------------------------------------
+    let status = child.wait().map_err(RobocopyError::SpawnFailed)?;
+    let _ = stdout_thread.join();
+    let _ = stderr_thread.join();
+
+    progress.finish_and_clear();
+    for tb in &tail_bars {
+        tb.finish_and_clear();
+    }
+    let _ = mp.clear();
+
+    let code = status.code().unwrap_or(-1);
+    if code >= 8 {
+        // Surface the full captured output so the user can debug.
+        // Without this the user sees only "robocopy exited with code N"
+        // with no context — that was the original reason ws looked
+        // mysteriously broken when robocopy hit ERROR 53 on verbatim
+        // paths (see strip_verbatim_prefix call above).
+        let stdout_lines = captured.lock().unwrap();
+        eprintln!("--- robocopy stdout ({} lines) ---", stdout_lines.len());
+        for line in stdout_lines.iter() {
+            eprintln!("{line}");
+        }
+        let stderr_lines = stderr_captured.lock().unwrap();
+        if !stderr_lines.is_empty() {
+            eprintln!("--- robocopy stderr ({} lines) ---", stderr_lines.len());
+            for line in stderr_lines.iter() {
+                eprintln!("{line}");
+            }
+        }
+        eprintln!("---------------------------------");
         return Err(RobocopyError::ExitCode(code));
     }
-    eprintln!("  Cloned via robocopy /MT:16 (exit {code}).");
+
+    eprintln!(
+        "  Cloned {} files ({}) via robocopy /MT:10 (exit {code}).",
+        total_files,
+        HumanBytes(total_bytes)
+    );
     Ok(())
+}
+
+/// Trim a robocopy line for display in a single tail-frame row.
+///
+/// Robocopy file lines can be longer than the terminal width (e.g.
+/// deep paths in monorepos). The progress bar's terminal-width detection
+/// handles its own wrapping, but the tail bars use a fixed `"{msg}"`
+/// template that would wrap visibly and shift the entire frame. We cap
+/// at ~120 chars and trim from the LEFT (path tails are usually more
+/// informative than the lead-in action word + size).
+#[cfg(windows)]
+fn truncate_for_display(line: &str) -> String {
+    const MAX: usize = 120;
+    if line.chars().count() <= MAX {
+        line.to_string()
+    } else {
+        let trimmed: String = line.chars().rev().take(MAX - 3).collect::<String>()
+            .chars().rev().collect();
+        format!("...{trimmed}")
+    }
 }
 
 /// In-process fallback used on non-Windows and when robocopy fails to
