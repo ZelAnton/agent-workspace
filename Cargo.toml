@@ -1,6 +1,6 @@
 [package]
 name = "agent-workspace"
-version = "0.13.15"
+version = "0.13.16"
 edition = "2024"
 rust-version = "1.91"
 description = "Git worktree workflow tool for AI coding agents"
@@ -20,6 +20,11 @@ clap_complete = { version = "4", features = ["unstable-dynamic"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1.0"
+# `toml_edit` preserves comments and formatting when rewriting an
+# existing TOML file — used by `ws config set/unset` so the user's
+# hand-written `.agent-workspace.toml` doesn't get reflowed into
+# canonical form on every write.
+toml_edit = "0.22"
 directories = "6"
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"

@@ -24,7 +24,7 @@ pub struct MoveArgs {
 
 pub fn run(args: MoveArgs, config: &Config, path_file: Option<&Path>) -> Result<()> {
     let workspace_id = vcs::workspace_id()?;
-    let wt_dir = config.workspaces_dir.join(&workspace_id);
+    let wt_dir = config.project_dir_for(&workspace_id);
 
     // Resolve '.' to current branch
     let old_branch = if args.old_branch == "." {

@@ -84,7 +84,7 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
     // Ensure we're in a git repo
     let repo_root = vcs::repo_root()?;
     let workspace_id = vcs::workspace_id()?;
-    let workspace_dir = config.workspaces_dir.join(&workspace_id);
+    let workspace_dir = config.project_dir_for(&workspace_id);
 
     // Nested snap stacks two loops in the parent shell and breaks cwd tracking
     // when the inner one finishes.

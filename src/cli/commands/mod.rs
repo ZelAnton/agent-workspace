@@ -7,6 +7,7 @@ pub mod nav;
 pub mod snap;
 pub mod sys;
 
+pub mod config;
 pub mod ls;
 pub mod merge;
 pub mod r#move;
@@ -15,6 +16,7 @@ pub mod status;
 pub mod sync;
 
 // Re-export argument types
+pub use config::ConfigArgs;
 pub use lifecycle::{CleanArgs, NewArgs, RmArgs};
 pub use ls::LsArgs;
 pub use merge::MergeArgs;

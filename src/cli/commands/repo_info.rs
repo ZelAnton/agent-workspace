@@ -38,7 +38,7 @@ pub fn run(args: RepoInfoArgs, config: &Config) -> Result<()> {
     // git/jj worktree gitlinks back to the main repo.
     let repo_root = vcs::repo_root().map_err(|e| Error::Other(e.to_string()))?;
     let workspace_id = vcs::workspace_id().map_err(|e| Error::Other(e.to_string()))?;
-    let project_dir = config.workspaces_dir.join(&workspace_id);
+    let project_dir = config.project_dir_for(&workspace_id);
 
     // The cache walks the *same* set of files that the cow-copy step
     // walks — top-level `.git/` always excluded; colocated repos also

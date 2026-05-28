@@ -96,6 +96,12 @@ enum Command {
     /// scan; auto-refreshed every 30 days. Pass `--refresh` to force.
     RepoInfo(commands::RepoInfoArgs),
 
+    /// Get / set / unset / list per-repo settings in
+    /// `.agent-workspace.toml`. Currently supported keys:
+    /// `workspace.alias` (string), `workspace.use_path_hash` (bool).
+    /// Run `ws config list` for the up-to-date roster + descriptions.
+    Config(commands::ConfigArgs),
+
     /// Sync current worktree from trunk
     Sync(commands::SyncArgs),
 
@@ -147,6 +153,7 @@ impl Cli {
             Command::Merge(args) => commands::merge::run(args, &config, path_file),
             Command::Status => commands::status::run(&config),
             Command::RepoInfo(args) => commands::repo_info::run(args, &config),
+            Command::Config(args) => commands::config::run(args),
             Command::Sync(args) => commands::sync::run(args, &config),
             Command::Mv(args) => commands::r#move::run(args, &config, path_file),
             Command::Setup(args) => commands::sys::setup::run(args),

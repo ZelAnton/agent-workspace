@@ -27,7 +27,7 @@ pub fn run(args: RmArgs, config: &Config, path_file: Option<&Path>) -> Result<()
     // Get main repo path BEFORE any destructive operations
     let main_path = vcs::repo_root()?;
     let workspace_id = vcs::workspace_id()?;
-    let wt_dir = config.workspaces_dir.join(&workspace_id);
+    let wt_dir = config.project_dir_for(&workspace_id);
 
     // Resolve '.' to current branch
     let branch = if args.branch == "." {

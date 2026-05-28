@@ -128,7 +128,7 @@ fn resolve_target_and_title(
         }
         Some(b) => {
             let workspace_id = vcs::workspace_id()?;
-            let wt_dir = config.workspaces_dir.join(&workspace_id);
+            let wt_dir = config.project_dir_for(&workspace_id);
             let wt_path = wt_dir.join(b);
             Ok((wt_path, b.to_string()))
         }

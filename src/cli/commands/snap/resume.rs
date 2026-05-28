@@ -68,7 +68,7 @@ pub fn gather_context(config: &Config) -> Result<SnapContext> {
     let repo_root = vcs::repo_root()?;
 
     // Load metadata to get base_branch (fallback to legacy .status.toml).
-    let wt_dir = config.workspaces_dir.join(&workspace_id);
+    let wt_dir = config.project_dir_for(&workspace_id);
     let meta_path = meta::meta_path_with_fallback(&wt_dir, &branch);
     let loaded_meta = WorktreeMeta::load(&meta_path).ok();
 
@@ -164,7 +164,7 @@ pub fn cleanup_worktree(wt_path: &Path, branch: &str, config: &Config) -> Result
 
     // Remove metadata
     if let Ok(workspace_id) = vcs::workspace_id() {
-        let wt_dir = config.workspaces_dir.join(&workspace_id);
+        let wt_dir = config.project_dir_for(&workspace_id);
         meta::remove_meta(&wt_dir, branch);
     }
 

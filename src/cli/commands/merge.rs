@@ -46,7 +46,7 @@ fn run_merge(
 ) -> Result<()> {
     let current = vcs::current_branch()?;
     let workspace_id = vcs::workspace_id()?;
-    let wt_dir = config.workspaces_dir.join(&workspace_id);
+    let wt_dir = config.project_dir_for(&workspace_id);
 
     // --into target must exist AND not be checked out elsewhere.
     // git refuses to checkout a branch that another worktree owns; without
@@ -266,7 +266,7 @@ pub fn execute_merge(branch: &str, trunk: &str, strategy: MergeStrategy) -> Resu
 /// Clean up worktree after successful merge
 pub fn cleanup_worktree(branch: &str, config: &Config) -> Result<()> {
     let workspace_id = vcs::workspace_id()?;
-    let wt_dir = config.workspaces_dir.join(&workspace_id);
+    let wt_dir = config.project_dir_for(&workspace_id);
     let wt_path = wt_dir.join(branch);
 
     eprintln!("Cleaning up worktree: {branch}");

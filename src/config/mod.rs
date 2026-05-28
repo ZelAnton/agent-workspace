@@ -119,6 +119,50 @@ pub struct ProjectConfig {
     /// precedence over the global `[create]` table.
     #[serde(default)]
     pub create: ProjectCreateConfig,
+
+    /// Project-level workspace-directory naming overrides. Controls how
+    /// the per-repo project directory under `$AGENT_WORKSPACE_DIR` is
+    /// named for THIS repo. See [`ProjectWorkspaceConfig`].
+    #[serde(default)]
+    pub workspace: ProjectWorkspaceConfig,
+}
+
+/// Per-repo settings controlling the workspace-directory NAME chosen
+/// for `ws new` / `ws ls` / etc. — i.e. the directory under
+/// `$AGENT_WORKSPACE_DIR` that holds all of this repo's worktrees.
+///
+/// Defaults (no `[workspace]` table in the project config) give:
+///   - `alias`         = None → use the repo's basename (e.g.
+///                       `CargoWise`).
+///   - `use_path_hash` = None → resolved to `false`, i.e. NO
+///                       `-<hash>` suffix. Earlier versions of `ws`
+///                       always appended a 6-hex disambiguation suffix
+///                       (`CargoWise-56f172`) computed from the repo
+///                       root path; that's now opt-in via
+///                       `use_path_hash = true` for users with
+///                       multiple same-named repos at different
+///                       paths.
+///
+/// Set via the new `ws config` subcommand or by editing
+/// `.agent-workspace.toml` directly:
+///
+/// ```toml
+/// [workspace]
+/// alias = "my-cargowise"
+/// use_path_hash = false
+/// ```
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct ProjectWorkspaceConfig {
+    /// Override the repo basename in the workspace-dir path. Useful
+    /// when the on-disk directory name is generic (e.g. `repo`) but
+    /// you want the workspace dir to be more descriptive
+    /// (`my-cargowise`).
+    pub alias: Option<String>,
+
+    /// When `Some(true)`, append `-<6-hex-hash>` to the workspace dir
+    /// name (where the hash is derived from the repo root path). The
+    /// pre-v0.13.16 behaviour. `None` or `Some(false)` = no suffix.
+    pub use_path_hash: Option<bool>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -222,6 +266,17 @@ pub struct Config {
     /// Resolved `[create] use_cow` (project over global). See
     /// [`CreateConfig::use_cow`].
     pub use_cow: bool,
+
+    /// Resolved `[workspace] alias` from the project config. `None` =
+    /// use the repo's basename in workspace-dir paths. See
+    /// [`ProjectWorkspaceConfig::alias`].
+    pub workspace_alias: Option<String>,
+
+    /// Resolved `[workspace] use_path_hash` from the project config.
+    /// `false` (default) = workspace dir is `<name>/`; `true` =
+    /// `<name>-<6-hex-hash>/` (pre-v0.13.16 behaviour). See
+    /// [`ProjectWorkspaceConfig::use_path_hash`].
+    pub use_path_hash: bool,
 }
 
 impl Config {
@@ -288,6 +343,8 @@ impl Config {
 
         let open_in_new_tab = project.ui.open_in_new_tab.unwrap_or(global.ui.open_in_new_tab);
         let use_cow = project.create.use_cow.unwrap_or(global.create.use_cow);
+        let workspace_alias = project.workspace.alias.clone();
+        let use_path_hash = project.workspace.use_path_hash.unwrap_or(false);
 
         Ok(Self {
             base_dir,
@@ -301,7 +358,67 @@ impl Config {
             vcs_global: global.general.vcs,
             open_in_new_tab,
             use_cow,
+            workspace_alias,
+            use_path_hash,
         })
+    }
+
+    /// Resolve the per-repo workspace directory under `workspaces_dir`.
+    ///
+    /// The directory name is one of (in priority order):
+    ///   1. `<alias>-<hash>` if `use_path_hash = true` AND alias set
+    ///   2. `<alias>`        if alias set, no path hash
+    ///   3. `<repo>-<hash>`  if `use_path_hash = true`, no alias
+    ///   4. `<repo>`         (default) — just the repo basename
+    ///
+    /// **Backward compatibility**: pre-v0.13.16 always used form (3).
+    /// If the user upgrades and their project config has neither alias
+    /// nor `use_path_hash = true`, the new default would be (4) and
+    /// any existing worktrees in the (3) directory would be lost from
+    /// `ws ls`. To preserve them transparently we check on disk: if
+    /// the (4) directory doesn't exist BUT the (3) directory does, we
+    /// keep using (3). The user can flip `use_path_hash` explicitly
+    /// to lock in either form.
+    ///
+    /// `workspace_id` is the VCS-provided `<repo>-<hash>` string we
+    /// already compute everywhere (see `vcs::workspace_id`). Parsed
+    /// via `rsplit_once('-')` to extract the hash; this handles repos
+    /// whose names contain dashes (`agent-workspace-abc123` →
+    /// name=`agent-workspace`, hash=`abc123`).
+    pub fn project_dir_for(&self, workspace_id: &str) -> PathBuf {
+        let (repo_name, hash) = workspace_id
+            .rsplit_once('-')
+            .map(|(n, h)| (n, h))
+            .unwrap_or((workspace_id, ""));
+
+        let display_name = self.workspace_alias.as_deref().unwrap_or(repo_name);
+
+        if self.use_path_hash {
+            let name = if hash.is_empty() {
+                display_name.to_string()
+            } else {
+                format!("{display_name}-{hash}")
+            };
+            return self.workspaces_dir.join(name);
+        }
+
+        // No-hash form is the new default. Before returning, check
+        // for the legacy hash-suffixed dir on disk and prefer it if
+        // it exists — keeps existing worktrees accessible after the
+        // user upgrades without forcing a manual rename.
+        let no_hash = self.workspaces_dir.join(display_name);
+        if no_hash.exists() {
+            return no_hash;
+        }
+        if !hash.is_empty() {
+            let with_hash = self
+                .workspaces_dir
+                .join(format!("{display_name}-{hash}"));
+            if with_hash.exists() {
+                return with_hash;
+            }
+        }
+        no_hash // fresh repo; will be created at the no-hash path
     }
 
     /// 解析 trunk 分支：配置 > 自动检测 > 默认 "main"
@@ -708,6 +825,7 @@ trunk = "develop"
             hooks: HooksConfig::default(),
             ui: ProjectUiConfig::default(),
             create: ProjectCreateConfig::default(),
+            workspace: ProjectWorkspaceConfig::default(),
         };
         let serialized = toml::to_string(&config).unwrap();
         assert!(serialized.contains("develop"));

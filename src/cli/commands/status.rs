@@ -10,7 +10,7 @@ use crate::meta::{self, WorktreeMeta};
 pub fn run(config: &Config) -> Result<()> {
     let current = vcs::current_branch()?;
     let workspace_id = vcs::workspace_id()?;
-    let wt_dir = config.workspaces_dir.join(&workspace_id);
+    let wt_dir = config.project_dir_for(&workspace_id);
     let wt_path = wt_dir.join(&current);
 
     if !wt_path.exists() {

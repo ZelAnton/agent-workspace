@@ -23,7 +23,7 @@ pub fn run(args: CleanArgs, config: &Config, path_file: Option<&Path>) -> Result
     // Get main repo path before any operations
     let main_path = vcs::repo_root()?;
     let workspace_id = vcs::workspace_id()?;
-    let wt_dir = config.workspaces_dir.join(&workspace_id);
+    let wt_dir = config.project_dir_for(&workspace_id);
 
     if !wt_dir.exists() {
         eprintln!("No worktrees to clean.");
