@@ -125,6 +125,59 @@ pub struct ProjectConfig {
     /// named for THIS repo. See [`ProjectWorkspaceConfig`].
     #[serde(default)]
     pub workspace: ProjectWorkspaceConfig,
+
+    /// Project-level CoW-copy exclusions — gitignore-style patterns the
+    /// CoW path skips when copying the source repo into a new worktree.
+    /// See [`ProjectCopyConfig`].
+    #[serde(default)]
+    pub copy: ProjectCopyConfig,
+}
+
+/// User-facing copy-exclusion list for the CoW worktree-creation path.
+///
+/// `ws new` normally copies every file from the source repo into the
+/// new worktree (excluding `.git` and, on colocated repos, `.jj` —
+/// those are hard-coded and not user-configurable). On a real monorepo
+/// users often want to skip generated artefacts they neither need nor
+/// want copied into a throwaway worktree: `target/`, `node_modules/`,
+/// `Bin/`, big assets like ISOs, etc.
+///
+/// Patterns are gitignore-style, matched via
+/// [`ignore::gitignore::Gitignore`] rooted at the repo. The matcher
+/// understands:
+///
+///   - `target`            — match any directory named `target` at any depth
+///   - `/target`           — match only top-level `target` (anchored)
+///   - `node_modules/`     — directory only (not files named the same)
+///   - `**/*.iso`          — any-depth glob for `.iso` files
+///   - `!keep-this-anyway` — negation, re-include something excluded
+///                           by an earlier broader pattern
+///
+/// Set via the dedicated `ws exclude` command (positional args, or its
+/// TUI tree picker) or by editing `.agent-workspace.toml` directly:
+///
+/// ```toml
+/// [copy]
+/// exclude = [
+///     "/target",
+///     "/node_modules",
+///     "/Bin",
+///     "**/*.iso",
+/// ]
+/// ```
+///
+/// **Note**: this is NOT the same as `[general] copy_files` — that one
+/// is the *include* list for files copied INTO each new worktree (like
+/// `.env`, `.env.local`) after creation. Different feature, same
+/// gitignore-pattern shape. They live in separate sections to keep the
+/// semantics straight.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct ProjectCopyConfig {
+    /// Gitignore-style patterns the CoW path skips when copying the
+    /// source repo. Empty = copy everything (except the always-excluded
+    /// `.git` / `.jj`).
+    #[serde(default)]
+    pub exclude: Vec<String>,
 }
 
 /// Per-repo settings controlling the workspace-directory NAME chosen
@@ -277,6 +330,12 @@ pub struct Config {
     /// `<name>-<6-hex-hash>/` (pre-v0.13.16 behaviour). See
     /// [`ProjectWorkspaceConfig::use_path_hash`].
     pub use_path_hash: bool,
+
+    /// Resolved `[copy] exclude` from the project config: gitignore-
+    /// style patterns the CoW path skips. Empty = copy everything
+    /// (except always-excluded `.git` / `.jj`). Project-only, no
+    /// global counterpart — exclusion is fundamentally repo-specific.
+    pub copy_excludes: Vec<String>,
 }
 
 impl Config {
@@ -345,6 +404,7 @@ impl Config {
         let use_cow = project.create.use_cow.unwrap_or(global.create.use_cow);
         let workspace_alias = project.workspace.alias.clone();
         let use_path_hash = project.workspace.use_path_hash.unwrap_or(false);
+        let copy_excludes = project.copy.exclude.clone();
 
         Ok(Self {
             base_dir,
@@ -360,6 +420,7 @@ impl Config {
             use_cow,
             workspace_alias,
             use_path_hash,
+            copy_excludes,
         })
     }
 
@@ -826,6 +887,7 @@ trunk = "develop"
             ui: ProjectUiConfig::default(),
             create: ProjectCreateConfig::default(),
             workspace: ProjectWorkspaceConfig::default(),
+            copy: ProjectCopyConfig::default(),
         };
         let serialized = toml::to_string(&config).unwrap();
         assert!(serialized.contains("develop"));

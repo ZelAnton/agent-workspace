@@ -102,6 +102,13 @@ enum Command {
     /// Run `ws config list` for the up-to-date roster + descriptions.
     Config(commands::ConfigArgs),
 
+    /// Manage `[copy] exclude` patterns — gitignore-style entries the
+    /// CoW path skips when copying the source repo into a new
+    /// worktree (`target/`, `node_modules/`, `**/*.iso`, etc).
+    /// Positional args ADD; `--remove` drops; `--list` shows; `--clear`
+    /// wipes. No args = TUI tree picker.
+    Exclude(commands::ExcludeArgs),
+
     /// Sync current worktree from trunk
     Sync(commands::SyncArgs),
 
@@ -154,6 +161,7 @@ impl Cli {
             Command::Status => commands::status::run(&config),
             Command::RepoInfo(args) => commands::repo_info::run(args, &config),
             Command::Config(args) => commands::config::run(args),
+            Command::Exclude(args) => commands::exclude::run(args),
             Command::Sync(args) => commands::sync::run(args, &config),
             Command::Mv(args) => commands::r#move::run(args, &config, path_file),
             Command::Setup(args) => commands::sys::setup::run(args),

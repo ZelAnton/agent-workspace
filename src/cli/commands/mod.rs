@@ -8,6 +8,8 @@ pub mod snap;
 pub mod sys;
 
 pub mod config;
+pub mod exclude;
+pub mod exclude_tui;
 pub mod ls;
 pub mod merge;
 pub mod r#move;
@@ -17,6 +19,7 @@ pub mod sync;
 
 // Re-export argument types
 pub use config::ConfigArgs;
+pub use exclude::ExcludeArgs;
 pub use lifecycle::{CleanArgs, NewArgs, RmArgs};
 pub use ls::LsArgs;
 pub use merge::MergeArgs;

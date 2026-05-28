@@ -79,10 +79,13 @@ pub fn run(args: RepoInfoArgs, config: &Config) -> Result<()> {
     eprintln!("  Source: {}", repo_root.display());
     eprintln!("  Cache:  {}", cache_path.display());
 
+    // Mirror the cow path: the cache should reflect what `ws new` will
+    // actually copy — i.e. it must honor `[copy] exclude` patterns too.
+    let user_patterns: &[String] = &config.copy_excludes;
     let result =
-        repo_meta::load_or_refresh(&project_dir, &repo_root, excludes).map_err(|e| {
-            Error::Other(format!("repo-meta load/refresh failed: {e}"))
-        })?;
+        repo_meta::load_or_refresh(&project_dir, &repo_root, excludes, user_patterns).map_err(
+            |e| Error::Other(format!("repo-meta load/refresh failed: {e}")),
+        )?;
 
     eprintln!();
     if result.from_cache {

@@ -136,6 +136,7 @@ pub fn load_or_refresh(
     project_dir: &Path,
     repo_root: &Path,
     excludes: &[&str],
+    user_patterns: &[String],
 ) -> std::result::Result<LoadResult, MetaError> {
     let cache_path = project_dir.join(CACHE_FILENAME);
 
@@ -149,7 +150,7 @@ pub fn load_or_refresh(
         return Ok(LoadResult { meta, from_cache: true });
     }
 
-    let meta = compute(repo_root, excludes)?;
+    let meta = compute(repo_root, excludes, user_patterns)?;
 
     // Best-effort write. If we can't persist (read-only volume,
     // permission denied, etc.) we still return the in-memory value;
@@ -175,13 +176,35 @@ pub struct LoadResult {
 /// fields like origin URL come from `git remote get-url`, expensive
 /// ones from a metadata-only walk).
 ///
-/// `excludes` matches the cow-side semantics: immediate-child directory
-/// names to skip (typically `.git`, plus `.jj` for colocated repos).
-fn compute(repo_root: &Path, excludes: &[&str]) -> std::result::Result<RepoMeta, MetaError> {
+/// Filter semantics mirror cow-side `build_clone_walker` so the cached
+/// totals reflect EXACTLY what `ws new` will copy:
+///   - `excludes`: hardcoded top-level names (`.git`, `.jj`), anchored
+///     to root via `/X` patterns.
+///   - `user_patterns`: gitignore-style patterns from `[copy] exclude`
+///     in the project config.
+///
+/// Both feed a single `ignore::gitignore::Gitignore` matcher.
+fn compute(
+    repo_root: &Path,
+    excludes: &[&str],
+    user_patterns: &[String],
+) -> std::result::Result<RepoMeta, MetaError> {
+    use ignore::gitignore::GitignoreBuilder;
+
     let mut total_files: u64 = 0;
     let mut total_bytes: u64 = 0;
 
-    let excludes_owned: Vec<String> = excludes.iter().map(|s| s.to_string()).collect();
+    let mut gi = GitignoreBuilder::new(repo_root);
+    for &name in excludes {
+        let _ = gi.add_line(None, &format!("/{name}"));
+    }
+    for pat in user_patterns {
+        let _ = gi.add_line(None, pat);
+    }
+    let matcher = gi
+        .build()
+        .unwrap_or_else(|_| GitignoreBuilder::new(repo_root).build().expect("empty gitignore builds"));
+
     let walker = ignore::WalkBuilder::new(repo_root)
         .standard_filters(false)
         .hidden(false)
@@ -190,13 +213,8 @@ fn compute(repo_root: &Path, excludes: &[&str]) -> std::result::Result<RepoMeta,
         .git_exclude(false)
         .follow_links(false)
         .filter_entry(move |entry| {
-            if entry.depth() == 1
-                && let Some(name) = entry.file_name().to_str()
-                && excludes_owned.iter().any(|ex| ex == name)
-            {
-                return false;
-            }
-            true
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            !matcher.matched(entry.path(), is_dir).is_ignore()
         })
         .build();
 
@@ -479,7 +497,7 @@ mod tests {
         std::fs::write(repo_root.join("b.txt"), b"world!").unwrap();
 
         // First call: scans + writes.
-        let first = load_or_refresh(&project_dir, &repo_root, &[]).unwrap();
+        let first = load_or_refresh(&project_dir, &repo_root, &[], &[]).unwrap();
         assert!(!first.from_cache, "first call should refresh");
         assert_eq!(first.meta.total_files, 2);
         assert_eq!(first.meta.total_bytes, 5 + 6);
@@ -491,7 +509,7 @@ mod tests {
         // Mutate the repo — second call should still return the
         // cached values (since the cache is fresh).
         std::fs::write(repo_root.join("c.txt"), b"ignored-by-cache").unwrap();
-        let second = load_or_refresh(&project_dir, &repo_root, &[]).unwrap();
+        let second = load_or_refresh(&project_dir, &repo_root, &[], &[]).unwrap();
         assert!(second.from_cache, "second call should hit cache");
         assert_eq!(second.meta.total_files, 2, "cache should be used");
         assert_eq!(second.meta.total_bytes, 5 + 6);
@@ -507,7 +525,7 @@ mod tests {
         std::fs::write(repo_root.join(".git/HEAD"), b"x").unwrap();
         std::fs::write(repo_root.join("kept.txt"), b"y").unwrap();
 
-        let res = load_or_refresh(&project_dir, &repo_root, &[".git"]).unwrap();
+        let res = load_or_refresh(&project_dir, &repo_root, &[".git"], &[]).unwrap();
         assert_eq!(res.meta.total_files, 1, ".git contents should be skipped");
     }
 }

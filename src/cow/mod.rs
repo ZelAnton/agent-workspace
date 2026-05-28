@@ -122,13 +122,57 @@ impl Drop for Cleanup<'_> {
 /// the scan pass MUST visit the same set the copy pass will, otherwise
 /// the total-bytes denominator would diverge from the actual work and the
 /// progress bar would over- or under-shoot.
-fn build_clone_walker(src: &Path, excludes: &[String]) -> ignore::Walk {
+/// Build the cow walker.
+///
+/// Two pattern sources, both fed into a single `Gitignore` matcher:
+///
+///   - `hardcoded_excludes`: anchored top-level names the caller
+///     always wants skipped — `.git` (always), `.jj` (colocated jj).
+///     We promote each entry `X` to the anchored pattern `/X` so it
+///     only matches the top-level dir, mirroring the pre-v0.13.18
+///     behaviour exactly.
+///   - `user_patterns`: gitignore-style patterns from
+///     `[copy] exclude` in the project config — `target`,
+///     `/node_modules`, `**/*.iso`, `!keep-this`, etc.
+///
+/// Both feed `ignore::gitignore::GitignoreBuilder`. A single
+/// `Match::Ignore` check in `filter_entry` decides skip/keep,
+/// supporting:
+///   - Anchored matches (`/target`) — top-level only.
+///   - Unanchored matches (`target`) — any depth.
+///   - Globs (`**/*.iso`, `*.tmp`).
+///   - Negations (`!keep-this`) — re-include after a broader rule.
+fn build_clone_walker(
+    src: &Path,
+    hardcoded_excludes: &[&str],
+    user_patterns: &[String],
+) -> ignore::Walk {
     use ignore::WalkBuilder;
+    use ignore::gitignore::GitignoreBuilder;
 
-    let excludes_owned = excludes.to_vec();
+    let mut gi = GitignoreBuilder::new(src);
+    // Anchor each hardcoded exclude to repo root so e.g. `.git` only
+    // matches the top-level `.git` (existing semantics) — not a
+    // nested `.git` inside a submodule or an asset directory.
+    for &name in hardcoded_excludes {
+        let _ = gi.add_line(None, &format!("/{name}"));
+    }
+    // User patterns added verbatim; their leading `/` (if any) is
+    // honoured by gitignore semantics, anchoring to repo root.
+    for pat in user_patterns {
+        let _ = gi.add_line(None, pat);
+    }
+    // If pattern compilation fails we fall back to an empty matcher
+    // (= nothing excluded). Better than aborting the entire copy on
+    // a syntax slip in user config.
+    let matcher = gi
+        .build()
+        .unwrap_or_else(|_| GitignoreBuilder::new(src).build().expect("empty gitignore builds"));
+
     WalkBuilder::new(src)
         // Walk everything — including hidden files. We want a complete
-        // mirror, not a gitignore-filtered subset.
+        // mirror, not a gitignore-filtered subset (our own matcher
+        // above is the only source of skips).
         .standard_filters(false)
         .hidden(false)
         .git_ignore(false)
@@ -136,15 +180,9 @@ fn build_clone_walker(src: &Path, excludes: &[String]) -> ignore::Walk {
         .git_exclude(false)
         // Don't follow symlinks; copy them as-is below.
         .follow_links(false)
-        // Filter the immediate-child excludes (`.git/`, `.jj/`).
         .filter_entry(move |entry| {
-            if entry.depth() == 1
-                && let Some(name) = entry.file_name().to_str()
-                && excludes_owned.iter().any(|ex| ex == name)
-            {
-                return false;
-            }
-            true
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            !matcher.matched(entry.path(), is_dir).is_ignore()
         })
         .build()
 }
@@ -290,7 +328,27 @@ fn copy_file(src: &Path, dst: &Path, stats: &CopyStats) -> bool {
 /// follow-up work (e.g. the git index refresh that runs over every
 /// entry — for >2 GiB trees we batch it for progress; for small trees
 /// a plain spinner is enough).
-pub fn try_clone_dir_except(src: &Path, dst: &Path, excludes: &[&str]) -> Result<u64> {
+///
+/// `excludes` are always-skipped top-level directory NAMES (`.git`,
+/// `.jj`) — hard-coded by the VCS-specific callers, never user-
+/// touchable.
+///
+/// **User-configurable excludes** (`[copy] exclude` in the project
+/// config) are loaded internally — calling `Config::load()` once at
+/// the top of this function lets the VCS backend callers stay
+/// unaware of the new config field. Failure to load (no config, parse
+/// error) silently falls through to an empty pattern set — best-
+/// effort, never blocks the copy.
+pub fn try_clone_dir_except(
+    src: &Path,
+    dst: &Path,
+    excludes: &[&str],
+) -> Result<u64> {
+    let user_patterns: Vec<String> = crate::config::Config::load()
+        .map(|c| c.copy_excludes)
+        .unwrap_or_default();
+    let user_patterns = user_patterns.as_slice();
+
     // Windows fast path: hand the entire copy off to robocopy. It's the
     // empirically fastest copier on this platform — beats both our
     // parallel `std::fs::copy` and `reflink_copy::reflink_or_copy` on
@@ -299,7 +357,7 @@ pub fn try_clone_dir_except(src: &Path, dst: &Path, excludes: &[&str]) -> Result
     // if it does, we fall through to the in-process implementation
     // below.
     #[cfg(windows)]
-    match try_clone_via_robocopy(src, dst, excludes) {
+    match try_clone_via_robocopy(src, dst, excludes, user_patterns) {
         Ok(bytes) => return Ok(bytes),
         Err(RobocopyError::SpawnFailed(e)) => {
             eprintln!(
@@ -315,7 +373,7 @@ pub fn try_clone_dir_except(src: &Path, dst: &Path, excludes: &[&str]) -> Result
         }
     }
 
-    try_clone_dir_except_inproc(src, dst, excludes)
+    try_clone_dir_except_inproc(src, dst, excludes, user_patterns)
 }
 
 #[cfg(windows)]
@@ -379,6 +437,7 @@ fn try_clone_via_robocopy(
     src: &Path,
     dst: &Path,
     excludes: &[&str],
+    user_patterns: &[String],
 ) -> std::result::Result<u64, RobocopyError> {
     use indicatif::{HumanBytes, MultiProgress, ProgressBar, ProgressStyle};
     use std::collections::VecDeque;
@@ -428,6 +487,7 @@ fn try_clone_via_robocopy(
         &project_dir,
         &src_stripped,
         excludes,
+        user_patterns,
     ) {
         Ok(res) => (res.meta.total_files, res.meta.total_bytes, res.from_cache),
         Err(e) => {
@@ -503,6 +563,39 @@ fn try_clone_via_robocopy(
     for exc in excludes {
         cmd.arg("/XD");
         cmd.arg(src_stripped.join(exc));
+    }
+    // Honor `user_patterns` at the robocopy boundary by pre-scanning
+    // the source's top-level entries and feeding any matching paths to
+    // robocopy as `/XD <fullpath>` (dirs) / `/XF <fullpath>` (files).
+    //
+    // **Limitation**: robocopy only understands literal paths, not
+    // gitignore globs. A pattern like `**/*.iso` that matches a file
+    // 5 levels deep cannot be expressed to robocopy without
+    // enumerating every match — which would defeat the purpose. So
+    // only TOP-LEVEL matches are honored on the robocopy path.
+    // Deep glob excludes silently no-op when robocopy is used. Users
+    // who need them can `--no-cow` to bypass robocopy and fall through
+    // to the in-process implementation (which respects the matcher
+    // at every depth).
+    {
+        use ignore::gitignore::GitignoreBuilder;
+        let mut gi = GitignoreBuilder::new(&src_stripped);
+        for pat in user_patterns {
+            let _ = gi.add_line(None, pat);
+        }
+        if let Ok(matcher) = gi.build()
+            && let Ok(entries) = std::fs::read_dir(&src_stripped)
+        {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let full = src_stripped.join(&name);
+                let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                if matcher.matched(&full, is_dir).is_ignore() {
+                    cmd.arg(if is_dir { "/XD" } else { "/XF" });
+                    cmd.arg(&full);
+                }
+            }
+        }
     }
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -643,14 +736,23 @@ fn try_clone_via_robocopy(
 /// In-process fallback used on non-Windows and when robocopy fails to
 /// spawn. Identical to the v0.13.5 implementation — see the trait-level
 /// doc for the 3-phase architecture.
-fn try_clone_dir_except_inproc(src: &Path, dst: &Path, excludes: &[&str]) -> Result<u64> {
+fn try_clone_dir_except_inproc(
+    src: &Path,
+    dst: &Path,
+    excludes: &[&str],
+    user_patterns: &[String],
+) -> Result<u64> {
     use indicatif::{HumanBytes, ProgressBar, ProgressStyle};
     use rayon::prelude::*;
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use std::time::Duration;
 
-    let excludes_owned: Vec<String> = excludes.iter().map(|s| s.to_string()).collect();
+    // build_clone_walker now takes the &[&str] hardcoded excludes and
+    // the gitignore-style user patterns separately; both feed the
+    // same `Gitignore` matcher inside the walker builder. No need to
+    // pre-clone into an owned Vec.
+    let _ = excludes; // silence unused-binding lint; consumed by walker below
 
     // ------------------------------------------------------------------
     // Phase 1: scan + plan.
@@ -667,7 +769,7 @@ fn try_clone_dir_except_inproc(src: &Path, dst: &Path, excludes: &[&str]) -> Res
     let mut total_files: u64 = 0;
     let mut total_bytes: u64 = 0;
 
-    for entry_result in build_clone_walker(src, &excludes_owned) {
+    for entry_result in build_clone_walker(src, excludes, user_patterns) {
         let entry = match entry_result {
             Ok(e) => e,
             Err(e) => {

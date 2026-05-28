@@ -1,6 +1,6 @@
 [package]
 name = "agent-workspace"
-version = "0.13.17"
+version = "0.13.18"
 edition = "2024"
 rust-version = "1.91"
 description = "Git worktree workflow tool for AI coding agents"
@@ -25,6 +25,16 @@ toml = "1.0"
 # hand-written `.agent-workspace.toml` doesn't get reflowed into
 # canonical form on every write.
 toml_edit = "0.22"
+# TUI stack for `ws exclude`'s interactive tree picker.
+# ratatui re-exports a version-compatible crossterm; pinning crossterm
+# separately to the same version avoids `Event`-type drift errors.
+# tui-tree-widget gives us a TreeState + TreeItem with built-in open/
+# close + selection state — the only third-party widget we need.
+# humansize renders the per-folder byte totals as "450 MB" etc.
+ratatui = "0.29"
+crossterm = "0.28"
+tui-tree-widget = "0.23"
+humansize = "2.1"
 directories = "6"
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"

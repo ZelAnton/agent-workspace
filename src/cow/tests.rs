@@ -116,6 +116,109 @@ fn try_clone_dir_except_multiple_excludes() {
 }
 
 #[test]
+fn build_clone_walker_anchored_pattern_excludes_top_level_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().to_path_buf();
+    fs::create_dir(src.join("target")).unwrap();
+    fs::write(src.join("target/output.bin"), b"x").unwrap();
+    fs::write(src.join("keep.txt"), b"y").unwrap();
+
+    // Anchored `/target` — only the top-level target/ is excluded.
+    let walker = build_clone_walker(&src, &[], &["/target".to_string()]);
+    let visited: Vec<_> = walker
+        .flatten()
+        .map(|e| e.path().strip_prefix(&src).unwrap().to_path_buf())
+        .collect();
+
+    assert!(
+        !visited.iter().any(|p| p.starts_with("target")),
+        "anchored `/target` should skip the top-level target/ dir; saw: {visited:?}"
+    );
+    assert!(visited.iter().any(|p| p.ends_with("keep.txt")));
+}
+
+#[test]
+fn build_clone_walker_glob_pattern_excludes_files_anywhere() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().to_path_buf();
+    fs::create_dir(src.join("a")).unwrap();
+    fs::create_dir_all(src.join("b/nested")).unwrap();
+    fs::write(src.join("a/data.iso"), b"x").unwrap();
+    fs::write(src.join("b/nested/img.iso"), b"y").unwrap();
+    fs::write(src.join("a/data.txt"), b"z").unwrap();
+
+    // Glob pattern: any-depth `.iso` file.
+    let walker = build_clone_walker(&src, &[], &["**/*.iso".to_string()]);
+    let visited: Vec<_> = walker
+        .flatten()
+        .map(|e| e.path().strip_prefix(&src).unwrap().to_path_buf())
+        .collect();
+
+    assert!(
+        !visited.iter().any(|p| p.extension().is_some_and(|e| e == "iso")),
+        ".iso files should be excluded at any depth; saw: {visited:?}"
+    );
+    assert!(visited.iter().any(|p| p.ends_with("data.txt")));
+}
+
+#[test]
+fn build_clone_walker_hardcoded_and_user_patterns_compose() {
+    // `.git` is hardcoded; `target` and `Bin` come from the user list.
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().to_path_buf();
+    for d in [".git", "target", "Bin", "src"] {
+        fs::create_dir(src.join(d)).unwrap();
+        fs::write(src.join(d).join("file"), b"x").unwrap();
+    }
+    fs::write(src.join("README.md"), b"y").unwrap();
+
+    let walker = build_clone_walker(
+        &src,
+        &[".git"],
+        &["/target".to_string(), "/Bin".to_string()],
+    );
+    let visited: Vec<_> = walker
+        .flatten()
+        .map(|e| e.path().strip_prefix(&src).unwrap().to_path_buf())
+        .collect();
+
+    for excluded in [".git", "target", "Bin"] {
+        assert!(
+            !visited.iter().any(|p| p.starts_with(excluded)),
+            "{excluded} should be excluded; saw: {visited:?}"
+        );
+    }
+    assert!(visited.iter().any(|p| p.starts_with("src")));
+    assert!(visited.iter().any(|p| p.ends_with("README.md")));
+}
+
+#[test]
+fn build_clone_walker_unanchored_pattern_matches_at_any_depth() {
+    // Without leading `/`, `node_modules` matches at any depth.
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().to_path_buf();
+    fs::create_dir(src.join("node_modules")).unwrap();
+    fs::write(src.join("node_modules/pkg.json"), b"x").unwrap();
+    fs::create_dir_all(src.join("packages/api/node_modules")).unwrap();
+    fs::write(src.join("packages/api/node_modules/dep.js"), b"y").unwrap();
+    fs::write(src.join("packages/api/keep.js"), b"z").unwrap();
+
+    let walker = build_clone_walker(&src, &[], &["node_modules".to_string()]);
+    let visited: Vec<_> = walker
+        .flatten()
+        .map(|e| e.path().strip_prefix(&src).unwrap().to_path_buf())
+        .collect();
+
+    assert!(
+        !visited
+            .iter()
+            .any(|p| p.components().any(|c| c.as_os_str() == "node_modules")),
+        "node_modules should be excluded at any depth; saw: {visited:?}"
+    );
+    assert!(visited.iter().any(|p| p.ends_with("keep.js")));
+}
+
+#[test]
 fn can_clone_runs_probe_without_panicking() {
     // On NTFS / ext4 (typical CI), this returns false (no block cloning).
     // On ReFS / Btrfs / APFS, returns true. Either is fine — the test
