@@ -138,6 +138,18 @@ pub fn build_command() -> clap::Command {
 }
 
 impl Cli {
+    /// Whether the passive "a new version is available" background check
+    /// should run for this invocation.
+    ///
+    /// Suppressed for the commands that *are* the update flow: `ws update`
+    /// re-execs `ws setup` from the freshly-replaced binary, so without
+    /// this guard a single `ws update` prints the upgrade notice up to
+    /// twice (once from the update process, once from the spawned setup
+    /// child) on top of the command's own output.
+    pub fn should_check_for_updates(&self) -> bool {
+        !matches!(self.command, Command::Update | Command::Setup(_))
+    }
+
     pub fn run(self) -> Result<()> {
         let config = Config::load()?;
         let path_file = self.path_file.as_deref();
@@ -386,6 +398,22 @@ mod tests {
     fn test_cli_parse_update() {
         let cli = Cli::try_parse_from(["ws", "update"]);
         assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn test_update_flow_commands_skip_update_check() {
+        // The passive "new version available" notice must not fire for the
+        // commands that make up the update flow, or `ws update` prints it
+        // twice (once here, once from the re-execed `ws setup`).
+        let update = Cli::try_parse_from(["ws", "update"]).unwrap();
+        assert!(!update.should_check_for_updates());
+
+        let setup = Cli::try_parse_from(["ws", "setup"]).unwrap();
+        assert!(!setup.should_check_for_updates());
+
+        // Ordinary commands still get the daily nudge.
+        let ls = Cli::try_parse_from(["ws", "ls"]).unwrap();
+        assert!(ls.should_check_for_updates());
     }
 
     #[test]

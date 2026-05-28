@@ -10,17 +10,25 @@ fn main() {
     // Must be first: intercepts COMPLETE env var for shell completions
     clap_complete::env::CompleteEnv::with_factory(agent_workspace::cli::build_command).complete();
 
-    // Check for updates (once per day), runs in background
-    let base_dir = Config::base_dir().ok();
-    let update_handle = base_dir.as_ref().and_then(|dir| {
-        if update::should_check(dir) {
-            Some(spawn_update_check(dir.clone()))
-        } else {
-            None
-        }
-    });
-
     let cli = Cli::parse();
+
+    // Check for updates (once per day), runs in background. Skipped for the
+    // update-flow commands (`update`/`setup`) where the passive notice would
+    // duplicate the command's own output — `ws update` re-execs `ws setup`,
+    // so the notice could otherwise print twice in one run.
+    let base_dir = Config::base_dir().ok();
+    let update_handle = if cli.should_check_for_updates() {
+        base_dir.as_ref().and_then(|dir| {
+            if update::should_check(dir) {
+                Some(spawn_update_check(dir.clone()))
+            } else {
+                None
+            }
+        })
+    } else {
+        None
+    };
+
     let result = cli.run();
 
     // Wait for update check to complete before exiting
