@@ -548,10 +548,10 @@ fn try_clone_via_robocopy(
     spinner.set_message("0s elapsed");
     spinner.enable_steady_tick(Duration::from_millis(120));
 
-    // Heads-up so the user can see what's about to be copied; same
-    // information they used to glean from the per-file tail frame,
-    // now compressed into one line since the frame is gone.
-    eprintln!("  ({} files / {})", total_files, HumanBytes(total_bytes));
+    // (No second "N files / X GiB" heads-up here — the
+    // "Copying repository: N files, X GiB" line printed above by the
+    // common cow scope already covers it, and v0.13.18's duplicate
+    // showed up right after the spinner on screen.)
 
     // ------------------------------------------------------------------
     // Phase 3: spawn robocopy with the user-validated flag set.
