@@ -182,6 +182,7 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
     // user usually wants to fix the hook (e.g. install missing tool) and
     // resume manually rather than have us silently rm a half-created tree.
     if !config.hooks.post_create.is_empty() {
+        let t = std::time::Instant::now();
         eprintln!("Running post-create hooks...");
         if let Err(e) = process::run_hooks(&config.hooks.post_create, &wt_path) {
             eprintln!();
@@ -190,13 +191,17 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
             eprintln!("Fix the hook and `cd` in manually, or run 'ws rm {branch}' to discard.");
             return Err(Error::Other(format!("post_create hook failed: {e}")));
         }
+        eprintln!(
+            "  Ran post-create hooks ({}).",
+            crate::util::format_step(t.elapsed())
+        );
     }
 
     // Handle snap mode - write path + command for shell wrapper to execute
     if let Some(cmd) = args.snap {
         if path_file.is_some() {
             eprintln!("Worktree '{branch}' ready — starting snap mode...");
-            eprintln!("Elapsed: {}", format_elapsed(total_start.elapsed()));
+            eprintln!("Elapsed: {}", crate::util::format_total(total_start.elapsed()));
             write_path_file_lines(path_file, &[&wt_path.display().to_string(), &cmd])?;
         } else {
             return Err(Error::Other(
@@ -209,37 +214,21 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
     // Write path for shell integration
     if path_file.is_some() {
         eprintln!("Worktree '{branch}' ready at {}", wt_path.display());
-        eprintln!("Elapsed: {}", format_elapsed(total_start.elapsed()));
+        eprintln!("Elapsed: {}", crate::util::format_total(total_start.elapsed()));
         write_path_file(path_file, &wt_path)?;
     } else {
         eprintln!("Created worktree: {branch} (from {})", meta.base_branch);
         eprintln!("Path: {}", wt_path.display());
-        eprintln!("Elapsed: {}", format_elapsed(total_start.elapsed()));
+        eprintln!("Elapsed: {}", crate::util::format_total(total_start.elapsed()));
     }
 
     Ok(())
 }
 
-/// Human-friendly duration formatter. Examples:
-///   - 5s        → "5s"
-///   - 47s       → "47s"
-///   - 95s       → "1m 35s"
-///   - 4920s     → "1h 22m 0s"
-/// Lets the user compare wall times across `ws new` invocations at a
-/// glance without doing the H/M/S math themselves.
-fn format_elapsed(d: std::time::Duration) -> String {
-    let total = d.as_secs();
-    let h = total / 3600;
-    let m = (total % 3600) / 60;
-    let s = total % 60;
-    if h > 0 {
-        format!("{h}h {m}m {s}s")
-    } else if m > 0 {
-        format!("{m}m {s}s")
-    } else {
-        format!("{s}s")
-    }
-}
+// (`format_elapsed` was inlined-then-extracted into
+// `crate::util::format_total` so the same helper drives both the
+// final "Elapsed:" line here and any other minutes/hours-scale
+// duration display we add later.)
 
 /// Reject patterns that could escape the repo root.
 ///

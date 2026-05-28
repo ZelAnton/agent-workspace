@@ -507,6 +507,7 @@ fn try_clone_via_robocopy(
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
+    let copy_start = std::time::Instant::now();
     let mut child = cmd.spawn().map_err(RobocopyError::SpawnFailed)?;
     let stdout = child.stdout.take().expect("stdout was piped");
     let stderr = child.stderr.take().expect("stderr was piped");
@@ -630,9 +631,10 @@ fn try_clone_via_robocopy(
     }
 
     eprintln!(
-        "  Cloned {} files ({}) via robocopy /MT:10 (exit {code}).",
+        "  Cloned {} files ({}) via robocopy /MT:10 ({}, exit {code}).",
         total_files,
-        HumanBytes(total_bytes)
+        HumanBytes(total_bytes),
+        crate::util::format_step(copy_start.elapsed())
     );
     Ok(total_bytes)
 }
@@ -721,6 +723,10 @@ fn try_clone_dir_except_inproc(src: &Path, dst: &Path, excludes: &[&str]) -> Res
         total_files,
         HumanBytes(total_bytes)
     );
+
+    // Stopwatch for the per-file copy phase, surfaced in the final
+    // "Cloned ... ({elapsed})" line below.
+    let copy_start = std::time::Instant::now();
 
     // ------------------------------------------------------------------
     // Phase 2: create directories in parallel.
@@ -825,26 +831,27 @@ fn try_clone_dir_except_inproc(src: &Path, dst: &Path, excludes: &[&str]) -> Res
     //     fs::copy because the FS doesn't support reflink for this file).
     //     Both counts are meaningful — `reflinked` ≫ `copied` confirms the
     //     FS-level fast path is firing.
+    let elapsed = crate::util::format_step(copy_start.elapsed());
     if cfg!(windows) {
         if errors > 0 {
             eprintln!(
-                "  Cloned {total_done} files ({}) via CopyFileExW ({errors} errors).",
+                "  Cloned {total_done} files ({}) via CopyFileExW ({elapsed}, {errors} errors).",
                 HumanBytes(total_bytes)
             );
         } else {
             eprintln!(
-                "  Cloned {total_done} files ({}) via CopyFileExW.",
+                "  Cloned {total_done} files ({}) via CopyFileExW ({elapsed}).",
                 HumanBytes(total_bytes)
             );
         }
     } else if errors > 0 {
         eprintln!(
-            "  Cloned {total_done} files ({}): {reflinked} reflinked, {copied} copied, {errors} errors.",
+            "  Cloned {total_done} files ({}): {reflinked} reflinked, {copied} copied ({elapsed}, {errors} errors).",
             HumanBytes(total_bytes)
         );
     } else {
         eprintln!(
-            "  Cloned {total_done} files ({}): {reflinked} reflinked, {copied} copied.",
+            "  Cloned {total_done} files ({}): {reflinked} reflinked, {copied} copied ({elapsed}).",
             HumanBytes(total_bytes)
         );
     }

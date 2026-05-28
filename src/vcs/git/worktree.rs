@@ -158,8 +158,12 @@ fn create_worktree_cow(
             .unwrap_or(0)
     );
     if needs_stash {
-        eprintln!("  Stashing uncommitted changes...");
+        let t = std::time::Instant::now();
         super::exec(runner, &["stash", "push", "-u", "-m", &stash_message])?;
+        eprintln!(
+            "  Stashed uncommitted changes ({}).",
+            crate::util::format_step(t.elapsed())
+        );
     }
 
     // The inner closure handles steps 3-5 with explicit rollback on any
@@ -168,14 +172,18 @@ fn create_worktree_cow(
     let inner: Result<()> = (|| {
         // 3. Checkout base if not already there.
         if orig_branch != base {
-            eprintln!("  Switching to '{base}'...");
+            let t = std::time::Instant::now();
             super::exec(runner, &["checkout", base])?;
+            eprintln!(
+                "  Switched to '{base}' ({}).",
+                crate::util::format_step(t.elapsed())
+            );
         }
 
         // 4. Create worktree with --no-checkout. git creates the `.git`
         // gitlink file at `path` and registers the worktree, but doesn't
         // write any working-tree files.
-        eprintln!("  Creating worktree skeleton...");
+        let t = std::time::Instant::now();
         let add_result = if branch_already_exists {
             super::exec(runner, &["worktree", "add", "--no-checkout", path_arg, branch])
         } else {
@@ -185,6 +193,10 @@ fn create_worktree_cow(
             )
         };
         add_result?;
+        eprintln!(
+            "  Created worktree skeleton ({}).",
+            crate::util::format_step(t.elapsed())
+        );
 
         // 5. Reflink-copy every file/dir from repo root to `path`, except
         // `.git/` (which `--no-checkout` already created as a gitlink).
@@ -235,22 +247,23 @@ fn create_worktree_cow(
 
     // 6. Restore source repo. Order matters: checkout BEFORE stash pop so
     // pop applies to the right branch.
-    if inner.is_ok() {
-        eprintln!("  Restoring source branch...");
-    }
     //
     // Detached HEAD: `git checkout HEAD` would be a no-op (leaving us on
     // `base`). Use the captured commit hash to restore the actual
     // detached state. Skip when we're already on the right commit
     // (orig_branch == base case is already filtered out below).
     let restore_target = if is_detached { &orig_commit } else { &orig_branch };
-    if (is_detached || orig_branch != base)
-        && let Err(e) = super::exec(runner, &["checkout", restore_target])
-    {
-        eprintln!("Warning: failed to restore '{restore_target}': {e}");
-    }
-    if needs_stash
-        && let Err(e) = super::exec(runner, &["stash", "pop"]) {
+    let needs_restore = is_detached || orig_branch != base;
+    if inner.is_ok() && (needs_restore || needs_stash) {
+        let t = std::time::Instant::now();
+        if needs_restore
+            && let Err(e) = super::exec(runner, &["checkout", restore_target])
+        {
+            eprintln!("Warning: failed to restore '{restore_target}': {e}");
+        }
+        if needs_stash
+            && let Err(e) = super::exec(runner, &["stash", "pop"])
+        {
             // Stash pop conflict is the worst-case: user's changes are
             // safe in `git stash list` but require manual resolution.
             eprintln!(
@@ -258,6 +271,21 @@ fn create_worktree_cow(
                  Your changes are saved in 'git stash list'; resolve manually."
             );
         }
+        eprintln!(
+            "  Restored source branch ({}).",
+            crate::util::format_step(t.elapsed())
+        );
+    } else if !inner.is_ok() {
+        // Failure path: still try to restore so the user's repo isn't
+        // left in a half-broken state, but don't time/report — they
+        // have bigger problems.
+        if needs_restore {
+            let _ = super::exec(runner, &["checkout", restore_target]);
+        }
+        if needs_stash {
+            let _ = super::exec(runner, &["stash", "pop"]);
+        }
+    }
 
     // 7. Colocated post-sync: tell jj about the new worktree's ref
     //    movement and the source repo's branch/stash state restoration.
