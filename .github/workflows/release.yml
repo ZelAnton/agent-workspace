@@ -1,19 +1,24 @@
 name: Release
 
-# Triggered by pushing a tag like `v0.11.0` OR manually via the Actions
-# UI ("Run workflow" button) for the first-time setup and emergency
-# reruns. Produces a GitHub Release with prebuilt binaries for all four
-# supported platforms plus the install scripts (consumed by install.sh /
-# install.ps1), and publishes the npm packages.
+# Manual-trigger only. Click "Run workflow" in the GitHub Actions UI,
+# enter the version to release (e.g. `0.13.14`), and the workflow:
+#   1. Builds release binaries for all three supported platforms.
+#   2. Creates a GitHub Release at the current commit with tag `v<version>`
+#      (the tag is created by `gh release create`; we don't push it
+#      separately).
+#   3. Publishes the npm packages (toggleable via the checkbox).
+#
+# We removed the `push: tags: ['v*']` auto-trigger that earlier
+# versions used because it kicked off a full ~10-minute release pipeline
+# on every accidental tag push. Bumping Cargo.toml + a tag is now
+# decoupled from publishing; the maintainer reviews the staged change,
+# decides it's ready, and clicks Run.
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release (e.g. 0.11.0). Required for manual runs.'
+        description: 'Version to release (e.g. 0.13.14, no leading `v`).'
         required: true
         type: string
       publish_npm:
@@ -77,13 +82,9 @@ jobs:
         id: version
         shell: bash
         run: |
-          # On tag push: derive from GITHUB_REF_NAME (e.g. "v0.11.0" → "0.11.0").
-          # On manual dispatch: use the workflow input.
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          fi
+          # Workflow is manual-only; the version always comes from the
+          # `inputs.version` field on the "Run workflow" form.
+          echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
 
       # Package the single binary as tar.gz. Windows 10 1803+ ships bsdtar, so
       # using tar.gz for all platforms keeps `ws update` and install scripts
@@ -148,26 +149,23 @@ jobs:
       - name: Resolve version
         id: version
         shell: bash
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          fi
+        run: echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
 
       # Publish GH Release via the gh CLI (pre-installed on ubuntu-latest)
       # — replaces softprops/action-gh-release which we dropped during the
-      # May 2026 codeload outage that took out third-party actions. Only
-      # runs on tag pushes; manual dispatch is for npm-republish without
-      # re-tagging.
+      # May 2026 codeload outage that took out third-party actions.
+      #
+      # `gh release create` both creates the tag (at `--target`, which
+      # defaults to the branch we ran from — usually `main`) AND
+      # publishes the Release record with the staged assets. We don't
+      # push the tag manually beforehand.
       - name: Publish GitHub Release (gh CLI)
-        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -eu
-          TAG="${GITHUB_REF_NAME}"
+          TAG="v${{ steps.version.outputs.version }}"
           # Stage all assets in a flat list so `gh release create` picks them up.
           mapfile -t archives < <(ls dist/agent-workspace-*.tar.gz)
           if [[ ${#archives[@]} -eq 0 ]]; then
@@ -183,6 +181,7 @@ jobs:
           done
           gh release create "$TAG" \
             --title "$TAG" \
+            --target "${{ github.sha }}" \
             --generate-notes \
             "${archives[@]}" \
             install.sh install.ps1 uninstall.sh uninstall.ps1
@@ -192,8 +191,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     # Skip when the manual dispatcher unchecked the publish_npm flag.
-    # Tag pushes always publish (workflow_dispatch.inputs is null on push).
-    if: github.event_name == 'push' || inputs.publish_npm
+    if: inputs.publish_npm
     # OIDC Trusted Publishing: GitHub mints a short-lived ID token for
     # this job, npm verifies it against each package's Trusted Publisher
     # config (configured per-package on npmjs.com). No long-lived token
@@ -227,12 +225,7 @@ jobs:
       - name: Resolve version
         id: version
         shell: bash
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          fi
+        run: echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
 
       - name: Download artifacts
         uses: actions/download-artifact@v4
