@@ -252,34 +252,64 @@ fn read_origin(repo_root: &Path) -> Option<String> {
 /// Pull `Owner/Repo` out of a `github.com` URL in any of the common
 /// shapes. Returns `None` for non-github hosts or unparseable inputs.
 ///
-/// Strips a trailing `.git` and any trailing `/`.
+/// Strips a trailing `.git` and any trailing `/`. Tolerates user-info
+/// in the URL (`https://<user>@github.com/...`,
+/// `https://<user>:<token>@github.com/...`), which is what `git remote
+/// get-url` reports after `gh auth login` or any other helper that
+/// embeds the username in the stored remote.
+///
+/// Steps:
+///   1. Strip the URL scheme (`https://`, `http://`, `ssh://`, `git://`).
+///   2. Drop everything up to the LAST `@` in the remaining authority
+///      part — that's the user-info section (e.g. `oauth2:token@`).
+///      Using the last `@` is correct because tokens may legitimately
+///      contain `@` and the host part by spec doesn't.
+///   3. Match `github.com/` or `github.com:` (the SCP-like form used
+///      by `git@github.com:Owner/Repo`).
+///   4. Split the remainder on `/` and accept only Owner/Repo with
+///      both parts non-empty — anything with extra path segments
+///      (`tree/main`, blob URLs, etc.) isn't a plain repo remote.
 pub fn parse_github_repo(origin: &str) -> Option<String> {
     let candidate = origin.trim().trim_end_matches('/');
     let candidate = candidate.strip_suffix(".git").unwrap_or(candidate);
 
-    // Try in order:
-    //   https://github.com/Owner/Repo
-    //   http://github.com/Owner/Repo
-    //   ssh://git@github.com/Owner/Repo
-    //   git://github.com/Owner/Repo
-    //   git@github.com:Owner/Repo
-    let after_host = if let Some(rest) = candidate.strip_prefix("https://github.com/") {
+    // 1. Strip the scheme.
+    let no_scheme = candidate
+        .strip_prefix("https://")
+        .or_else(|| candidate.strip_prefix("http://"))
+        .or_else(|| candidate.strip_prefix("ssh://"))
+        .or_else(|| candidate.strip_prefix("git://"))
+        .unwrap_or(candidate);
+
+    // 2. Drop user-info if present. Cut at the LAST `@` in the
+    //    portion before the first `/` or `:`, so a URL like
+    //    `oauth2:abc@def@github.com/...` (yes, this happens with
+    //    some token providers) still resolves to the right host.
+    let host_end = no_scheme.find('/').unwrap_or(no_scheme.len());
+    let host_end = no_scheme[..host_end]
+        .rfind(':')
+        .map(|colon| colon.max(0))
+        .unwrap_or(host_end)
+        .min(host_end);
+    let authority = &no_scheme[..host_end.max(
+        no_scheme.find('/').unwrap_or(no_scheme.len()),
+    )];
+    let no_userinfo = match authority.rfind('@') {
+        Some(at_pos) => &no_scheme[at_pos + 1..],
+        None => no_scheme,
+    };
+
+    // 3. Match a github.com host.
+    let after_host = if let Some(rest) = no_userinfo.strip_prefix("github.com/") {
         rest
-    } else if let Some(rest) = candidate.strip_prefix("http://github.com/") {
-        rest
-    } else if let Some(rest) = candidate.strip_prefix("ssh://git@github.com/") {
-        rest
-    } else if let Some(rest) = candidate.strip_prefix("git://github.com/") {
-        rest
-    } else if let Some(rest) = candidate.strip_prefix("git@github.com:") {
+    } else if let Some(rest) = no_userinfo.strip_prefix("github.com:") {
         rest
     } else {
         return None;
     };
 
-    // Must contain exactly one `/` separating Owner and Repo. Reject
-    // anything with extra path segments — those aren't a plain repo
-    // URL.
+    // 4. Split into Owner / Repo. Reject anything with more path
+    //    segments — those aren't a plain repo URL.
     let parts: Vec<&str> = after_host.split('/').collect();
     if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
         Some(format!("{}/{}", parts[0], parts[1]))
@@ -336,6 +366,25 @@ mod tests {
         assert_eq!(
             parse_github_repo("ssh://git@github.com/ZelAnton/agent-workspace.git"),
             Some("ZelAnton/agent-workspace".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_github_repo_https_with_username() {
+        // `gh auth login` and similar helpers persist remotes with
+        // the username embedded in the URL. Must still resolve.
+        assert_eq!(
+            parse_github_repo("https://ZelAnton@github.com/ZelAnton/agent-workspace"),
+            Some("ZelAnton/agent-workspace".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_github_repo_https_with_user_and_token() {
+        // PATs and OAuth tokens embed as `user:token@host`.
+        assert_eq!(
+            parse_github_repo("https://oauth2:ghp_abc123@github.com/Org/Repo.git"),
+            Some("Org/Repo".to_string())
         );
     }
 

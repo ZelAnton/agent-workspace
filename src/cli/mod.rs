@@ -91,6 +91,11 @@ enum Command {
     /// Show current worktree information
     Status,
 
+    /// Show or refresh the per-repo metadata cache (file count, size,
+    /// origin URL, GitHub slug). Used by `ws new` to skip the Phase-1
+    /// scan; auto-refreshed every 30 days. Pass `--refresh` to force.
+    RepoInfo(commands::RepoInfoArgs),
+
     /// Sync current worktree from trunk
     Sync(commands::SyncArgs),
 
@@ -141,6 +146,7 @@ impl Cli {
             Command::Clean(args) => commands::lifecycle::clean::run(args, &config, path_file),
             Command::Merge(args) => commands::merge::run(args, &config, path_file),
             Command::Status => commands::status::run(&config),
+            Command::RepoInfo(args) => commands::repo_info::run(args, &config),
             Command::Sync(args) => commands::sync::run(args, &config),
             Command::Mv(args) => commands::r#move::run(args, &config, path_file),
             Command::Setup(args) => commands::sys::setup::run(args),
