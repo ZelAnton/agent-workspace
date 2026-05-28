@@ -396,43 +396,52 @@ fn try_clone_via_robocopy(
     // here. See also `config::strip_verbatim_prefix`.
     let src_stripped = crate::config::strip_verbatim_prefix(src.to_path_buf());
     let dst_stripped = crate::config::strip_verbatim_prefix(dst.to_path_buf());
-    let excludes_owned: Vec<String> = excludes.iter().map(|s| s.to_string()).collect();
 
     // ------------------------------------------------------------------
-    // Phase 1: scan source to learn total file count.
+    // Phase 1: get total file count + bytes via the per-repo cache,
+    // refreshing it (with a live spinner) only when stale.
     // ------------------------------------------------------------------
-    // The pre-scan is what makes the per-file progress bar accurate
-    // (without total_files we'd be left with a spinner only). On a
-    // 300k-file tree this costs ~15 s of pure metadata reads — small
-    // tax for proper progress.
+    // The cache lives at `<workspaces_dir>/<project>-<hash>/.repo-meta.toml`
+    // and is refreshed at most every 30 days. Within that window the
+    // call is a cheap TOML read; outside it we fall back to the same
+    // metadata walk we used to do unconditionally (~15 s on a 300k-
+    // file tree).
+    //
+    // `dst.parent()` is the per-project dir (`workspaces_dir.join(
+    // workspace_id)`). The walk that fills the cache must use the same
+    // top-level exclusions as the copy itself so the cached totals are
+    // a faithful denominator.
+    let project_dir = dst_stripped
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| dst_stripped.clone());
+
     let scan_pb = ProgressBar::new_spinner();
     scan_pb.set_style(
-        ProgressStyle::with_template("  {spinner:.cyan} Scanning files... {msg}")
+        ProgressStyle::with_template("  {spinner:.cyan} Scanning files (refreshing cache)... {msg}")
             .unwrap()
             .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
     );
     scan_pb.enable_steady_tick(Duration::from_millis(80));
 
-    let mut total_files: u64 = 0;
-    let mut total_bytes: u64 = 0;
-    for entry in build_clone_walker(&src_stripped, &excludes_owned).flatten() {
-        if let Some(ft) = entry.file_type()
-            && ft.is_file()
-        {
-            total_files += 1;
-            if let Ok(meta) = entry.metadata() {
-                total_bytes += meta.len();
-            }
-            if total_files.is_multiple_of(256) {
-                scan_pb.set_message(format!(
-                    "{} files, {}",
-                    total_files,
-                    HumanBytes(total_bytes)
-                ));
-            }
+    let (total_files, total_bytes, from_cache) = match crate::repo_meta::load_or_refresh(
+        &project_dir,
+        &src_stripped,
+        excludes,
+    ) {
+        Ok(res) => (res.meta.total_files, res.meta.total_bytes, res.from_cache),
+        Err(e) => {
+            scan_pb.suspend(|| {
+                eprintln!("Warning: repo-meta cache load/refresh failed: {e}");
+            });
+            (0, 0, false)
         }
-    }
+    };
     scan_pb.finish_and_clear();
+
+    if from_cache {
+        eprintln!("  (using cached repo metadata; auto-refresh after 30 days)");
+    }
 
     // Heads-up line so the user knows the multi-minute work that's
     // about to happen — and what scale of work it is. Without this the

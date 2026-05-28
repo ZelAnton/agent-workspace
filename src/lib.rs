@@ -9,6 +9,7 @@ pub mod cow;
 pub mod meta;
 pub mod process;
 pub mod prompt;
+pub mod repo_meta;
 pub mod shell;
 pub mod terminal;
 pub mod update;

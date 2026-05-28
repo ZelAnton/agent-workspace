@@ -1,6 +1,6 @@
 {
   "name": "@zelanton/agent-workspace-linux-x64",
-  "version": "0.13.13",
+  "version": "0.13.14",
   "description": "agent-workspace binary for Linux x64",
   "license": "MIT",
   "repository": {
