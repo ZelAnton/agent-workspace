@@ -199,7 +199,13 @@ fn create_worktree_cow(
     let inner: Result<()> = (|| {
         // 3. Put the source working tree on the right commit.
         if branch_already_exists {
-            let branch_commit = super::repo::resolve_commit(runner, branch)?;
+            // Resolve the BRANCH ref explicitly (`refs/heads/<branch>`), not
+            // the bare name: a tag sharing the name would otherwise win git's
+            // ref-precedence and resolve to the wrong commit, while step 4's
+            // `worktree add <path> <branch>` checks out the branch — yielding
+            // a reflink-source tree that mismatches the worktree's HEAD.
+            let branch_commit =
+                super::repo::resolve_commit(runner, &format!("refs/heads/{branch}"))?;
             if orig_commit != branch_commit {
                 let t = std::time::Instant::now();
                 super::exec(runner, &["checkout", "--detach", &branch_commit])?;
