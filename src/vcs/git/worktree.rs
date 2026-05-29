@@ -194,7 +194,7 @@ fn create_worktree_cow(
         };
         add_result?;
         eprintln!(
-            "  Created worktree skeleton ({}).",
+            "  Created workspace skeleton ({}).",
             crate::util::format_step(t.elapsed())
         );
 
