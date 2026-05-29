@@ -192,6 +192,9 @@ pub fn detect_trunk() -> Result<String> { with_backend(|b| b.detect_trunk()) }
 // ----- Branches -----------------------------------------------------------
 pub fn local_branches() -> Result<Vec<String>> { with_backend(|b| b.local_branches()) }
 pub fn branch_exists(name: &str) -> Result<bool> { with_backend(|b| b.branch_exists(name)) }
+pub fn remote_branch_exists(name: &str) -> Result<bool> {
+    with_backend(|b| b.remote_branch_exists(name))
+}
 pub fn is_merged(branch: &str, target: &str) -> Result<bool> {
     with_backend(|b| b.is_merged(branch, target))
 }
@@ -249,6 +252,9 @@ pub fn reset_merge() -> Result<()> { with_backend(|b| b.reset_merge()) }
 pub fn list_worktrees() -> Result<Vec<WorktreeInfo>> { with_backend(|b| b.list_worktrees()) }
 pub fn create_worktree(path: &Path, branch: &str, base: &str) -> Result<CreateOutcome> {
     with_backend(|b| b.create_worktree(path, branch, base))
+}
+pub fn create_worktree_from_remote(path: &Path, branch: &str) -> Result<CreateOutcome> {
+    with_backend(|b| b.create_worktree_from_remote(path, branch))
 }
 pub fn remove_worktree(path: &Path, force: bool) -> Result<()> {
     with_backend(|b| b.remove_worktree(path, force))

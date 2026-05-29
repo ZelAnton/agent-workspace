@@ -7,6 +7,7 @@
 // with the `jj` binary; all reuse the `Runner` injection so tests can mock.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use vcs_runner::{
     parse_bookmark_output, parse_log_output, Cmd, RemoteStatus, RunError, Runner, BOOKMARK_TEMPLATE,
@@ -230,6 +231,35 @@ pub(super) fn local_branches(runner: &dyn Runner) -> Result<Vec<String>> {
 pub(super) fn branch_exists(runner: &dyn Runner, name: &str) -> Result<bool> {
     let bookmarks = local_branches(runner)?;
     Ok(bookmarks.iter().any(|b| b == name))
+}
+
+/// Whether a branch named `name` exists on `origin`, queried WITHOUT a
+/// fetch. jj has no cheap native remote-ref probe, so on a COLOCATED repo
+/// (the common case) we run the same `git ls-remote` the git backend uses
+/// — read-only, so no `jj git import` reconciliation is needed afterward.
+///
+/// **Best-effort**: a pure-jj repo (no `.git`), an unreachable remote, an
+/// auth prompt, or a timeout all map to `Ok(false)` so `ws new` never
+/// blocks on the probe (and we never fall back to an expensive
+/// `jj git fetch` just to answer an existence question).
+pub(super) fn remote_branch_exists(runner: &dyn Runner, name: &str) -> Result<bool> {
+    let Ok(root) = repo_root(runner) else {
+        return Ok(false);
+    };
+    if !root.join(".git").exists() {
+        return Ok(false);
+    }
+    let cwd = std::env::current_dir()?;
+    match runner.run(
+        Cmd::new("git")
+            .in_dir(&cwd)
+            .args(["ls-remote", "--heads", "origin", name])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .timeout(Duration::from_secs(10)),
+    ) {
+        Ok(out) => Ok(crate::vcs::common::ls_remote_has_branch(&out.stdout_lossy(), name)),
+        Err(_) => Ok(false),
+    }
 }
 
 /// Rename a bookmark. `jj bookmark rename` is a direct equivalent.

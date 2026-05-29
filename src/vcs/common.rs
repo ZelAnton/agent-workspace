@@ -51,6 +51,26 @@ pub enum CreateOutcome {
     CowCloned,
 }
 
+/// True iff `git ls-remote --heads origin <name>` output advertises a
+/// branch named EXACTLY `<name>`.
+///
+/// `ls-remote` prints one `"<sha>\t<refname>"` line per matching ref. We
+/// require `refname == "refs/heads/<name>"` — an exact match, never a
+/// substring/suffix test, so probing `foo` does not falsely match
+/// `refs/heads/foobar` (`ls-remote --heads <pattern>` can return such
+/// neighbours). Pure + backend-agnostic so both `GitBackend` and the
+/// colocated `JjBackend` (which also shells out to `git ls-remote`) share
+/// it; unit-tested without a subprocess.
+pub(crate) fn ls_remote_has_branch(stdout: &str, name: &str) -> bool {
+    let target = format!("refs/heads/{name}");
+    stdout.lines().any(|line| {
+        line.split('\t')
+            .nth(1)
+            .map(|refname| refname.trim() == target)
+            .unwrap_or(false)
+    })
+}
+
 /// Safely convert a [`Path`] to `&str`, surfacing the bad path via
 /// [`Error::Command`] instead of panicking on `to_str().unwrap()`.
 ///
@@ -60,4 +80,59 @@ pub enum CreateOutcome {
 pub fn path_str(path: &Path) -> Result<&str> {
     path.to_str()
         .ok_or_else(|| Error::Command(format!("path contains invalid UTF-8: {}", path.display())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ls_remote_has_branch;
+
+    fn line(sha: &str, refname: &str) -> String {
+        format!("{sha}\t{refname}\n")
+    }
+
+    #[test]
+    fn exact_match_is_true() {
+        let out = line("abc123", "refs/heads/feature");
+        assert!(ls_remote_has_branch(&out, "feature"));
+    }
+
+    #[test]
+    fn prefix_neighbour_is_false() {
+        // `--heads feature` can advertise `feature-2` / `featureful`; a
+        // substring/suffix test would wrongly match. We must not.
+        let out = format!(
+            "{}{}",
+            line("a", "refs/heads/feature-2"),
+            line("b", "refs/heads/featureful"),
+        );
+        assert!(!ls_remote_has_branch(&out, "feature"));
+    }
+
+    #[test]
+    fn slash_name_matches_exactly() {
+        let out = line("a", "refs/heads/feat/foo");
+        assert!(ls_remote_has_branch(&out, "feat/foo"));
+        assert!(!ls_remote_has_branch(&out, "foo"));
+        assert!(!ls_remote_has_branch(&out, "feat"));
+    }
+
+    #[test]
+    fn picks_the_right_line_among_many() {
+        let out = format!(
+            "{}{}{}",
+            line("a", "refs/heads/main"),
+            line("b", "refs/heads/feature"),
+            line("c", "refs/heads/dev"),
+        );
+        assert!(ls_remote_has_branch(&out, "feature"));
+        assert!(ls_remote_has_branch(&out, "main"));
+        assert!(!ls_remote_has_branch(&out, "nope"));
+    }
+
+    #[test]
+    fn empty_or_malformed_is_false() {
+        assert!(!ls_remote_has_branch("", "feature"));
+        // A line with no tab (shouldn't happen, but be defensive).
+        assert!(!ls_remote_has_branch("refs/heads/feature\n", "feature"));
+    }
 }

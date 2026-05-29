@@ -427,6 +427,54 @@ jj_test!(test_create_worktree_resumes_existing_bookmark, |dir: &Path| {
     });
 });
 
+jj_test!(test_create_worktree_from_remote_materializes_bookmark, |dir: &Path| {
+    // Bare git remote + a bookmark pushed to it, then forgotten locally so
+    // it lives ONLY on origin (the colocated repo can still see it via the
+    // shared `git ls-remote`).
+    let remote = tempdir().unwrap();
+    StdCommand::new("git")
+        .args(["init", "--bare"])
+        .current_dir(remote.path())
+        .status()
+        .unwrap();
+    let url = remote.path().to_str().unwrap();
+    let jj = |args: &[&str]| {
+        StdCommand::new("jj")
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .unwrap();
+    };
+    jj(&["git", "remote", "add", "origin", url]);
+    jj(&["bookmark", "create", "remote-only", "-r", "main"]);
+    jj(&["git", "push", "--bookmark", "remote-only", "--allow-new"]);
+    jj(&["bookmark", "forget", "remote-only"]);
+
+    let wt_path = dir.join("workspaces").join("remote-only");
+    std::fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
+
+    with_cwd(dir, || {
+        let b = backend();
+        assert!(
+            !b.branch_exists("remote-only").unwrap(),
+            "bookmark must be remote-only (forgotten locally)"
+        );
+        assert!(
+            b.remote_branch_exists("remote-only").unwrap(),
+            "colocated git ls-remote must see it on origin"
+        );
+
+        b.create_worktree_from_remote(&wt_path, "remote-only").unwrap();
+        assert!(wt_path.exists(), "workspace dir should exist");
+        assert!(
+            b.branch_exists("remote-only").unwrap(),
+            "fetch + create must (re)establish a local bookmark"
+        );
+
+        b.remove_worktree(&wt_path, false).unwrap();
+    });
+});
+
 jj_test!(test_remove_worktree_cleans_up_dir, |dir: &Path| {
     let wt_path = dir.join("workspaces").join("removable");
     std::fs::create_dir_all(wt_path.parent().unwrap()).unwrap();

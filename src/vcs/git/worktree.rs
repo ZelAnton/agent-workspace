@@ -55,6 +55,22 @@ pub(super) fn create_worktree(
     create_worktree_plain(runner, path, branch, base, branch_already_exists)
 }
 
+/// Create a worktree from a branch that exists only on `origin`: fetch
+/// just that branch, then create the worktree from the remote-tracking
+/// ref. Reuses [`create_worktree`] with `base = "origin/<branch>"`; since
+/// `<branch>` doesn't exist locally, that takes the new-branch path
+/// (`git worktree add -b <branch> <path> origin/<branch>`), which mints a
+/// local `<branch>` tracking the remote.
+pub(super) fn create_worktree_from_remote(
+    runner: &dyn Runner,
+    path: &Path,
+    branch: &str,
+) -> Result<CreateOutcome> {
+    eprintln!("  Fetching '{branch}' from origin...");
+    super::ops::fetch_remote_branch(runner, branch)?;
+    create_worktree(runner, path, branch, &format!("origin/{branch}"))
+}
+
 /// Standard `git worktree add` — git materialises the working copy.
 fn create_worktree_plain(
     runner: &dyn Runner,

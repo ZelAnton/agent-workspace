@@ -122,6 +122,30 @@ pub(super) fn create_worktree(
     create_worktree_plain(runner, path, branch, effective_base, branch_already_exists)
 }
 
+/// Create a workspace from a bookmark that exists only on `origin`: fetch
+/// just that bookmark, then create the workspace from it.
+///
+/// After `jj git fetch -b <branch>`, the base depends on jj's
+/// `git.auto-local-bookmark` setting: when ON, a local `<branch>` is
+/// created and we resume it; when OFF (the modern default) only
+/// `<branch>@origin` exists, so we base on that revset and the inner
+/// `create_worktree` mints a fresh local `<branch>`. Either way the
+/// resulting workspace carries a usable local bookmark.
+pub(super) fn create_worktree_from_remote(
+    runner: &dyn Runner,
+    path: &Path,
+    branch: &str,
+) -> Result<CreateOutcome> {
+    eprintln!("  Fetching '{branch}' from origin...");
+    super::ops::fetch_remote_branch(runner, branch)?;
+    let base = if super::repo::branch_exists(runner, branch)? {
+        branch.to_string()
+    } else {
+        format!("{branch}@origin")
+    };
+    create_worktree(runner, path, branch, &base)
+}
+
 /// Standard `jj workspace add` — jj materialises the working copy itself.
 ///
 /// When `branch_already_exists`, `base` is the bookmark name itself, so the

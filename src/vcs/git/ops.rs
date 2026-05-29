@@ -129,6 +129,32 @@ pub(super) fn fetch(runner: &dyn Runner) -> Result<()> {
     }
 }
 
+/// Fetch a SINGLE branch from `origin` into its remote-tracking ref.
+///
+/// Unlike [`fetch`], this is **targeted** (one branch, not the whole
+/// remote) so it stays cheap on large monorepos, and it **hard-fails** on
+/// error: callers reach it only after `remote_branch_exists` already
+/// confirmed the branch is there, so a failure here (network dropped mid
+/// way, ref deleted in the race window, auth revoked) is real and
+/// actionable rather than the "fetch is best-effort" case. Transient
+/// network blips still retry first via [`is_transient_fetch_err`].
+pub(super) fn fetch_remote_branch(runner: &dyn Runner, branch: &str) -> Result<()> {
+    use vcs_runner::RetryPolicy;
+    let cwd = std::env::current_dir()?;
+    let refspec = format!("refs/heads/{branch}:refs/remotes/origin/{branch}");
+    let policy = RetryPolicy::default().when(is_transient_fetch_err);
+    runner
+        .run(
+            Cmd::new("git")
+                .in_dir(&cwd)
+                .args(["fetch", "--quiet", "origin", &refspec])
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .retry(policy),
+        )
+        .map(|_| ())
+        .map_err(map_run_err)
+}
+
 /// True if `err` looks like a transient network failure that's worth
 /// retrying. Matches stderr text against patterns git emits for DNS
 /// failures, connection resets, and protocol-level early EOFs.

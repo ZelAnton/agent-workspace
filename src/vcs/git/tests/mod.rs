@@ -343,6 +343,84 @@ fn test_branch_exists_false() {
     });
 }
 
+// ---------------------------------------------------------------------------
+// Remote-branch awareness (remote_branch_exists + create_worktree_from_remote)
+// ---------------------------------------------------------------------------
+
+/// A work repo wired to a bare `origin` that carries a `remote-only`
+/// branch absent from the work repo (local branch + remote-tracking ref
+/// both removed). Returns (work_dir, remote_dir) — keep both alive for the
+/// test's duration so the tempdirs aren't dropped.
+fn setup_repo_with_remote_only_branch() -> (tempfile::TempDir, tempfile::TempDir) {
+    let work = setup_test_repo();
+    let remote = tempdir().unwrap();
+    StdCommand::new("git")
+        .args(["init", "--bare"])
+        .current_dir(remote.path())
+        .output()
+        .unwrap();
+    let url = remote.path().to_str().unwrap();
+    for args in [
+        vec!["remote", "add", "origin", url],
+        vec!["push", "origin", "main"],
+        vec!["branch", "remote-only", "main"],
+        vec!["push", "origin", "remote-only"],
+        // Make it truly remote-only: drop the local branch AND any
+        // remote-tracking ref `push` may have created.
+        vec!["branch", "-D", "remote-only"],
+        vec!["update-ref", "-d", "refs/remotes/origin/remote-only"],
+    ] {
+        StdCommand::new("git")
+            .args(&args)
+            .current_dir(work.path())
+            .output()
+            .unwrap();
+    }
+    (work, remote)
+}
+
+#[test]
+fn test_remote_branch_exists_true_and_false() {
+    let (work, _remote) = setup_repo_with_remote_only_branch();
+    with_cwd(work.path(), || {
+        let b = backend();
+        // Not local…
+        assert!(!b.branch_exists("remote-only").unwrap());
+        // …but present on origin (cheap ls-remote, no fetch).
+        assert!(b.remote_branch_exists("remote-only").unwrap());
+        // Exact match only — no prefix false positives, and bogus → false.
+        assert!(!b.remote_branch_exists("remote").unwrap());
+        assert!(!b.remote_branch_exists("bogus-xyz").unwrap());
+    });
+}
+
+#[test]
+fn test_remote_branch_exists_false_without_remote() {
+    // No `origin` configured → best-effort Ok(false), never an error.
+    let dir = setup_test_repo();
+    with_cwd(dir.path(), || {
+        assert!(!backend().remote_branch_exists("anything").unwrap());
+    });
+}
+
+#[test]
+fn test_create_worktree_from_remote_materializes_branch() {
+    let (work, _remote) = setup_repo_with_remote_only_branch();
+    let wt_path = work.path().join("workspaces").join("remote-only");
+    std::fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
+    with_cwd(work.path(), || {
+        let b = backend();
+        b.create_worktree_from_remote(&wt_path, "remote-only").unwrap();
+        assert!(wt_path.exists(), "worktree dir should exist");
+        assert!(
+            wt_path.join("README.md").exists(),
+            "committed file should be checked out"
+        );
+        // The targeted fetch + create minted a local branch tracking origin.
+        assert!(b.branch_exists("remote-only").unwrap());
+    });
+}
+
 #[test]
 fn test_current_commit() {
     let dir = setup_test_repo();

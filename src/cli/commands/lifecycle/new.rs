@@ -49,6 +49,17 @@ pub struct NewArgs {
     no_cow: bool,
 }
 
+/// How `ws new` should materialise the worktree for the requested branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CreateMode {
+    /// Branch exists locally → create the worktree from it (resume).
+    Resume,
+    /// Branch exists only on `origin` → targeted-fetch it, then create.
+    RemoteClone,
+    /// Brand-new branch → create it from the resolved base.
+    NewFromBase,
+}
+
 pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<()> {
     // Wall-clock measurement of the full `ws new` body. Printed at the
     // end as `Elapsed: HH:MM:SS` so the user knows how long a clone of
@@ -125,26 +136,45 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
         util::generate_unique_branch_name(|n| vcs::branch_exists(n).unwrap_or(false))
     });
 
-    // Does a branch/bookmark with this name already exist?
-    let branch_already_exists =
+    // Does a branch/bookmark with this name already exist LOCALLY?
+    let local_exists =
         explicit_name.is_some() && vcs::branch_exists(&branch).unwrap_or(false);
 
-    // Resolve the base.
-    //   - resuming an existing branch → `default_base` is just the recorded
-    //     merge target; the backend creates the worktree FROM the branch.
-    //   - new branch, name given explicitly, no `--base`, interactive stdin
-    //     → menu: (1, default) create from the current branch, or (2) pick a
-    //     different base branch.
-    //   - everything else (random name, explicit `--base`, non-interactive)
-    //     → `default_base`.
-    let base_branch = if branch_already_exists
-        || explicit_name.is_none()
-        || args.base.is_some()
-        || !std::io::stdin().is_terminal()
-    {
-        default_base
+    // Not local, but named explicitly without a pinned `--base`? Probe the
+    // remote WITHOUT fetching (cheap `git ls-remote`): a branch that lives
+    // on origin should be resumed, not shadowed by a fresh local branch.
+    // Best-effort — an unreachable remote just falls through to the menu.
+    let remote_exists = !local_exists
+        && explicit_name.is_some()
+        && args.base.is_none()
+        && vcs::remote_branch_exists(&branch).unwrap_or(false);
+
+    // How the worktree gets created:
+    //   - Resume:      exists locally → create FROM it.
+    //   - RemoteClone: only on origin → targeted-fetch that one branch +
+    //                  create from it, WITHOUT prompting.
+    //   - NewFromBase: brand-new branch.
+    let mode = if local_exists {
+        CreateMode::Resume
+    } else if remote_exists {
+        CreateMode::RemoteClone
     } else {
-        resolve_base_via_menu(&branch, &default_base)?
+        CreateMode::NewFromBase
+    };
+
+    // `base_branch` is the recorded merge target in every mode, and the
+    // creation start point for NewFromBase. Only NewFromBase with an
+    // explicit name, no `--base`, and an interactive stdin pops the
+    // base-picker menu; everything else uses `default_base`.
+    let base_branch = match mode {
+        CreateMode::NewFromBase
+            if explicit_name.is_some()
+                && args.base.is_none()
+                && std::io::stdin().is_terminal() =>
+        {
+            resolve_base_via_menu(&branch, &default_base)?
+        }
+        _ => default_base,
     };
 
     // If we're running inside a spawned terminal tab, update the tab
@@ -183,12 +213,22 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
     // Create workspace directory if needed
     std::fs::create_dir_all(wt_dir).map_err(|e| Error::Other(e.to_string()))?;
 
-    if branch_already_exists {
-        eprintln!("Branch '{branch}' already exists — creating worktree from it...");
-    } else {
-        eprintln!("Creating worktree '{branch}' from '{base_branch}'...");
-    }
-    let create_outcome = vcs::create_worktree(&wt_path, &branch, &base_branch)?;
+    let create_outcome = match mode {
+        CreateMode::Resume => {
+            eprintln!("Branch '{branch}' already exists — creating worktree from it...");
+            vcs::create_worktree(&wt_path, &branch, &base_branch)?
+        }
+        CreateMode::RemoteClone => {
+            eprintln!(
+                "Branch '{branch}' found on origin — fetching and creating worktree from it..."
+            );
+            vcs::create_worktree_from_remote(&wt_path, &branch)?
+        }
+        CreateMode::NewFromBase => {
+            eprintln!("Creating worktree '{branch}' from '{base_branch}'...");
+            vcs::create_worktree(&wt_path, &branch, &base_branch)?
+        }
+    };
 
     let meta = WorktreeMeta::new(base_branch);
     let meta_path = meta::meta_path(wt_dir, &branch);

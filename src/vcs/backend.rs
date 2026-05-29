@@ -46,6 +46,14 @@ pub trait VcsBackend: Send + Sync {
     // -------------------------------------------------------------------
     fn local_branches(&self) -> Result<Vec<String>>;
     fn branch_exists(&self, name: &str) -> Result<bool>;
+
+    /// Whether a branch named `name` exists on the remote (`origin`),
+    /// queried WITHOUT a fetch (cheap ref listing — `git ls-remote`).
+    ///
+    /// **Best-effort**: a probe that can't reach the remote (offline, no
+    /// remote configured, auth prompt, timeout) returns `Ok(false)` rather
+    /// than erroring, so callers never block `ws new` on a flaky network.
+    fn remote_branch_exists(&self, name: &str) -> Result<bool>;
     fn is_merged(&self, branch: &str, target: &str) -> Result<bool>;
     fn has_diff_from(&self, branch: &str, target: &str) -> Result<bool>;
     fn delete_branch(&self, name: &str, force: bool) -> Result<()>;
@@ -101,6 +109,18 @@ pub trait VcsBackend: Send + Sync {
         path: &Path,
         branch: &str,
         base: &str,
+    ) -> Result<crate::vcs::common::CreateOutcome>;
+
+    /// Create a worktree from a branch that currently lives ONLY on the
+    /// remote: fetch just that one branch (targeted — not a full fetch),
+    /// then create the worktree from it, minting a local branch. Used by
+    /// `ws new <name>` when `<name>` is absent locally but present on
+    /// `origin`. Reuses `create_worktree` internally with the
+    /// remote-tracking ref as the base.
+    fn create_worktree_from_remote(
+        &self,
+        path: &Path,
+        branch: &str,
     ) -> Result<crate::vcs::common::CreateOutcome>;
     fn remove_worktree(&self, path: &Path, force: bool) -> Result<()>;
     fn move_worktree(&self, old: &Path, new: &Path) -> Result<()>;

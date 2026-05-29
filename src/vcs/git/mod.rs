@@ -91,6 +91,9 @@ impl VcsBackend for GitBackend {
     fn branch_exists(&self, name: &str) -> Result<bool> {
         repo::branch_exists(self.runner.as_ref(), name)
     }
+    fn remote_branch_exists(&self, name: &str) -> Result<bool> {
+        repo::remote_branch_exists(self.runner.as_ref(), name)
+    }
     fn is_merged(&self, branch: &str, target: &str) -> Result<bool> {
         branch::is_merged(self.runner.as_ref(), branch, target)
     }
@@ -161,6 +164,13 @@ impl VcsBackend for GitBackend {
         base: &str,
     ) -> Result<crate::vcs::common::CreateOutcome> {
         worktree::create_worktree(self.runner.as_ref(), path, branch, base)
+    }
+    fn create_worktree_from_remote(
+        &self,
+        path: &Path,
+        branch: &str,
+    ) -> Result<crate::vcs::common::CreateOutcome> {
+        worktree::create_worktree_from_remote(self.runner.as_ref(), path, branch)
     }
     fn remove_worktree(&self, path: &Path, force: bool) -> Result<()> {
         worktree::remove_worktree(self.runner.as_ref(), path, force)

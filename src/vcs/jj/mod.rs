@@ -89,6 +89,9 @@ impl VcsBackend for JjBackend {
     fn branch_exists(&self, name: &str) -> Result<bool> {
         repo::branch_exists(self.runner.as_ref(), name)
     }
+    fn remote_branch_exists(&self, name: &str) -> Result<bool> {
+        repo::remote_branch_exists(self.runner.as_ref(), name)
+    }
     fn rename_branch(&self, old: &str, new: &str) -> Result<()> {
         repo::rename_branch(self.runner.as_ref(), old, new)
     }
@@ -109,6 +112,13 @@ impl VcsBackend for JjBackend {
         base: &str,
     ) -> Result<crate::vcs::common::CreateOutcome> {
         worktree::create_worktree(self.runner.as_ref(), path, branch, base)
+    }
+    fn create_worktree_from_remote(
+        &self,
+        path: &Path,
+        branch: &str,
+    ) -> Result<crate::vcs::common::CreateOutcome> {
+        worktree::create_worktree_from_remote(self.runner.as_ref(), path, branch)
     }
     fn remove_worktree(&self, path: &Path, force: bool) -> Result<()> {
         worktree::remove_worktree(self.runner.as_ref(), path, force)

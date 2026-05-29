@@ -73,6 +73,26 @@ pub(super) fn fetch(runner: &dyn Runner) -> Result<()> {
     }
 }
 
+/// Fetch a SINGLE bookmark from `origin` (`jj git fetch --remote origin -b
+/// <branch>`). Targeted — not the whole remote — so it stays cheap on
+/// large repos. **Hard-fails** on error (unlike best-effort [`fetch`]):
+/// callers reach it only after `remote_branch_exists` confirmed the
+/// bookmark is there, so a failure here is real. Transient network blips
+/// retry first.
+pub(super) fn fetch_remote_branch(runner: &dyn Runner, branch: &str) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let policy = RetryPolicy::default().when(is_transient_error);
+    runner
+        .run(
+            Cmd::new("jj")
+                .in_dir(&cwd)
+                .args(["git", "fetch", "--remote", "origin", "-b", branch])
+                .retry(policy),
+        )
+        .map(|_| ())
+        .map_err(map_run_err)
+}
+
 // ---------------------------------------------------------------------------
 // Merge primitives
 // ---------------------------------------------------------------------------

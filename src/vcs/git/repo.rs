@@ -3,6 +3,7 @@
 // ===========================================================================
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use vcs_runner::{Cmd, RunError, Runner};
 
@@ -175,6 +176,31 @@ pub(super) fn branch_exists(runner: &dyn Runner, name: &str) -> Result<bool> {
         Ok(_) => Ok(true),
         Err(RunError::NonZeroExit { .. }) => Ok(false),
         Err(e) => Err(map_run_err(e)),
+    }
+}
+
+/// Whether a branch named `name` exists on `origin`, queried WITHOUT a
+/// fetch via `git ls-remote --heads origin <name>`.
+///
+/// **Best-effort**: any failure (no remote, auth/credential prompt,
+/// network down, timeout) maps to `Ok(false)` so `ws new` never blocks on
+/// the probe. `GIT_TERMINAL_PROMPT=0` makes a private remote without
+/// cached credentials fail fast instead of hanging on an interactive
+/// prompt; a 10 s timeout caps a wedged connection.
+pub(super) fn remote_branch_exists(runner: &dyn Runner, name: &str) -> Result<bool> {
+    let cwd = std::env::current_dir()?;
+    match runner.run(
+        Cmd::new("git")
+            .in_dir(&cwd)
+            .args(["ls-remote", "--heads", "origin", name])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .timeout(Duration::from_secs(10)),
+    ) {
+        Ok(out) => Ok(crate::vcs::common::ls_remote_has_branch(&out.stdout_lossy(), name)),
+        // No remote / auth failure / timeout / spawn error — treat as
+        // "not on remote" rather than surfacing an error. RunError is
+        // #[non_exhaustive]; a catch-all keeps this robust across variants.
+        Err(_) => Ok(false),
     }
 }
 
