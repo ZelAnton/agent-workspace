@@ -21,11 +21,24 @@ notes.
 ### Fixed
 -
 
+## [0.14.0] - 2026-05-29
+
+### Added
+
+- feat(release): add CHANGELOG.md + cliff.toml, baseline Cargo.toml to 0.13.27
+
+
+### Changed
+
+- ux(git): rename 'worktree skeleton' status line to 'workspace skeleton'
+- ci(release): bump-choice versioning + curated CHANGELOG release notes
+
 ## [0.13.27] - 2026-05-29
 
 ### Changed
 
 - Baseline entry; changelog tracking and automatic versioning introduced from this release onward.
 
-[Unreleased]: https://github.com/ZelAnton/agent-workspace/compare/v0.13.27...HEAD
+[Unreleased]: https://github.com/ZelAnton/agent-workspace/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/ZelAnton/agent-workspace/compare/v0.13.27...v0.14.0
 [0.13.27]: https://github.com/ZelAnton/agent-workspace/releases/tag/v0.13.27
