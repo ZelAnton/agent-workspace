@@ -2,6 +2,7 @@
 // ws new - Create a new worktree
 // ===========================================================================
 
+use std::io::IsTerminal;
 use std::path::Path;
 
 use clap::Args;
@@ -99,9 +100,10 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
     // Determine trunk branch
     let trunk = config.resolve_trunk();
 
-    // Resolve base branch: --base flag > current branch > trunk.
-    // Determines both the checkout starting point and the default merge/sync target.
-    let base_branch = if let Some(ref b) = args.base {
+    // Default base branch: --base flag > current branch > trunk. This is the
+    // creation start point for a NEW branch and the recorded merge/sync
+    // target in either case.
+    let default_base = if let Some(ref b) = args.base {
         if !vcs::branch_exists(b)? {
             return Err(Error::Other(format!("Branch '{b}' does not exist")));
         }
@@ -114,10 +116,36 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
             .unwrap_or_else(|| trunk.clone())
     };
 
-    // Generate or use provided branch name
-    let branch = args.branch.unwrap_or_else(|| {
+    // Generate or use the provided branch name. Remember whether the user
+    // gave one explicitly — a generated name is unique by construction, so
+    // the "branch already exists" path and the base-picker menu only apply
+    // to explicit names.
+    let explicit_name = args.branch.clone();
+    let branch = explicit_name.clone().unwrap_or_else(|| {
         util::generate_unique_branch_name(|n| vcs::branch_exists(n).unwrap_or(false))
     });
+
+    // Does a branch/bookmark with this name already exist?
+    let branch_already_exists =
+        explicit_name.is_some() && vcs::branch_exists(&branch).unwrap_or(false);
+
+    // Resolve the base.
+    //   - resuming an existing branch → `default_base` is just the recorded
+    //     merge target; the backend creates the worktree FROM the branch.
+    //   - new branch, name given explicitly, no `--base`, interactive stdin
+    //     → menu: (1, default) create from the current branch, or (2) pick a
+    //     different base branch.
+    //   - everything else (random name, explicit `--base`, non-interactive)
+    //     → `default_base`.
+    let base_branch = if branch_already_exists
+        || explicit_name.is_none()
+        || args.base.is_some()
+        || !std::io::stdin().is_terminal()
+    {
+        default_base
+    } else {
+        resolve_base_via_menu(&branch, &default_base)?
+    };
 
     // If we're running inside a spawned terminal tab, update the tab
     // title to match the *real* branch name. Critical when the user ran
@@ -155,7 +183,11 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
     // Create workspace directory if needed
     std::fs::create_dir_all(wt_dir).map_err(|e| Error::Other(e.to_string()))?;
 
-    eprintln!("Creating worktree '{branch}' from '{base_branch}'...");
+    if branch_already_exists {
+        eprintln!("Branch '{branch}' already exists — creating worktree from it...");
+    } else {
+        eprintln!("Creating worktree '{branch}' from '{base_branch}'...");
+    }
     let create_outcome = vcs::create_worktree(&wt_path, &branch, &base_branch)?;
 
     let meta = WorktreeMeta::new(base_branch);
@@ -326,6 +358,14 @@ fn copy_files(from: &Path, to: &Path, config: &Config) -> Result<()> {
 /// Terminal-detection still happens at the call site — even if this
 /// returns true, [`crate::terminal::detect()`] may return `None` and we
 /// fall through to in-place creation.
+fn should_open_new_tab(args: &NewArgs, config: &Config) -> bool {
+    crate::terminal::should_open_in_new_tab(
+        args.no_tab,
+        args.in_new_tab,
+        config.open_in_new_tab,
+    )
+}
+
 /// Decide whether `ws new` should use the Copy-on-Write creation path.
 /// The actual filesystem-capability probe happens later in the VCS
 /// dispatcher (`vcs::create_worktree`). This function ONLY decides
@@ -341,12 +381,52 @@ fn should_use_cow(args: &NewArgs, config: &Config) -> bool {
     config.use_cow
 }
 
-fn should_open_new_tab(args: &NewArgs, config: &Config) -> bool {
-    crate::terminal::should_open_in_new_tab(
-        args.no_tab,
-        args.in_new_tab,
-        config.open_in_new_tab,
-    )
+/// Ask how a brand-new branch should be based, returning the chosen base.
+///
+/// Offers two choices: create it from the current branch (`current_base`,
+/// the default), or pick a different base branch from the local-branch list
+/// (the cursor defaults to the current branch).
+///
+/// Only called in interactive mode (the caller gates on
+/// `stdin().is_terminal()`); a cancelled selection (Esc / closed stdin)
+/// propagates as an error so `ws new` aborts cleanly rather than silently
+/// picking a base the user didn't intend.
+fn resolve_base_via_menu(branch: &str, current_base: &str) -> Result<String> {
+    use dialoguer::Select;
+
+    let items = [
+        format!("Create branch '{branch}' from '{current_base}' (current branch)"),
+        "Pick a different base branch…".to_string(),
+    ];
+    let choice = Select::new()
+        .with_prompt(format!(
+            "Branch '{branch}' does not exist — what should it be based on?"
+        ))
+        .items(&items)
+        .default(0)
+        .interact()
+        .map_err(|e| Error::Other(format!("selection cancelled: {e}")))?;
+
+    if choice == 0 {
+        return Ok(current_base.to_string());
+    }
+
+    // Item 2: pick a base branch, defaulting the cursor to the current base.
+    let branches = vcs::local_branches().unwrap_or_default();
+    if branches.is_empty() {
+        return Ok(current_base.to_string());
+    }
+    let default_idx = branches
+        .iter()
+        .position(|b| b == current_base)
+        .unwrap_or(0);
+    let pick = Select::new()
+        .with_prompt(format!("Select base branch for '{branch}'"))
+        .items(&branches)
+        .default(default_idx)
+        .interact()
+        .map_err(|e| Error::Other(format!("selection cancelled: {e}")))?;
+    Ok(branches[pick].clone())
 }
 
 /// Spawn the new tab and return immediately. The caller (originating

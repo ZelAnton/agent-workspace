@@ -13,7 +13,8 @@ notes.
 ## [Unreleased]
 
 ### Added
--
+- `ws new <name>` now resumes an existing branch: if a branch/bookmark named `<name>` already exists, the worktree is created from it instead of failing.
+- `ws new <name>` for a new branch now offers an interactive menu (when run in a terminal): create the branch from the current branch (default), or pick a different base branch.
 
 ### Changed
 -

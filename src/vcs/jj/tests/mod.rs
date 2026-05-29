@@ -399,6 +399,34 @@ jj_test!(test_create_worktree_duplicate_branch_errors, |dir: &Path| {
     });
 });
 
+jj_test!(test_create_worktree_resumes_existing_bookmark, |dir: &Path| {
+    let wt_path = dir.join("workspaces").join("resume");
+    std::fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
+
+    with_cwd(dir, || {
+        // A bookmark that exists but is NOT checked out in any workspace.
+        StdCommand::new("jj")
+            .args(["bookmark", "create", "resume-me", "-r", "main"])
+            .current_dir(dir)
+            .status()
+            .unwrap();
+
+        let b = backend();
+        assert!(b.branch_exists("resume-me").unwrap());
+
+        // Resuming an existing, not-checked-out bookmark must SUCCEED
+        // (create the worktree from it) rather than erroring WorktreeExists.
+        b.create_worktree(&wt_path, "resume-me", "main").unwrap();
+        assert!(wt_path.exists(), "workspace dir should exist post-resume");
+        assert!(
+            b.branch_exists("resume-me").unwrap(),
+            "the resumed bookmark must still exist after create"
+        );
+
+        b.remove_worktree(&wt_path, false).unwrap();
+    });
+});
+
 jj_test!(test_remove_worktree_cleans_up_dir, |dir: &Path| {
     let wt_path = dir.join("workspaces").join("removable");
     std::fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
