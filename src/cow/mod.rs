@@ -443,6 +443,7 @@ fn try_clone_via_robocopy(
     use std::collections::VecDeque;
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -517,18 +518,27 @@ fn try_clone_via_robocopy(
     // Phase 2: live progress bar + 10-line tail frame.
     // ------------------------------------------------------------------
     // **Why this UI**: on a 300k-file / 13 GB monorepo the bulk-copy
-    // phase takes minutes, and showing nothing is bad UX. We restore
-    // the v0.13.7-era display:
+    // phase takes minutes, and showing nothing is bad UX. We show:
     //   - A main progress bar with `[N / total]` + percentage +
     //     elapsed wall time.
     //   - A 10-line rolling tail of robocopy's most recent file-list
     //     output (the same lines `/NFL` would otherwise suppress).
     //
-    // **Speed cost**: piping robocopy's per-file output back into Rust
-    // and updating an `indicatif::ProgressBar` per line adds back-
-    // pressure compared to `Stdio::null()` + `/NFL`. This iteration
-    // is explicitly to measure how much, on top of the user-validated
-    // `/MT:128 /R:0 /W:0 /COPY:DAT /DCOPY:DAT` flag set.
+    // **Critical design — decouple draining from rendering.** An earlier
+    // version updated indicatif from the stdout reader directly: ~11
+    // calls per line (`progress.inc(1)` + 10 `tail_bar.set_message`),
+    // for 300k+ lines. Every `set_message` on a `MultiProgress` member
+    // contends the shared draw target, so the reader couldn't drain
+    // robocopy's stdout pipe fast enough; with `/MT:128` the copy
+    // threads then block on their own stdout writes (64 KB pipe buffer
+    // fills), doubling wall time (7 min vs the 3 min the same flags take
+    // when output isn't piped back into a Rust consumer).
+    //
+    // The fix below: the reader thread does only an atomic increment +
+    // a push into a 10-slot ring buffer (no indicatif, no allocation
+    // churn beyond the line itself). A separate renderer thread repaints
+    // the bar + tail at ~12 Hz. Indicatif work is now bounded by wall
+    // time, not by file count, so the pipe drains at full speed.
     let mp = MultiProgress::new();
     let progress = mp.add(ProgressBar::new(total_files));
     progress.set_style(
@@ -539,7 +549,6 @@ fn try_clone_via_robocopy(
         .progress_chars("=> ")
         .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
     );
-    progress.enable_steady_tick(Duration::from_millis(120));
 
     // 10 tail bars below the main progress bar, each holding one
     // recent line from robocopy's stdout. We're not using them for
@@ -634,32 +643,61 @@ fn try_clone_via_robocopy(
     let stdout = child.stdout.take().expect("stdout was piped");
     let stderr = child.stderr.take().expect("stderr was piped");
 
-    // Stdout reader: drains lines, increments the main progress bar
-    // per non-empty line, maintains a 10-entry VecDeque whose
-    // contents are mirrored into the tail bars. All lines are also
-    // captured for error diagnostics in case robocopy exits >= 8.
-    let progress_for_thread = progress.clone();
-    let tail_bars_for_thread = tail_bars.clone();
-    let stdout_captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::with_capacity(4096)));
-    let stdout_captured_clone = Arc::clone(&stdout_captured);
+    // Shared state between the reader (writer) and the renderer (reader).
+    //   - `copied`: count of non-empty stdout lines == files copied so far.
+    //   - `tail`:   ring buffer of the last 10 lines, for the tail frame
+    //               and for error diagnostics if robocopy exits >= 8.
+    let copied = Arc::new(AtomicU64::new(0));
+    let tail: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::with_capacity(10)));
+
+    // Stdout reader (HOT PATH): must keep up with `/MT:128` so the pipe
+    // never back-pressures the copy threads. Per line it does only an
+    // atomic increment + a single mutex-guarded ring-buffer push — NO
+    // indicatif calls, NO unbounded growth. A larger read buffer cuts
+    // syscall count on the 300k-line stream.
+    let copied_reader = Arc::clone(&copied);
+    let tail_reader = Arc::clone(&tail);
     let stdout_thread = std::thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        let mut tail: VecDeque<String> = VecDeque::with_capacity(10);
+        let reader = BufReader::with_capacity(256 * 1024, stdout);
         for line in reader.lines().map_while(|r| r.ok()) {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
+            if line.trim().is_empty() {
                 continue;
             }
-            progress_for_thread.inc(1);
-            if tail.len() == 10 {
-                tail.pop_front();
+            copied_reader.fetch_add(1, Ordering::Relaxed);
+            let mut t = tail_reader.lock().unwrap();
+            if t.len() == 10 {
+                t.pop_front();
             }
-            tail.push_back(trimmed.to_string());
-            for (i, bar) in tail_bars_for_thread.iter().enumerate() {
-                let msg = tail.get(i).cloned().unwrap_or_default();
-                bar.set_message(msg);
+            t.push_back(line); // stored with leading whitespace; trimmed at render
+        }
+    });
+
+    // Renderer (COLD PATH): repaints the bar + tail at ~12 Hz, reading
+    // the shared state. All indicatif contention lives here, bounded by
+    // wall time rather than file count.
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_render = Arc::clone(&stop);
+    let copied_render = Arc::clone(&copied);
+    let tail_render = Arc::clone(&tail);
+    let progress_render = progress.clone();
+    let tail_bars_render = tail_bars.clone();
+    let renderer = std::thread::spawn(move || {
+        loop {
+            progress_render.set_position(copied_render.load(Ordering::Relaxed));
+            {
+                let t = tail_render.lock().unwrap();
+                for (i, bar) in tail_bars_render.iter().enumerate() {
+                    match t.get(i) {
+                        Some(line) => bar.set_message(line.trim().to_string()),
+                        None => bar.set_message(""),
+                    }
+                }
             }
-            stdout_captured_clone.lock().unwrap().push(line);
+            progress_render.tick(); // animate spinner + coalesced redraw
+            if stop_render.load(Ordering::Relaxed) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(80));
         }
     });
 
@@ -678,6 +716,9 @@ fn try_clone_via_robocopy(
     let status = child.wait().map_err(RobocopyError::SpawnFailed)?;
     let _ = stdout_thread.join();
     let _ = stderr_thread.join();
+    // Reader is done → counts are final. Stop the renderer and tear down.
+    stop.store(true, Ordering::Relaxed);
+    let _ = renderer.join();
     progress.finish_and_clear();
     for bar in &tail_bars {
         bar.finish_and_clear();
@@ -694,17 +735,14 @@ fn try_clone_via_robocopy(
             }
             eprintln!("---------------------------------");
         }
-        let stdout_lines = stdout_captured.lock().unwrap();
-        if !stdout_lines.is_empty() {
-            let tail_n = stdout_lines.len().min(40);
-            eprintln!(
-                "--- robocopy stdout tail (last {} of {}) ---",
-                tail_n,
-                stdout_lines.len()
-            );
-            let skip = stdout_lines.len().saturating_sub(tail_n);
-            for line in stdout_lines.iter().skip(skip) {
-                eprintln!("{line}");
+        // We retain only the last 10 stdout lines (the tail frame), which
+        // is enough trailing context — robocopy surfaces real failures on
+        // stderr + the exit code, both captured above.
+        let tail_lines = tail.lock().unwrap();
+        if !tail_lines.is_empty() {
+            eprintln!("--- robocopy stdout tail (last {}) ---", tail_lines.len());
+            for line in tail_lines.iter() {
+                eprintln!("{}", line.trim());
             }
             eprintln!("---------------------------------");
         }
