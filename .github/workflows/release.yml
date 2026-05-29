@@ -75,6 +75,27 @@ jobs:
           rustc --version
           cargo --version
 
+      # The release version comes from the manual `inputs.version` form
+      # field. It MUST be stamped into Cargo.toml before the build so the
+      # compiled binary's `env!("CARGO_PKG_VERSION")` matches the release
+      # tag — otherwise `ws update` downloads the new asset but installs a
+      # binary that still reports the repo's dev version, and every
+      # subsequent `ws update` sees the same version gap and "updates"
+      # forever. awk (not sed -i, whose flag differs across GNU/BSD/git-bash)
+      # rewrites only the first `^version = "…"` line, i.e. the [package]
+      # version — dependency `version =` keys are indented or inline so they
+      # never match the start-anchored pattern.
+      - name: Stamp release version into Cargo.toml
+        shell: bash
+        run: |
+          set -eu
+          VERSION="${{ inputs.version }}"
+          awk -v v="$VERSION" '
+            /^version = "/ && !done { print "version = \"" v "\""; done=1; next }
+            { print }
+          ' Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
+          echo "Cargo.toml now: $(grep -m1 '^version = ' Cargo.toml)"
+
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }}
 
