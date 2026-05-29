@@ -146,6 +146,14 @@ The version check (`update::check_update` in `src/update/mod.rs`) hits the **Git
 
 Platform key strings (`darwin-arm64`, `linux-x64`, `win32-x64`) must stay consistent across `update::platform_key()`, `npm/agent-workspace/bin/ws.js`, `install.sh`, `install.ps1`, and the CI release archive naming (`.github/workflows/release.yml`). Changing them requires touching all five. **Intel Mac (`darwin-x64`) is intentionally dropped** — the `macos-13` GitHub runner is too flaky for the release matrix. Intel Mac users build from source via `cargo install --path .`.
 
+## Releasing and the changelog
+
+Releases are **manual-trigger only** (`workflow_dispatch` in `.github/workflows/release.yml`) and the version number is **never typed by hand** — you pick a bump and the workflow computes the rest. The model mirrors the sibling `ProcessGroup` repo.
+
+- **`Cargo.toml` `version` is the single source of truth.** The release workflow reads it, bumps it (patch/minor/major from the form), stamps it into the build, and **commits the bump back to `main`** alongside the changelog — so `Cargo.toml`, the git tag (`v<version>`), the GitHub Release, and the npm packages never drift. (This drift is what caused the old "update loop": tags advanced while `Cargo.toml` stood still, so released binaries reported the stale version forever.)
+- **`CHANGELOG.md` ([Keep a Changelog](https://keepachangelog.com/)) tracks release notes.** Curate the `[Unreleased]` section as you work — add bullets under `Added` / `Changed` / `Fixed`. **Manual bullets always win.** If `[Unreleased]` has no real bullets at release time, the workflow auto-fills it from git history via `git-cliff` (config: `cliff.toml`), bucketing commit subjects by prefix (`feat`→Added, `fix`→Fixed, `remove`→Removed, `perf`/`ux`/`refactor`/`ci`/…→Changed, `docs`/`chore`/`test`→skipped). Clean conventional-commit subjects are what make that fallback useful — keep writing them.
+- **To cut a release:** run the **Release** workflow, choose `patch`/`minor`/`major` (optionally untick *Publish to npm*). The workflow's `prepare` job computes the version + guards against an existing tag + promotes `[Unreleased]` → `[<version>] - <date>` + extracts curated notes; `build` compiles the 3 platform binaries with the version stamped in; `release` commits `Cargo.toml` + `Cargo.lock` + `CHANGELOG.md` back to `main`, pushes the tag atomically, and publishes the GitHub Release with the curated notes (not raw commit logs); `publish-npm` ships the npm packages. There is **no** `push:`/`tag:` auto-trigger — accidental tag pushes never start a release.
+
 ## Local-only files
 
 `.gitignore` carves out `*.local.md`, `task_plan.md`, `findings.md`, `progress.md` — use those names freely for scratch notes; they won't be committed. `FILE_TREE.local.md` is the convention for the per-file responsibility doc.
