@@ -1,38 +1,260 @@
 name: Release
 
-# Manual-trigger only. Click "Run workflow" in the GitHub Actions UI,
-# enter the version to release (e.g. `0.13.14`), and the workflow:
-#   1. Builds release binaries for all three supported platforms.
-#   2. Creates a GitHub Release at the current commit with tag `v<version>`
-#      (the tag is created by `gh release create`; we don't push it
-#      separately).
-#   3. Publishes the npm packages (toggleable via the checkbox).
+# Manual-trigger only. Click "Run workflow" in the GitHub Actions UI and pick
+# a bump type (patch/minor/major). The workflow then:
+#   1. `prepare`: derives the next version from Cargo.toml, refuses to reuse an
+#      existing tag, auto-fills CHANGELOG.md's [Unreleased] from git-cliff if it
+#      has no manual bullets, extracts curated release notes, and promotes
+#      [Unreleased] -> [version] - date.
+#   2. `build`: compiles release binaries for all three platforms with the new
+#      version stamped into Cargo.toml.
+#   3. `release`: commits the version bump + changelog back to main, pushes the
+#      tag atomically, and publishes a GitHub Release using the curated notes.
+#   4. `publish-npm`: publishes the npm packages (toggleable).
 #
-# We removed the `push: tags: ['v*']` auto-trigger that earlier
-# versions used because it kicked off a full ~10-minute release pipeline
-# on every accidental tag push. Bumping Cargo.toml + a tag is now
-# decoupled from publishing; the maintainer reviews the staged change,
-# decides it's ready, and clicks Run.
+# There is no `push:`/`tag:` auto-trigger — releasing is always a deliberate
+# manual action. The version number is NEVER typed by hand: pick the bump and
+# the source-of-truth (Cargo.toml) drives everything, then gets committed back
+# so Cargo.toml, the git tag, and the GitHub Release never drift apart.
 
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Version to release (e.g. 0.13.14, no leading `v`).'
+      bump:
+        description: 'Version bump type'
         required: true
-        type: string
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: 'patch'
       publish_npm:
         description: 'Publish to npm registry'
         required: false
         type: boolean
         default: true
 
+# Never run two releases at once — they both bump + commit to main.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 permissions:
-  contents: write  # required by softprops/action-gh-release
+  contents: write
 
 jobs:
+  prepare:
+    name: Prepare version + release notes
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      prev_tag: ${{ steps.version.outputs.prev_tag }}
+    steps:
+      - name: Checkout main (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine next version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          CURRENT=$(grep -m1 -oP '(?<=^version = ")[^"]+' Cargo.toml)
+          if [[ ! "$CURRENT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Could not parse current version from Cargo.toml (got: '$CURRENT')"
+            exit 1
+          fi
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+          case "${{ inputs.bump }}" in
+            major) NEW="$((MAJOR+1)).0.0" ;;
+            minor) NEW="${MAJOR}.$((MINOR+1)).0" ;;
+            patch) NEW="${MAJOR}.${MINOR}.$((PATCH+1))" ;;
+          esac
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "version=$NEW" >> "$GITHUB_OUTPUT"
+          echo "tag=v$NEW" >> "$GITHUB_OUTPUT"
+          echo "prev_tag=v$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "Bumping $CURRENT -> $NEW"
+
+      - name: Verify tag does not exist
+        run: |
+          if git rev-parse "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "::error::Tag ${{ steps.version.outputs.tag }} already exists"
+            exit 1
+          fi
+
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff@2
+
+      - name: Auto-fill [Unreleased] from git log if empty
+        env:
+          PREV_TAG: ${{ steps.version.outputs.prev_tag }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import os
+          import pathlib
+          import re
+          import subprocess
+          import sys
+
+          prev_tag = os.environ["PREV_TAG"]
+          path = pathlib.Path("CHANGELOG.md")
+          text = path.read_text()
+
+          m = re.search(r"^## \[Unreleased\]\s*\n(.*?)(?=^## \[|\Z)", text, re.M | re.S)
+          if not m:
+              print("::error::Could not find '## [Unreleased]' header in CHANGELOG.md", file=sys.stderr)
+              sys.exit(1)
+
+          body = m.group(1)
+          has_real_bullets = any(re.match(r"^-\s+\S", ln) for ln in body.splitlines())
+          if has_real_bullets:
+              print("[Unreleased] already has manual entries; skipping auto-fill.")
+              sys.exit(0)
+
+          tag_exists = subprocess.run(
+              ["git", "rev-parse", "--verify", prev_tag], capture_output=True
+          ).returncode == 0
+
+          if tag_exists:
+              print(f"[Unreleased] is empty; generating from git log since {prev_tag}...")
+              cliff_cmd = ["git-cliff", "--config", "cliff.toml", "--strip", "all", f"{prev_tag}..HEAD"]
+              empty_hint = (
+                  f"::error::No release-worthy commits found between {prev_tag} and HEAD. "
+                  "Either add a manual entry to [Unreleased] in CHANGELOG.md, or commit "
+                  "changes with a recognised prefix (feat/fix/perf/ux/refactor/remove/...)."
+              )
+          else:
+              print(f"[Unreleased] is empty; tag {prev_tag} not found — generating from full git history...")
+              cliff_cmd = ["git-cliff", "--config", "cliff.toml", "--strip", "all"]
+              empty_hint = (
+                  "::error::No release-worthy commits found in git history. "
+                  "Either add a manual entry to [Unreleased] in CHANGELOG.md, or commit "
+                  "changes with a recognised prefix (feat/fix/perf/ux/refactor/remove/...)."
+              )
+
+          result = subprocess.run(cliff_cmd, check=True, capture_output=True, text=True)
+          generated = result.stdout.strip()
+          if not generated:
+              print(empty_hint, file=sys.stderr)
+              sys.exit(1)
+
+          new_text = text[: m.start(1)] + generated + "\n\n" + text[m.end(1) :]
+          path.write_text(new_text)
+          print("----- auto-generated [Unreleased] body -----")
+          print(generated)
+          print("--------------------------------------------")
+          PY
+
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          text = pathlib.Path("CHANGELOG.md").read_text()
+          m = re.search(r"^## \[Unreleased\]\s*\n(.*?)(?=^## \[|\Z)", text, re.M | re.S)
+          body = (m.group(1) if m else "").strip()
+
+          # Keep "### Header" only if it has at least one real bullet ("- text").
+          # Drop placeholder "-" lines and empty sections so notes are clean.
+          parts = re.split(r"(?m)(^### .+$)", body)
+          out = []
+          for i in range(1, len(parts), 2):
+              header = parts[i]
+              section = parts[i + 1] if i + 1 < len(parts) else ""
+              bullets = [ln for ln in section.splitlines() if re.match(r"^-\s+\S", ln)]
+              if bullets:
+                  if out:
+                      out.append("")
+                  out.append(header)
+                  out.extend(bullets)
+
+          result = "\n".join(out).strip()
+          if not result:
+              print(
+                  "::error::[Unreleased] section in CHANGELOG.md is empty. "
+                  "Add release notes before releasing.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          pathlib.Path("release-notes.md").write_text(result + "\n")
+          print("----- release-notes.md -----")
+          print(result)
+          print("----------------------------")
+          PY
+
+      - name: Promote Unreleased section in CHANGELOG.md
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          PREV_TAG: ${{ steps.version.outputs.prev_tag }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import os
+          import pathlib
+          import re
+          import sys
+          from datetime import datetime, timezone
+
+          version = os.environ["VERSION"]
+          tag = os.environ["TAG"]
+          prev_tag = os.environ["PREV_TAG"]
+          date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+          repo = "https://github.com/ZelAnton/agent-workspace"
+
+          path = pathlib.Path("CHANGELOG.md")
+          text = path.read_text()
+
+          new_unreleased = (
+              "## [Unreleased]\n\n"
+              "### Added\n-\n\n"
+              "### Changed\n-\n\n"
+              "### Fixed\n-\n\n"
+              f"## [{version}] - {date}"
+          )
+          text, n = re.subn(r"^## \[Unreleased\]$", new_unreleased, text, count=1, flags=re.M)
+          if n != 1:
+              print("::error::Could not find '## [Unreleased]' header in CHANGELOG.md", file=sys.stderr)
+              sys.exit(1)
+
+          link_replacement = (
+              f"[Unreleased]: {repo}/compare/{tag}...HEAD\n"
+              f"[{version}]: {repo}/compare/{prev_tag}...{tag}"
+          )
+          text, n = re.subn(r"^\[Unreleased\]:.*$", link_replacement, text, count=1, flags=re.M)
+          if n != 1:
+              print("::error::Could not find '[Unreleased]: ...' reference link in CHANGELOG.md", file=sys.stderr)
+              sys.exit(1)
+
+          path.write_text(text)
+          print("Promoted [Unreleased] -> [%s] - %s" % (version, date))
+          PY
+
+      - name: Upload changelog + release notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-meta
+          path: |
+            CHANGELOG.md
+            release-notes.md
+          retention-days: 7
+
   build:
     name: Build ${{ matrix.platform }}
+    needs: prepare
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -75,21 +297,19 @@ jobs:
           rustc --version
           cargo --version
 
-      # The release version comes from the manual `inputs.version` form
-      # field. It MUST be stamped into Cargo.toml before the build so the
-      # compiled binary's `env!("CARGO_PKG_VERSION")` matches the release
-      # tag — otherwise `ws update` downloads the new asset but installs a
-      # binary that still reports the repo's dev version, and every
-      # subsequent `ws update` sees the same version gap and "updates"
-      # forever. awk (not sed -i, whose flag differs across GNU/BSD/git-bash)
-      # rewrites only the first `^version = "…"` line, i.e. the [package]
-      # version — dependency `version =` keys are indented or inline so they
-      # never match the start-anchored pattern.
+      # The release version is computed once in the `prepare` job and stamped
+      # into Cargo.toml here, before the build, so the compiled binary's
+      # `env!("CARGO_PKG_VERSION")` matches the release tag — otherwise
+      # `ws update` downloads the new asset but installs a binary that still
+      # reports the old version, and every subsequent `ws update` sees the same
+      # version gap and "updates" forever. awk (not sed -i, whose flag differs
+      # across GNU/BSD/git-bash) rewrites only the first `^version = "…"` line,
+      # i.e. the [package] version.
       - name: Stamp release version into Cargo.toml
         shell: bash
         run: |
           set -eu
-          VERSION="${{ inputs.version }}"
+          VERSION="${{ needs.prepare.outputs.version }}"
           awk -v v="$VERSION" '
             /^version = "/ && !done { print "version = \"" v "\""; done=1; next }
             { print }
@@ -102,10 +322,7 @@ jobs:
       - name: Resolve version
         id: version
         shell: bash
-        run: |
-          # Workflow is manual-only; the version always comes from the
-          # `inputs.version` field on the "Run workflow" form.
-          echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+        run: echo "version=${{ needs.prepare.outputs.version }}" >> "$GITHUB_OUTPUT"
 
       # Package the single binary as tar.gz. Windows 10 1803+ ships bsdtar, so
       # using tar.gz for all platforms keeps `ws update` and install scripts
@@ -152,48 +369,94 @@ jobs:
 
   release:
     name: Publish release
-    needs: build
+    needs: [prepare, build]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Checkout (for install scripts)
+      - name: Checkout main (for commit + install scripts)
         uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download artifacts
+      - name: Download binary artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: agent-workspace-*
           merge-multiple: true
 
+      - name: Download release metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: release-meta
+          path: release-meta
+
       - name: List artifacts
-        run: ls -la dist/
+        run: ls -la dist/ release-meta/
 
-      - name: Resolve version
-        id: version
+      # Apply the promoted CHANGELOG.md + curated release-notes.md produced by
+      # `prepare`, and stamp the new version into Cargo.toml + Cargo.lock so the
+      # commit pushed back to main keeps all three in lockstep with the tag.
+      - name: Apply changelog + stamp version
         shell: bash
-        run: echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          cp release-meta/CHANGELOG.md CHANGELOG.md
+          cp release-meta/release-notes.md release-notes.md
+          VERSION="${{ needs.prepare.outputs.version }}"
+          awk -v v="$VERSION" '
+            /^version = "/ && !done { print "version = \"" v "\""; done=1; next }
+            { print }
+          ' Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
+          # Keep Cargo.lock's own package entry in sync (only the agent-workspace
+          # block — leave dependency versions untouched).
+          python3 - "$VERSION" <<'PY'
+          import pathlib, re, sys
+          v = sys.argv[1]
+          p = pathlib.Path("Cargo.lock")
+          t = p.read_text()
+          t2, n = re.subn(
+              r'(\[\[package\]\]\nname = "agent-workspace"\nversion = ")[^"]+(")',
+              r"\g<1>" + v + r"\g<2>",
+              t,
+              count=1,
+          )
+          if n != 1:
+              print("::error::Could not find agent-workspace package entry in Cargo.lock", file=sys.stderr)
+              sys.exit(1)
+          p.write_text(t2)
+          PY
+          echo "Cargo.toml: $(grep -m1 '^version = ' Cargo.toml)"
 
-      # Publish GH Release via the gh CLI (pre-installed on ubuntu-latest)
-      # — replaces softprops/action-gh-release which we dropped during the
-      # May 2026 codeload outage that took out third-party actions.
-      #
-      # `gh release create` both creates the tag (at `--target`, which
-      # defaults to the branch we ran from — usually `main`) AND
-      # publishes the Release record with the staged assets. We don't
-      # push the tag manually beforehand.
+      - name: Commit, tag, push
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock CHANGELOG.md
+          git commit -m "Release ${{ needs.prepare.outputs.tag }}"
+          git tag "${{ needs.prepare.outputs.tag }}"
+          git push --atomic origin HEAD:refs/heads/main "${{ needs.prepare.outputs.tag }}"
+
+      # Publish GH Release via the gh CLI (pre-installed on ubuntu-latest).
+      # The tag already exists (pushed above), so `gh release create` attaches
+      # the release to it. Notes come from the curated release-notes.md rather
+      # than `--generate-notes`.
       - name: Publish GitHub Release (gh CLI)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          set -eu
-          TAG="v${{ steps.version.outputs.version }}"
-          # Stage all assets in a flat list so `gh release create` picks them up.
+          set -euo pipefail
+          TAG="${{ needs.prepare.outputs.tag }}"
           mapfile -t archives < <(ls dist/agent-workspace-*.tar.gz)
           if [[ ${#archives[@]} -eq 0 ]]; then
             echo "::error::no archives staged in dist/"
             exit 1
           fi
-          # Verify each expected install/uninstall script is present at repo root.
           for f in install.sh install.ps1 uninstall.sh uninstall.ps1; do
             if [[ ! -f "$f" ]]; then
               echo "::error::missing $f at repo root"
@@ -202,14 +465,13 @@ jobs:
           done
           gh release create "$TAG" \
             --title "$TAG" \
-            --target "${{ github.sha }}" \
-            --generate-notes \
+            --notes-file release-notes.md \
             "${archives[@]}" \
             install.sh install.ps1 uninstall.sh uninstall.ps1
 
   publish-npm:
     name: Publish to npm
-    needs: build
+    needs: [prepare, build]
     runs-on: ubuntu-latest
     # Skip when the manual dispatcher unchecked the publish_npm flag.
     if: inputs.publish_npm
@@ -243,22 +505,18 @@ jobs:
           npm install -g npm@latest
           npm --version
 
-      - name: Resolve version
-        id: version
-        shell: bash
-        run: echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
-
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: agent-workspace-*
           merge-multiple: false   # keep per-platform dirs so we can stage them
 
       - name: Stage binaries into npm/<platform>/bin
         shell: bash
         run: |
           set -eu
-          VERSION="${{ steps.version.outputs.version }}"
+          VERSION="${{ needs.prepare.outputs.version }}"
           for platform in darwin-arm64 linux-x64 win32-x64; do
             archive="dist/agent-workspace-${platform}/agent-workspace-${VERSION}-${platform}.tar.gz"
             if [[ ! -f "$archive" ]]; then
@@ -282,4 +540,4 @@ jobs:
         # (provided when `permissions: id-token: write` is set above).
         # `--provenance` is passed inside `publish-npm.sh` for every
         # `npm publish` invocation.
-        run: bash scripts/publish-npm.sh "${{ steps.version.outputs.version }}"
+        run: bash scripts/publish-npm.sh "${{ needs.prepare.outputs.version }}"
