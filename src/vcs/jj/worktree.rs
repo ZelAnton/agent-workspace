@@ -169,13 +169,22 @@ fn create_worktree_plain(
         &["workspace", "add", "--name", &ws_name, "-r", base, path_arg],
     )?;
 
-    // Step 2: attach the bookmark to the new workspace's @ — only for a NEW
-    // branch. Resuming an existing bookmark reuses it as-is. Use the
-    // `<workspace-name>@` revset which always resolves to that workspace's
+    // Step 2: put the bookmark on the new workspace's @. The
+    // `<workspace-name>@` revset always resolves to that workspace's
     // working-copy commit regardless of where we're running from.
-    if !branch_already_exists {
+    //
+    // `ws` requires a bookmark on `@` (that's what `current_branch` reads).
+    // For a NEW branch we create it; for a RESUMED branch the bookmark
+    // already exists one commit below (on `@-`, since `workspace add -r
+    // <branch>` puts an empty change on top), so we MOVE it forward onto
+    // `@` with `bookmark set` — otherwise `@` would carry no bookmark and
+    // `current_branch`/`ws merge`/`ws status` would fail in the workspace.
+    let revset = format!("{ws_name}@");
+    if branch_already_exists {
+        eprintln!("  Moving bookmark to workspace...");
+        super::exec(runner, &["bookmark", "set", branch, "-r", &revset])?;
+    } else {
         eprintln!("  Creating bookmark...");
-        let revset = format!("{ws_name}@");
         super::exec(runner, &["bookmark", "create", branch, "-r", &revset])?;
     }
 
@@ -314,13 +323,18 @@ fn create_worktree_cow(
         // until next jj command in the new workspace).
         let _ = runner.run(Cmd::new("jj").in_dir(path).args(["status"]));
 
-        // 8. Attach the bookmark to the new workspace's @ — only for a NEW
-        //    branch. When resuming an existing bookmark, `base` was the
-        //    bookmark itself, so it already sits on `@-` and minting another
-        //    would error ("bookmark already exists").
-        if !branch_already_exists {
+        // 8. Put the bookmark on the new workspace's @. For a NEW branch
+        //    we create it; when RESUMING an existing bookmark it sits one
+        //    commit below (on `@-`), so we MOVE it forward onto `@` with
+        //    `bookmark set` — `ws` requires a bookmark on `@`
+        //    (`current_branch` reads it), and minting a duplicate would
+        //    error "bookmark already exists".
+        let revset = format!("{ws_name}@");
+        if branch_already_exists {
+            eprintln!("  Moving bookmark to workspace...");
+            super::exec(runner, &["bookmark", "set", branch, "-r", &revset])?;
+        } else {
             eprintln!("  Creating bookmark...");
-            let revset = format!("{ws_name}@");
             super::exec(runner, &["bookmark", "create", branch, "-r", &revset])?;
         }
 

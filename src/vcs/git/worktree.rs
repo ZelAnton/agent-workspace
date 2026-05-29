@@ -185,11 +185,34 @@ fn create_worktree_cow(
     // The inner closure handles steps 3-5 with explicit rollback on any
     // error. We always restore the source repo (step 6) afterwards, even
     // on success — current_branch may have differed from base.
+    // The source repo must present, for the reflink, the SAME tree the new
+    // worktree's HEAD will point at:
+    //   - new branch: `base` (the branch is created from it → identical tree).
+    //   - resume:     the existing branch's own commit, checked out DETACHED
+    //                 so the branch ref stays free for `worktree add <path>
+    //                 <branch>` (step 4). Checking out the branch *by name*
+    //                 in the source would make git refuse the worktree add
+    //                 ("branch already checked out"); reflinking `base`'s tree
+    //                 instead would leave the worktree's files mismatched
+    //                 against its HEAD (every diff showing as modified).
+    let mut moved_source = false;
     let inner: Result<()> = (|| {
-        // 3. Checkout base if not already there.
-        if orig_branch != base {
+        // 3. Put the source working tree on the right commit.
+        if branch_already_exists {
+            let branch_commit = super::repo::resolve_commit(runner, branch)?;
+            if orig_commit != branch_commit {
+                let t = std::time::Instant::now();
+                super::exec(runner, &["checkout", "--detach", &branch_commit])?;
+                moved_source = true;
+                eprintln!(
+                    "  Switched to '{branch}' ({}).",
+                    crate::util::format_step(t.elapsed())
+                );
+            }
+        } else if orig_branch != base {
             let t = std::time::Instant::now();
             super::exec(runner, &["checkout", base])?;
+            moved_source = true;
             eprintln!(
                 "  Switched to '{base}' ({}).",
                 crate::util::format_step(t.elapsed())
@@ -269,7 +292,10 @@ fn create_worktree_cow(
     // detached state. Skip when we're already on the right commit
     // (orig_branch == base case is already filtered out below).
     let restore_target = if is_detached { &orig_commit } else { &orig_branch };
-    let needs_restore = is_detached || orig_branch != base;
+    // Restore iff step 3 actually moved the source (covers both the
+    // new-branch `checkout base` and the resume detached checkout, and the
+    // originally-detached case where `orig_branch == "HEAD" != base`).
+    let needs_restore = moved_source;
     if inner.is_ok() && (needs_restore || needs_stash) {
         let t = std::time::Instant::now();
         if needs_restore
@@ -291,7 +317,7 @@ fn create_worktree_cow(
             "  Restored source branch ({}).",
             crate::util::format_step(t.elapsed())
         );
-    } else if !inner.is_ok() {
+    } else if inner.is_err() {
         // Failure path: still try to restore so the user's repo isn't
         // left in a half-broken state, but don't time/report — they
         // have bigger problems.

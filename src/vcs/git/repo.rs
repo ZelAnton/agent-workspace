@@ -179,6 +179,23 @@ pub(super) fn branch_exists(runner: &dyn Runner, name: &str) -> Result<bool> {
     }
 }
 
+/// Resolve a ref / revision to its full commit hash (`git rev-parse
+/// <rev>^{commit}`). `^{commit}` peels annotated tags to the commit they
+/// point at; for a plain branch it's a no-op. Used by the CoW resume path
+/// to check out a branch's commit *detached* (so the branch ref stays free
+/// for `git worktree add <path> <branch>`).
+pub(super) fn resolve_commit(runner: &dyn Runner, rev: &str) -> Result<String> {
+    let cwd = std::env::current_dir()?;
+    let out = runner
+        .run(
+            Cmd::new("git")
+                .in_dir(&cwd)
+                .args(["rev-parse", "--verify", &format!("{rev}^{{commit}}")]),
+        )
+        .map_err(map_run_err)?;
+    Ok(out.stdout_lossy().trim().to_string())
+}
+
 /// Whether a branch named `name` exists on `origin`, queried WITHOUT a
 /// fetch via `git ls-remote --heads origin <name>`.
 ///

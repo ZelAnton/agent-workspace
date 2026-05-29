@@ -403,14 +403,14 @@ jj_test!(test_create_worktree_resumes_existing_bookmark, |dir: &Path| {
     let wt_path = dir.join("workspaces").join("resume");
     std::fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
 
-    with_cwd(dir, || {
-        // A bookmark that exists but is NOT checked out in any workspace.
-        StdCommand::new("jj")
-            .args(["bookmark", "create", "resume-me", "-r", "main"])
-            .current_dir(dir)
-            .status()
-            .unwrap();
+    // A bookmark that exists but is NOT checked out in any workspace.
+    StdCommand::new("jj")
+        .args(["bookmark", "create", "resume-me", "-r", "main"])
+        .current_dir(dir)
+        .status()
+        .unwrap();
 
+    with_cwd(dir, || {
         let b = backend();
         assert!(b.branch_exists("resume-me").unwrap());
 
@@ -422,8 +422,22 @@ jj_test!(test_create_worktree_resumes_existing_bookmark, |dir: &Path| {
             b.branch_exists("resume-me").unwrap(),
             "the resumed bookmark must still exist after create"
         );
+    });
 
-        b.remove_worktree(&wt_path, false).unwrap();
+    // CRITICAL: the resumed workspace must carry the bookmark on its OWN
+    // `@` — `current_branch()` reads bookmarks on `@`, and ws merge/status/
+    // sync all depend on it. (Regression guard for the bug where resume
+    // left the bookmark on `@-`.)
+    with_cwd(&wt_path, || {
+        assert_eq!(
+            backend().current_branch().unwrap(),
+            "resume-me",
+            "resumed workspace's @ must carry the bookmark"
+        );
+    });
+
+    with_cwd(dir, || {
+        backend().remove_worktree(&wt_path, false).unwrap();
     });
 });
 
@@ -470,8 +484,20 @@ jj_test!(test_create_worktree_from_remote_materializes_bookmark, |dir: &Path| {
             b.branch_exists("remote-only").unwrap(),
             "fetch + create must (re)establish a local bookmark"
         );
+    });
 
-        b.remove_worktree(&wt_path, false).unwrap();
+    // The cloned workspace's @ must carry the bookmark (same invariant as
+    // resume — ws merge/status/sync read current_branch).
+    with_cwd(&wt_path, || {
+        assert_eq!(
+            backend().current_branch().unwrap(),
+            "remote-only",
+            "cloned workspace's @ must carry the bookmark"
+        );
+    });
+
+    with_cwd(dir, || {
+        backend().remove_worktree(&wt_path, false).unwrap();
     });
 });
 

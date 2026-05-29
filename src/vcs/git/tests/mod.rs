@@ -404,6 +404,50 @@ fn test_remote_branch_exists_false_without_remote() {
 }
 
 #[test]
+fn test_create_worktree_resume_existing_branch_checks_out_branch_tree() {
+    // Resume must materialise the RESUMED BRANCH's tree, not the base's.
+    // (Regression guard for the CoW path checking out `base` in the source
+    // and reflinking that tree under a HEAD pointing at `branch`.) Runs the
+    // plain path on non-reflink CI volumes and the CoW path on reflink ones
+    // (ReFS/APFS/Btrfs) — the assertions must hold either way.
+    let dir = setup_test_repo();
+    // Branch `feature` carries a file that `main` does not.
+    for args in [
+        vec!["checkout", "-b", "feature"],
+        vec!["add", "."],
+    ] {
+        StdCommand::new("git").args(&args).current_dir(dir.path()).output().unwrap();
+    }
+    std::fs::write(dir.path().join("feature.txt"), "feat\n").unwrap();
+    for args in [
+        vec!["add", "."],
+        vec!["commit", "-m", "add feature.txt"],
+        vec!["checkout", "main"],
+    ] {
+        StdCommand::new("git").args(&args).current_dir(dir.path()).output().unwrap();
+    }
+
+    let wt_path = dir.path().join("workspaces").join("feature");
+    std::fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
+
+    with_cwd(dir.path(), || {
+        let b = backend();
+        assert!(b.branch_exists("feature").unwrap());
+        // base = "main" (the merge target); the worktree must hold FEATURE's tree.
+        b.create_worktree(&wt_path, "feature", "main").unwrap();
+        assert!(
+            wt_path.join("feature.txt").exists(),
+            "resumed worktree must contain the branch's own file, not base's tree"
+        );
+        assert!(wt_path.join("README.md").exists());
+    });
+
+    with_cwd(&wt_path, || {
+        assert_eq!(backend().current_branch().unwrap(), "feature");
+    });
+}
+
+#[test]
 fn test_create_worktree_from_remote_materializes_branch() {
     let (work, _remote) = setup_repo_with_remote_only_branch();
     let wt_path = work.path().join("workspaces").join("remote-only");
