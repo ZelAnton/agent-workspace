@@ -13,6 +13,17 @@ notes.
 ## [Unreleased]
 
 ### Added
+-
+
+### Changed
+-
+
+### Fixed
+-
+
+## [0.15.0] - 2026-05-30
+
+### Added
 - Per-worktree config: `.workspace.toml` at an individual worktree's root now overrides the repo-level config for commands run inside that worktree (3-tier hierarchy: global → repo → worktree).
 
 ### Changed
@@ -52,7 +63,8 @@ notes.
 
 - Baseline entry; changelog tracking and automatic versioning introduced from this release onward.
 
-[Unreleased]: https://github.com/ZelAnton/agent-workspace/compare/v0.14.1...HEAD
+[Unreleased]: https://github.com/ZelAnton/agent-workspace/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/ZelAnton/agent-workspace/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/ZelAnton/agent-workspace/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/ZelAnton/agent-workspace/compare/v0.13.27...v0.14.0
 [0.13.27]: https://github.com/ZelAnton/agent-workspace/releases/tag/v0.13.27
