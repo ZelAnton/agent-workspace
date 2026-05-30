@@ -8,10 +8,12 @@
 // `ws exclude` lets the user opt specific dirs/files out of that copy
 // step.
 //
-// Patterns are stored as gitignore-style strings in
-// `[copy] exclude` in the current repo's `.agent-workspace.toml`.
-// Read by `Config::load()` and threaded into the CoW walker via
-// `Config::copy_excludes`.
+// Patterns are stored as gitignore-style strings in `[copy] exclude` in
+// the current repo's `.workspace.toml` (read fallback: the legacy
+// committed `.agent-workspace.toml`). Read by `Config::load()` and
+// threaded into the CoW walker via `Config::copy_excludes`. Writing a
+// fresh `.workspace.toml` auto-adds it to the repo's local git exclude
+// file (`.git/info/exclude`) so it stays out of git without a commit.
 //
 // Three operating modes:
 //   - **TUI** (no args): interactive tree picker — see `tui.rs`. Not
@@ -22,7 +24,7 @@
 //     management.
 //
 // Persistence goes through `toml_edit` (already a dep) so user-
-// written comments in `.agent-workspace.toml` survive set/unset.
+// written comments in the config file survive set/unset.
 
 use std::path::{Path, PathBuf};
 
@@ -31,10 +33,6 @@ use toml_edit::{value, Array, DocumentMut, Item};
 
 use crate::cli::{Error, Result};
 use crate::vcs;
-
-/// Filename in the source repo's root that holds project config.
-/// Mirrors `Config::load_project`'s search target.
-const PROJECT_CONFIG_FILENAME: &str = ".agent-workspace.toml";
 
 #[derive(Args)]
 pub struct ExcludeArgs {
@@ -61,7 +59,9 @@ pub struct ExcludeArgs {
 
 pub fn run(args: ExcludeArgs) -> Result<()> {
     let repo_root = vcs::repo_root().map_err(|e| Error::Other(e.to_string()))?;
-    let config_path = repo_root.join(PROJECT_CONFIG_FILENAME);
+    // Prefer `.workspace.toml`; edit a legacy `.agent-workspace.toml` in
+    // place when only it exists. New repos get `.workspace.toml`.
+    let config_path = crate::config::project_config_path_with_fallback(&repo_root);
 
     if args.list {
         return list(&config_path);
@@ -256,7 +256,9 @@ fn save_doc(path: &Path, doc: &DocumentMut) -> Result<()> {
     let content = doc.to_string();
     let _ = std::fs::create_dir_all(path.parent().unwrap_or(&PathBuf::from(".")));
     std::fs::write(path, content)
-        .map_err(|e| Error::Other(format!("failed to write {}: {e}", path.display())))
+        .map_err(|e| Error::Other(format!("failed to write {}: {e}", path.display())))?;
+    crate::config::ensure_workspace_config_ignored(path);
+    Ok(())
 }
 
 #[cfg(test)]

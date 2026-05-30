@@ -29,7 +29,7 @@ $AGENT_WORKSPACE_DIR/  (默认 ~/.agent-workspace/)
             └── ...                # 项目文件
 
 项目根目录/
-└── .agent-workspace.toml           # 项目级配置（可选）
+└── .workspace.toml                 # 项目级配置（本地，自动加入 .git/info/exclude；legacy 回退 .agent-workspace.toml）
 ```
 
 ### 元数据格式
@@ -292,7 +292,9 @@ post_merge = []
 - `merge_strategy` / `sync_strategy`：project 非空时**覆盖** global（`Option` 语义）
 - `trunk`：仅 project 级别配置
 
-### 项目配置 `.agent-workspace.toml`
+### 项目配置 `.workspace.toml`
+
+本地、按机器存储的文件，`ws` 会自动把它加入仓库的本地排除文件 `.git/info/exclude`（不是已提交的 `.gitignore`，因此无需提交、不弄脏工作区；该文件位于 common git dir，被主仓库与所有 worktree 共享，git 与 jj 都遵守）。无 `.workspace.toml` 时回退读取 legacy 的已提交 `.agent-workspace.toml`。三层合并，后者覆盖前者：全局 `config.toml` → 主 repo 根的 `.workspace.toml` → 当前 worktree 根的 `.workspace.toml`。`ws config` / `ws exclude` 写入 repo 级文件；worktree 级文件手工编辑。
 
 ```toml
 [general]
@@ -308,7 +310,7 @@ pre_merge = ["pnpm test", "pnpm lint"]
 
 ### 配置约束与信任边界
 
-- **路径解析**：项目配置从 `git rev-parse --git-common-dir` 上溯到主 repo 根读取——worktree/子目录任意位置行为一致
+- **路径解析**：repo 级配置从 `git rev-parse --git-common-dir` 上溯到主 repo 根读取——worktree/子目录任意位置行为一致；worktree 级配置用 `git rev-parse --show-toplevel` 定位当前 worktree 根，仅当其与主 repo 根不同才生效。两者均在 VCS backend 安装前用原始 `vcs_runner` 调用解析
 - **`copy_files` 路径沙箱**：拒绝 `/` 开头（绝对路径）和 `..` 段；不跟随符号链接
 - **hooks 安全**：hooks 通过 `sh -c`（Windows `cmd /C`）执行，无沙箱无超时——按"committed shell script"信任处理，禁运行不信任 repo
 - **hook CWD**：`pre_merge`/`post_merge` 一律 worktree 根；`post_create` 在新 worktree 内

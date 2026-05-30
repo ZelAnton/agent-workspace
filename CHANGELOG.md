@@ -13,10 +13,10 @@ notes.
 ## [Unreleased]
 
 ### Added
--
+- Per-worktree config: `.workspace.toml` at an individual worktree's root now overrides the repo-level config for commands run inside that worktree (3-tier hierarchy: global → repo → worktree).
 
 ### Changed
--
+- Project config file renamed to `.workspace.toml` (local, per-machine — auto-added to the repo's local git exclude file `.git/info/exclude`, so it needs no commit and never dirties the working tree; one entry in the shared common git dir covers the main repo and every worktree). The legacy committed `.agent-workspace.toml` is still read as a fallback, so existing repos keep working. `ws config` / `ws exclude` now write `.workspace.toml`.
 
 ### Fixed
 -

@@ -116,6 +116,33 @@ fn try_clone_dir_except_multiple_excludes() {
 }
 
 #[test]
+fn try_clone_dir_except_skips_local_workspace_config() {
+    // The local `.workspace.toml` must NOT be copied into a new worktree —
+    // it's per-machine local state, and a copy would shadow repo-level config
+    // as a stale worktree-level override. The legacy committed
+    // `.agent-workspace.toml` IS copied (tracked; worktree layer ignores it).
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    let dst = tmp.path().join("dst");
+    fs::create_dir(&src).unwrap();
+    fs::write(src.join(".workspace.toml"), b"[workspace]\nalias=\"x\"\n").unwrap();
+    fs::write(src.join(".agent-workspace.toml"), b"[general]\ntrunk=\"main\"\n").unwrap();
+    fs::write(src.join("README.md"), b"hi").unwrap();
+
+    try_clone_dir_except(&src, &dst, &[".git"]).unwrap();
+
+    assert!(
+        !dst.join(".workspace.toml").exists(),
+        "local .workspace.toml must not be copied into a worktree"
+    );
+    assert!(
+        dst.join(".agent-workspace.toml").exists(),
+        "committed legacy config should still be copied"
+    );
+    assert!(dst.join("README.md").exists());
+}
+
+#[test]
 fn build_clone_walker_anchored_pattern_excludes_top_level_dir() {
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path().to_path_buf();

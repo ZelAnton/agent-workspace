@@ -344,9 +344,23 @@ pub fn try_clone_dir_except(
     dst: &Path,
     excludes: &[&str],
 ) -> Result<u64> {
-    let user_patterns: Vec<String> = crate::config::Config::load()
+    let mut user_patterns: Vec<String> = crate::config::Config::load()
         .map(|c| c.copy_excludes)
         .unwrap_or_default();
+    // Never propagate the local workspace config into a new worktree. It's
+    // per-machine local state (git-excluded, never committed), so copying it
+    // would plant a stale worktree-level `.workspace.toml` that shadows
+    // repo-level config. The plain `git worktree add` path never carries it
+    // (not committed) — exclude it here so CoW matches that behaviour. (The
+    // legacy committed `.agent-workspace.toml` is intentionally NOT excluded:
+    // it's tracked, so plain checkout includes it, and the worktree layer
+    // ignores that filename anyway.)
+    //
+    // Goes in `user_patterns`, NOT the hardcoded `excludes`: the latter are
+    // applied as robocopy `/XD` (directory-only) on Windows, whereas a file
+    // pattern is honoured at every layer (gitignore matcher in-process,
+    // `/XF` on the robocopy path). Anchored (`/`) to the repo root.
+    user_patterns.push(format!("/{}", crate::config::WORKSPACE_CONFIG_FILENAME));
     let user_patterns = user_patterns.as_slice();
 
     // Windows fast path: hand the entire copy off to robocopy. It's the

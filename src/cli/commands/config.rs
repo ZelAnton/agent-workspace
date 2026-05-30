@@ -2,10 +2,13 @@
 // ws config - Read / write project-config settings
 // ===========================================================================
 //
-// Generic key/value interface over `.agent-workspace.toml` in the
-// current repo. Modelled loosely on `git config` (get / set / list)
-// but with an explicit allow-list of keys so typos surface as errors
-// instead of silently writing dead settings into the TOML.
+// Generic key/value interface over the repo's `.workspace.toml` (with a
+// read fallback to the legacy committed `.agent-workspace.toml`). Modelled
+// loosely on `git config` (get / set / list) but with an explicit
+// allow-list of keys so typos surface as errors instead of silently
+// writing dead settings into the TOML. When a fresh `.workspace.toml` is
+// written it is auto-added to the repo's local git exclude file
+// (`.git/info/exclude`) so it stays out of git without a commit.
 //
 // Initial supported keys (more land as we add settings):
 //   - `workspace.alias`           string — override repo basename
@@ -28,11 +31,6 @@ use toml_edit::{value, DocumentMut};
 
 use crate::cli::{Error, Result};
 use crate::vcs;
-
-/// Filename in the source repo's root that holds project config.
-/// Mirrors `Config::load_project`'s search target — we read AND write
-/// to the same file.
-const PROJECT_CONFIG_FILENAME: &str = ".agent-workspace.toml";
 
 /// Allow-listed dotted keys. Anything not in this list is rejected
 /// with a hint so the user doesn't accidentally write
@@ -74,7 +72,7 @@ pub struct ConfigArgs {
 
 #[derive(Subcommand)]
 enum ConfigCommand {
-    /// Set a config value in `.agent-workspace.toml` (created if absent).
+    /// Set a config value in `.workspace.toml` (created if absent).
     Set {
         /// Dotted key — currently `workspace.alias` or
         /// `workspace.use_path_hash`. See `ws config list` for the
@@ -101,7 +99,10 @@ pub fn run(args: ConfigArgs) -> Result<()> {
     // from a worktree or deeper subdirectory. Same lookup the rest
     // of the CLI uses.
     let repo_root = vcs::repo_root().map_err(|e| Error::Other(e.to_string()))?;
-    let config_path = repo_root.join(PROJECT_CONFIG_FILENAME);
+    // Prefer `.workspace.toml`; edit the legacy `.agent-workspace.toml` in
+    // place when only it exists (no surprise second file). New repos get
+    // `.workspace.toml`.
+    let config_path = crate::config::project_config_path_with_fallback(&repo_root);
 
     match args.command {
         ConfigCommand::Set { key, value } => set(&config_path, &key, &value),
@@ -264,7 +265,9 @@ fn save_doc(path: &Path, doc: &DocumentMut) -> Result<()> {
             "failed to write {}: {e}",
             path.display()
         ))
-    })
+    })?;
+    crate::config::ensure_workspace_config_ignored(path);
+    Ok(())
 }
 
 #[cfg(test)]

@@ -106,13 +106,21 @@ Rollback on internal failure: `jj op restore <pre_op>` + `fs::remove_dir_all(pat
 
 Current format: `{wt_dir}/{branch}.toml` with `created_at` + `base_branch`. Legacy format: `{branch}.status.toml` with `trunk` (now an alias for `base_branch`) plus dropped fields (`base_commit`, `snap_command`). `meta::meta_path_with_fallback` and the `RawMeta` deserialization shim handle both — `base_branch` wins when both keys are present. Use `meta::remove_meta` (deletes both names) rather than `fs::remove_file` directly.
 
-### Project config is read from the main-repo root, not cwd
+### Project config is a 3-tier hierarchy, read from repo + worktree roots
 
-`src/config/mod.rs` resolves `.agent-workspace.toml` by walking up from `git rev-parse --git-common-dir` — so the same config applies whether the user is in the main repo, a worktree, or a subdirectory.
+Repo/worktree config lives in `.workspace.toml` — a **local, per-machine** file kept out of git via the repo's local exclude file, not a committed `.gitignore` (legacy committed `.agent-workspace.toml` is still read as a fallback when `.workspace.toml` is absent, via `config::project_config_path_with_fallback`). Three layers merge, later overriding earlier:
 
-**Config merge rules** (project over global): `copy_files` appends, `hooks` *replaces* if project is non-empty (not appends), `merge_strategy`/`sync_strategy` are `Option`-overrides, `trunk` is project-only.
+1. **global** — `~/.agent-workspace/config.toml`
+2. **repo-level** — `<main-repo-root>/.workspace.toml` (fallback `.agent-workspace.toml`), located by walking up from `git rev-parse --git-common-dir` so it applies from the main repo, any worktree, or a subdirectory
+3. **worktree-level** — `<current-worktree-root>/.workspace.toml`, located via `git rev-parse --show-toplevel`, applied only when the current worktree root differs from the main repo root (otherwise the main checkout's file would be applied twice)
 
-### Hooks run unsandboxed — treat `.agent-workspace.toml` as a committed shell script
+`Config::load` runs **before** any VCS backend is installed, so both roots are resolved with raw `vcs_runner` calls (`resolve_main_repo_root` / `resolve_current_worktree_root`), not the backend facade — pure-jj repos and the worktree gitlink case are handled there.
+
+`ws config` / `ws exclude` write the **repo-level** file (worktree-level files are load-only / hand-authored in v1). When they create/update a `.workspace.toml`, `config::ensure_workspace_config_ignored` (it gates on the filename, resolves `<git-common-dir>/info/exclude` via `config::local_exclude_file`, then calls the generic `git_exclude::ensure_pattern`) idempotently adds the pattern to the repo's **local exclude file**. This needs no commit and never dirties the working tree (the exclude file lives inside `.git`); because it sits in the *common* git dir, a single entry covers the main repo and every linked worktree, and both git and jj (colocated) honour it. **`ws new` deliberately does NOT touch ignore state** — the entry written by `ws config`/`ws exclude` already covers all worktrees, and there's nothing for `ws new` to add. The CoW copy (`cow::try_clone_dir_except`) additionally **excludes `.workspace.toml`** (added to its `user_patterns`, anchored `/.workspace.toml` — not the `/XD`-only hardcoded list) so a CoW-created worktree never inherits a stale copy of the repo-level file; this matches the plain `git worktree add` path (the file isn't committed) and keeps worktree-level config opt-in. The legacy committed `.agent-workspace.toml` is intentionally still copied.
+
+**Config merge rules:** the repo+worktree layers fold first via `merge_project_layers` (worktree over repo), then that result merges over global. Per field: `copy_files` appends, `copy.exclude` appends+dedups, `hooks` *replace* per-phase when the higher layer is non-empty (not append), `merge_strategy`/`sync_strategy`/`open_in_new_tab`/`use_cow`/`alias`/`use_path_hash` are `Option`-overrides, `trunk` is project-only.
+
+### Hooks run unsandboxed — treat the config file as a committed shell script
 
 Hooks execute via `sh -c` (Unix) / `cmd /C` (Windows) with no sandbox and no timeout. `pre_merge`/`post_merge` always run with the worktree root as cwd; `post_create` runs in the new worktree. `copy_files` patterns are gitignore-style but reject leading `/` and `..` segments and don't follow symlinks (enforced in config parsing).
 
@@ -229,7 +237,7 @@ This fork's primary goal is native `jj` backend support alongside `git`. All VCS
 **Backend selection**:
 
 - CLI `--vcs <auto|git|jj>` (global flag) > project `[general] vcs` > global `[general] vcs` > `vcs_runner::detect_vcs(cwd)` > `git` fallback.
-- **Colocated repos default to jj** (`.git/` + `.jj/` both present → `JjBackend`). The user installed jj for a reason; respect that. Override with `--vcs=git` or `vcs = "git"` in `.agent-workspace.toml`.
+- **Colocated repos default to jj** (`.git/` + `.jj/` both present → `JjBackend`). The user installed jj for a reason; respect that. Override with `--vcs=git` or `vcs = "git"` in `.workspace.toml`.
 - `--vcs=jj` in a git-only checkout, or `--vcs=git` in a jj-only checkout, are both honored — they install the requested backend, which will surface real errors when methods are called. We don't pre-validate.
 
 **Network ops retry; local ops don't**. Git's `fetch()` uses a custom transient predicate (`is_transient_fetch_err` in `src/vcs/git/ops.rs`) matching DNS / connection / EOF stderr patterns. Jj's `fetch()` uses `vcs_runner::is_transient_error` directly (jj's stderr shapes match procpilot's default). `RetryPolicy::default()` matches `"stale"`/`".lock"` only — wrong shape for network failures.

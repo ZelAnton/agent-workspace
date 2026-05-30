@@ -99,8 +99,73 @@ fn default_open_in_new_tab() -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Project Config (.agent-workspace.toml)
+// Project Config (.workspace.toml, legacy fallback .agent-workspace.toml)
 // ---------------------------------------------------------------------------
+
+/// Primary repo/worktree config filename. Local, per-machine — kept out of
+/// git via the local exclude file (see [`ensure_workspace_config_ignored`]).
+/// Repo-level lives at the main repo root; worktree-level lives at each git
+/// worktree root (see [`Config::load`]).
+pub const WORKSPACE_CONFIG_FILENAME: &str = ".workspace.toml";
+
+/// Legacy committed project-config filename, read as a fallback when no
+/// [`WORKSPACE_CONFIG_FILENAME`] is present so existing repos keep working.
+pub const LEGACY_PROJECT_CONFIG_FILENAME: &str = ".agent-workspace.toml";
+
+/// Resolve which file holds project config at `root`: prefer
+/// `.workspace.toml`, fall back to `.agent-workspace.toml` when only the
+/// legacy file exists, else return the `.workspace.toml` path (the write
+/// target for new files). Mirrors [`crate::meta::meta_path_with_fallback`].
+pub fn project_config_path_with_fallback(root: &Path) -> PathBuf {
+    let primary = root.join(WORKSPACE_CONFIG_FILENAME);
+    if primary.exists() {
+        return primary;
+    }
+    let legacy = root.join(LEGACY_PROJECT_CONFIG_FILENAME);
+    if legacy.exists() {
+        return legacy;
+    }
+    primary
+}
+
+/// Best-effort: keep a freshly-written `.workspace.toml` out of git WITHOUT
+/// requiring a commit, by adding it to the repo's **local exclude file**
+/// (`<git-common-dir>/info/exclude`) rather than the committed `.gitignore`.
+///
+/// No-op unless `config_path` points at a `.workspace.toml` — editing a legacy
+/// committed `.agent-workspace.toml` in place introduces no new local file.
+/// The exclude file lives in the common git dir, which every worktree shares,
+/// so one entry covers the main repo and all worktrees. Errors are swallowed
+/// (callers must not fail on this).
+pub fn ensure_workspace_config_ignored(config_path: &Path) {
+    let is_workspace_file = config_path.file_name().and_then(|n| n.to_str())
+        == Some(WORKSPACE_CONFIG_FILENAME);
+    if !is_workspace_file {
+        return;
+    }
+    let Some(repo_dir) = config_path.parent() else {
+        return;
+    };
+    if let Some(exclude_file) = local_exclude_file(repo_dir) {
+        let _ = crate::git_exclude::ensure_pattern(&exclude_file, WORKSPACE_CONFIG_FILENAME);
+    }
+}
+
+/// Resolve the repo's local exclude file (`<git-common-dir>/info/exclude`) by
+/// asking git from `cwd`. `--git-common-dir` resolves the *common* git dir even
+/// from inside a linked worktree, so the path is shared across worktrees.
+/// `None` when git isn't available (e.g. a jj repo with no git backing) — the
+/// caller then silently skips, leaving the file un-excluded.
+fn local_exclude_file(cwd: &Path) -> Option<PathBuf> {
+    let common = vcs_runner::run_git_utf8(cwd, &["rev-parse", "--git-common-dir"]).ok()?;
+    let common = common.trim();
+    if common.is_empty() {
+        return None;
+    }
+    let p = PathBuf::from(common);
+    let p = if p.is_absolute() { p } else { cwd.join(p) };
+    Some(p.join("info").join("exclude"))
+}
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {
@@ -154,7 +219,7 @@ pub struct ProjectConfig {
 ///                           by an earlier broader pattern
 ///
 /// Set via the dedicated `ws exclude` command (positional args, or its
-/// TUI tree picker) or by editing `.agent-workspace.toml` directly:
+/// TUI tree picker) or by editing `.workspace.toml` directly:
 ///
 /// ```toml
 /// [copy]
@@ -197,7 +262,7 @@ pub struct ProjectCopyConfig {
 ///                       paths.
 ///
 /// Set via the new `ws config` subcommand or by editing
-/// `.agent-workspace.toml` directly:
+/// `.workspace.toml` directly:
 ///
 /// ```toml
 /// [workspace]
@@ -380,7 +445,15 @@ impl Config {
         // README's storage-layout section is sufficient guidance.)
 
         let global = Self::load_global(&base_dir)?;
-        let project = Self::load_project()?;
+        // Project config is itself a 2-layer fold: repo-level (main repo root)
+        // overlaid by worktree-level (current worktree root), the latter only
+        // when running inside a linked worktree. The folded result then feeds
+        // the global-vs-project merge below unchanged.
+        let (repo, worktree) = Self::load_project_layers()?;
+        let project = match worktree {
+            Some(wt) => merge_project_layers(repo, wt),
+            None => repo,
+        };
 
         // Merge: project overrides global
         let merge_strategy = project
@@ -512,42 +585,108 @@ impl Config {
         Ok(toml::from_str(&content)?)
     }
 
-    fn load_project() -> Result<ProjectConfig> {
-        // Resolve the **main repo** root so the same `.agent-workspace.toml`
-        // applies whether the user is in the main repo, a worktree, or a
-        // subdirectory of either.
-        //
-        // **Why not just `crate::vcs::repo_root()`?** This runs BEFORE
-        // `Cli::run` calls `set_backend(...)`, so the lazy-init GitBackend
-        // is active. In a pure-jj repo (no `.git`), GitBackend's
-        // `git rev-parse --git-common-dir` fails → `Error::NotInRepo` →
-        // project config silently lost (R2-Fix #1 motivation).
-        //
-        // **Why not just `vcs_runner::detect_vcs`?** It checks
-        // `dir.join(".git").exists()` which is true for both gitdirs AND
-        // gitlink files. In a git worktree, `.git` is a FILE pointing at
-        // the main repo's `.git/worktrees/<name>`. detect_vcs stops at
-        // the worktree and returns its path instead of the main repo —
-        // R3 regression review caught this. The pre-Phase-F path used
-        // git's own `--git-common-dir` which resolves the gitlink.
-        //
-        // The hybrid: ask git first (handles worktrees correctly via
-        // `--git-common-dir`); fall back to detect_vcs for pure-jj repos
-        // or filesystems where git isn't available.
+    /// Load the two project-config layers: repo-level (main repo root, with
+    /// legacy `.agent-workspace.toml` fallback) and the optional worktree-level
+    /// overlay (current worktree root, `.workspace.toml` only).
+    ///
+    /// **Why resolve roots here instead of `crate::vcs::repo_root()`?** This
+    /// runs BEFORE `Cli::run` calls `set_backend(...)`, so no backend is
+    /// installed yet. In a pure-jj repo (no `.git`), GitBackend's
+    /// `git rev-parse --git-common-dir` would fail → `Error::NotInRepo` →
+    /// project config silently lost. We resolve roots with raw `vcs_runner`
+    /// calls instead — see [`resolve_main_repo_root`] /
+    /// [`resolve_current_worktree_root`].
+    ///
+    /// The worktree layer is `Some` only when the current worktree root
+    /// differs from the main repo root — running in the main checkout would
+    /// otherwise apply the same file twice.
+    fn load_project_layers() -> Result<(ProjectConfig, Option<ProjectConfig>)> {
         let cwd = match std::env::current_dir() {
             Ok(c) => c,
-            Err(_) => return Ok(ProjectConfig::default()),
+            Err(_) => return Ok((ProjectConfig::default(), None)),
         };
-        let root = match resolve_main_repo_root(&cwd) {
+        let main_root = match resolve_main_repo_root(&cwd) {
             Some(r) => r,
-            None => return Ok(ProjectConfig::default()),
+            None => return Ok((ProjectConfig::default(), None)),
         };
-        let path = root.join(".agent-workspace.toml");
-        if !path.exists() {
-            return Ok(ProjectConfig::default());
+
+        // Repo-level: prefer `.workspace.toml`, fall back to the legacy file.
+        let repo = load_project_file(&project_config_path_with_fallback(&main_root))?;
+
+        // Worktree-level: only when we're in a linked worktree whose root
+        // differs from the main repo root. Reads `.workspace.toml` only — the
+        // legacy name is a repo-level concept. Compare canonicalized forms:
+        // `resolve_main_repo_root`'s pure-jj path returns a non-canonical
+        // root, while `resolve_current_worktree_root` always canonicalizes —
+        // a string `!=` could otherwise double-apply the same file.
+        let main_root_canon = main_root.canonicalize().unwrap_or_else(|_| main_root.clone());
+        let main_root_canon = strip_verbatim_prefix(main_root_canon);
+        let worktree = match resolve_current_worktree_root(&cwd) {
+            Some(wt_root) if wt_root != main_root_canon => {
+                let path = wt_root.join(WORKSPACE_CONFIG_FILENAME);
+                if path.exists() {
+                    Some(load_project_file(&path)?)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+
+        Ok((repo, worktree))
+    }
+}
+
+/// Parse a single project-config file. Missing file → default (caller usually
+/// resolves the path with [`project_config_path_with_fallback`] first).
+fn load_project_file(path: &Path) -> Result<ProjectConfig> {
+    if !path.exists() {
+        return Ok(ProjectConfig::default());
+    }
+    let content = std::fs::read_to_string(path)?;
+    Ok(toml::from_str(&content)?)
+}
+
+/// Fold two project-config layers; `over` (worktree) wins over `base` (repo).
+/// Mirrors the global-vs-project rules: Option fields override, `copy_files`
+/// appends (base then over), hooks replace-per-phase when `over` is non-empty,
+/// and `copy.exclude` appends+dedups (exclusions are cumulative, not a single
+/// policy like hooks).
+fn merge_project_layers(base: ProjectConfig, over: ProjectConfig) -> ProjectConfig {
+    let mut copy_files = base.general.copy_files;
+    copy_files.extend(over.general.copy_files);
+
+    let mut exclude = base.copy.exclude;
+    for pat in over.copy.exclude {
+        if !exclude.contains(&pat) {
+            exclude.push(pat);
         }
-        let content = std::fs::read_to_string(&path)?;
-        Ok(toml::from_str(&content)?)
+    }
+
+    ProjectConfig {
+        general: ProjectGeneralConfig {
+            trunk: over.general.trunk.or(base.general.trunk),
+            merge_strategy: over.general.merge_strategy.or(base.general.merge_strategy),
+            sync_strategy: over.general.sync_strategy.or(base.general.sync_strategy),
+            copy_files,
+            vcs: over.general.vcs.or(base.general.vcs),
+        },
+        hooks: HooksConfig {
+            post_create: merge_hooks(&base.hooks.post_create, &over.hooks.post_create),
+            pre_merge: merge_hooks(&base.hooks.pre_merge, &over.hooks.pre_merge),
+            post_merge: merge_hooks(&base.hooks.post_merge, &over.hooks.post_merge),
+        },
+        ui: ProjectUiConfig {
+            open_in_new_tab: over.ui.open_in_new_tab.or(base.ui.open_in_new_tab),
+        },
+        create: ProjectCreateConfig {
+            use_cow: over.create.use_cow.or(base.create.use_cow),
+        },
+        workspace: ProjectWorkspaceConfig {
+            alias: over.workspace.alias.or(base.workspace.alias),
+            use_path_hash: over.workspace.use_path_hash.or(base.workspace.use_path_hash),
+        },
+        copy: ProjectCopyConfig { exclude },
     }
 }
 
@@ -595,6 +734,36 @@ fn resolve_main_repo_root(cwd: &Path) -> Option<PathBuf> {
     // directly. For pure-jj there are no worktree gitlinks to resolve;
     // detect_root IS the repo root.
     Some(detect_root)
+}
+
+/// Resolve the **current worktree** root (the working-copy root for `cwd`),
+/// as opposed to the main repo root from [`resolve_main_repo_root`].
+///
+/// Backend-independent (runs before any backend is installed — see
+/// [`Config::load_project_layers`]). For git it uses
+/// `git rev-parse --show-toplevel`, which returns the linked worktree's root
+/// when inside one and the main repo root when in the main checkout. The
+/// pure-jj / git-unavailable path falls through to `detect_vcs`'s nearest-`.jj`
+/// root. Returns canonicalized + verbatim-stripped paths so the equality
+/// check against the main repo root in the loader is reliable.
+fn resolve_current_worktree_root(cwd: &Path) -> Option<PathBuf> {
+    let (backend, detect_root) = vcs_runner::detect_vcs(cwd).ok()?;
+
+    if backend.has_git()
+        && let Ok(toplevel) = vcs_runner::run_git_utf8(cwd, &["rev-parse", "--show-toplevel"])
+    {
+        let toplevel = toplevel.trim();
+        if !toplevel.is_empty()
+            && let Ok(canonical) = PathBuf::from(toplevel).canonicalize()
+        {
+            return Some(strip_verbatim_prefix(canonical));
+        }
+    }
+
+    // Pure-jj / git-unavailable fallback: nearest `.jj` ancestor is the
+    // workspace root for `cwd`. Canonicalize for a reliable equality check.
+    let detect_root = detect_root.canonicalize().unwrap_or(detect_root);
+    Some(strip_verbatim_prefix(detect_root))
 }
 
 fn merge_hooks(global: &[String], project: &[String]) -> Vec<String> {
@@ -933,5 +1102,115 @@ trunk = "develop"
         let config = GlobalConfig::default();
         let debug = format!("{:?}", config);
         assert!(debug.contains("GlobalConfig"));
+    }
+
+    // =========================================================================
+    // 3-tier layering: merge_project_layers + project_config_path_with_fallback
+    // =========================================================================
+
+    fn project_with_alias(alias: &str) -> ProjectConfig {
+        ProjectConfig {
+            workspace: ProjectWorkspaceConfig {
+                alias: Some(alias.to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_layers_option_override_worktree_wins() {
+        let repo = project_with_alias("repo");
+        let worktree = project_with_alias("worktree");
+        let merged = merge_project_layers(repo, worktree);
+        assert_eq!(merged.workspace.alias, Some("worktree".to_string()));
+    }
+
+    #[test]
+    fn test_layers_option_falls_back_to_repo_when_worktree_none() {
+        let mut repo = ProjectConfig::default();
+        repo.general.trunk = Some("develop".to_string());
+        let worktree = ProjectConfig::default();
+        let merged = merge_project_layers(repo, worktree);
+        assert_eq!(merged.general.trunk, Some("develop".to_string()));
+    }
+
+    #[test]
+    fn test_layers_copy_files_append_repo_then_worktree() {
+        let mut repo = ProjectConfig::default();
+        repo.general.copy_files = vec![".env".to_string()];
+        let mut worktree = ProjectConfig::default();
+        worktree.general.copy_files = vec![".env.local".to_string()];
+        let merged = merge_project_layers(repo, worktree);
+        assert_eq!(merged.general.copy_files, vec![".env", ".env.local"]);
+    }
+
+    #[test]
+    fn test_layers_hooks_replace_when_worktree_nonempty() {
+        let mut repo = ProjectConfig::default();
+        repo.hooks.post_create = vec!["repo-hook".to_string()];
+        let mut worktree = ProjectConfig::default();
+        worktree.hooks.post_create = vec!["wt-hook".to_string()];
+        let merged = merge_project_layers(repo, worktree);
+        assert_eq!(merged.hooks.post_create, vec!["wt-hook"]);
+    }
+
+    #[test]
+    fn test_layers_hooks_inherit_repo_when_worktree_empty() {
+        let mut repo = ProjectConfig::default();
+        repo.hooks.post_create = vec!["repo-hook".to_string()];
+        let worktree = ProjectConfig::default();
+        let merged = merge_project_layers(repo, worktree);
+        assert_eq!(merged.hooks.post_create, vec!["repo-hook"]);
+    }
+
+    #[test]
+    fn test_layers_copy_exclude_append_dedup() {
+        let mut repo = ProjectConfig::default();
+        repo.copy.exclude = vec!["/target".to_string(), "/Bin".to_string()];
+        let mut worktree = ProjectConfig::default();
+        worktree.copy.exclude = vec!["/Bin".to_string(), "**/*.iso".to_string()];
+        let merged = merge_project_layers(repo, worktree);
+        // /Bin appears once; order preserved (repo first, then new worktree).
+        assert_eq!(merged.copy.exclude, vec!["/target", "/Bin", "**/*.iso"]);
+    }
+
+    #[test]
+    fn test_path_fallback_prefers_workspace_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(WORKSPACE_CONFIG_FILENAME), "").unwrap();
+        std::fs::write(dir.path().join(LEGACY_PROJECT_CONFIG_FILENAME), "").unwrap();
+        assert_eq!(
+            project_config_path_with_fallback(dir.path()),
+            dir.path().join(WORKSPACE_CONFIG_FILENAME)
+        );
+    }
+
+    #[test]
+    fn test_path_fallback_uses_legacy_when_only_legacy() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(LEGACY_PROJECT_CONFIG_FILENAME), "").unwrap();
+        assert_eq!(
+            project_config_path_with_fallback(dir.path()),
+            dir.path().join(LEGACY_PROJECT_CONFIG_FILENAME)
+        );
+    }
+
+    #[test]
+    fn test_path_fallback_write_target_when_neither() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            project_config_path_with_fallback(dir.path()),
+            dir.path().join(WORKSPACE_CONFIG_FILENAME)
+        );
+    }
+
+    #[test]
+    fn test_local_exclude_file_none_without_git() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            local_exclude_file(dir.path()).is_none(),
+            "no git dir → no local exclude file → caller skips"
+        );
     }
 }

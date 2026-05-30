@@ -18,7 +18,7 @@ AI coding agents work best with isolated environments:
 
 This is a fork of [`nekocode/agent-worktree`](https://github.com/nekocode/agent-worktree). Highlights of the fork:
 
-- **Native [Jujutsu (`jj`)](https://jj-vcs.github.io/jj/) backend** alongside git. Both backends are feature-complete for `ws`'s happy-path workflows (new / ls / cd / rm / clean / merge / sync / status / mv). Lives behind `src/vcs/` with `GitBackend` and `JjBackend` as separate impls of a common trait. Colocated repos (both `.git/` and `.jj/` present) default to jj — override with `--vcs=git` or `[general] vcs = "git"` in `.agent-workspace.toml`. A few git-shaped operations have no clean jj analogue and surface `Error::Unsupported` with a hint: `ws mv` (use `ws rm` + `ws new` instead) and `ws sync --abort`/`--continue` (jj records conflicts in commits — resolve files and re-run). See [`AGENTS.md`](AGENTS.md) → "VCS backend compatibility" for the full semantic-delta table.
+- **Native [Jujutsu (`jj`)](https://jj-vcs.github.io/jj/) backend** alongside git. Both backends are feature-complete for `ws`'s happy-path workflows (new / ls / cd / rm / clean / merge / sync / status / mv). Lives behind `src/vcs/` with `GitBackend` and `JjBackend` as separate impls of a common trait. Colocated repos (both `.git/` and `.jj/` present) default to jj — override with `--vcs=git` or `[general] vcs = "git"` in `.workspace.toml`. A few git-shaped operations have no clean jj analogue and surface `Error::Unsupported` with a hint: `ws mv` (use `ws rm` + `ws new` instead) and `ws sync --abort`/`--continue` (jj records conflicts in commits — resolve files and re-run). See [`AGENTS.md`](AGENTS.md) → "VCS backend compatibility" for the full semantic-delta table.
 - **Terminal-tab integration** for `ws new` and `ws cd` on Windows Terminal, iTerm2, and GNOME Terminal — the creation / navigation flow opens a new tab titled with the branch and runs there; the originating shell stays put. `ws cd <branch>` to your current worktree is a no-op (no duplicate tabs unless `--in-new-tab` forces it). Auto-enabled when supported; disable with `--no-tab` or `[ui] open_in_new_tab = false`.
 - **Copy-on-Write worktree creation** on filesystems that support block cloning (Windows ReFS / DevDrive, Linux Btrfs / XFS, macOS APFS). `ws new` becomes near-instant on large monorepos and the new worktree initially occupies only its diff on disk. Supported on both backends: git uses `worktree add --no-checkout` + reflink; jj uses `workspace add --sparse-patterns empty` + reflink + sparse-set restore. Colocated repos with `--vcs=git` bracket the git ops with `jj git import` to keep jj in sync. Auto-enabled when the source repo and `$AGENT_WORKSPACE_DIR` are on the same reflink-capable volume; falls back silently otherwise. Disable with `--no-cow` or `[create] use_cow = false`.
 
@@ -225,15 +225,21 @@ post_merge = []
 > rejected. Symlinks are not followed.
 >
 > **Hook trust boundary** — hooks run via `sh -c` (or `cmd /C` on Windows)
-> with no sandboxing or timeout. Treat `.agent-workspace.toml` like any
-> committed shell script: only run repos whose hooks you would `bash` directly.
+> with no sandboxing or timeout. Treat `.workspace.toml` like any
+> shell script: only run repos whose hooks you would `bash` directly.
 >
 > **Hook CWD** — `pre_merge` and `post_merge` always run with the worktree
 > root as the working directory. `post_create` runs in the new worktree.
 
-### Project Config `.agent-workspace.toml`
+### Project Config `.workspace.toml`
 
-Project config overrides global. `trunk` is project-only; other fields are merged.
+Repo/worktree config lives in `.workspace.toml` — a **local, per-machine** file that `ws` keeps out of git by adding it to the repo's local exclude file (`.git/info/exclude`), so there's nothing to commit and your working tree stays clean (existing repos with a committed `.agent-workspace.toml` keep working: it's read as a fallback when no `.workspace.toml` is present). It layers in three tiers, later overriding earlier:
+
+1. **global** — `~/.agent-workspace/config.toml`
+2. **repo-level** — `.workspace.toml` at the main repo root
+3. **worktree-level** — `.workspace.toml` at an individual worktree's root (overrides the repo-level file for commands run inside that worktree)
+
+`trunk` is project-only; other fields are merged (`copy_files` / `copy.exclude` append, `hooks` replace per-phase when set, the rest are overrides). `ws config` and `ws exclude` write the repo-level file; worktree-level files are hand-authored.
 
 ```toml
 [general]
