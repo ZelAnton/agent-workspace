@@ -122,11 +122,14 @@ Worktrees live under `$AGENT_WORKSPACE_DIR/workspaces/{repo}-{hash}/` where the 
 
 ## Module layout
 
-- `src/cli/` — clap definitions + dispatch. Commands grouped: `commands/lifecycle/` (new/rm/clean), `commands/nav/` (cd), `commands/snap/` (resume), `commands/sys/` (setup/init/update), plus top-level `ls`, `merge`, `move`, `status`, `sync`.
-- `src/git/` — git CLI wrappers split into `repo` / `worktree` / `branch` / `ops`. `mod.rs` is just re-exports + the shared `extract_error` (checks stderr, falls back to stdout because merge/commit put error text on stdout).
-- `src/meta/` — `{branch}.toml` (de)serialization + target resolver (pure functions).
+- `src/cli/` — clap definitions + dispatch. Commands grouped: `commands/lifecycle/` (new/rm/clean), `commands/nav/` (cd), `commands/snap/` (resume), `commands/sys/` (setup/uninstall/init/update), plus top-level `ls`, `merge`, `move` (`mv`), `status`, `sync`, `config`, `exclude` (+`exclude_tui` interactive editor), `repo_info`.
+- `src/vcs/` — the backend abstraction (`VcsBackend` trait + `GitBackend`/`JjBackend`). **All git/jj CLI interaction lives here** — see the *VCS backend compatibility* section for the full contract. The old top-level `src/git/` is gone; production code calls `crate::vcs::*` free functions.
+- `src/cow/` — Copy-on-Write reflink helpers (`can_clone` sentinel probe, `try_clone_dir_except`) used by both backends' `create_worktree_cow`. See the *Worktree creation uses Copy-on-Write* invariant.
+- `src/terminal/` — new-tab spawning for Windows Terminal / iTerm2 / GNOME Terminal (`mod.rs` precedence + `TabMode`, per-terminal impls, `script.rs` spawned-tab body). See the *Terminal-tab integration* invariant.
+- `src/meta/` — `{branch}.toml` (de)serialization + target resolver (pure functions); `src/repo_meta.rs` — per-repo metadata.
 - `src/config/` — global + project loading and merging.
 - `src/shell/` — wrapper script templates and rc-file install/uninstall (strict BEGIN/END marker pairing — refuses to touch a file with orphaned markers).
+- `src/complete/` — shell-completion script generation.
 - `src/process/` `src/prompt/` `src/update/` `src/util/` — hook execution, dialoguer prompts, daily update check, random branch-name generator (~100 adjectives × ~100 nouns, numeric suffix on collision).
 
 ## Install channels and `ws update`
