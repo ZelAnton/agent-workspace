@@ -5,7 +5,8 @@
 // Full-screen TUI (ratatui + crossterm + tui-tree-widget) that lets
 // the user check/uncheck folders and files in the repo. Unchecked
 // entries become exclude patterns persisted to `[copy] exclude` in
-// `.agent-workspace.toml`. Checkbox semantics: ☑ = will be copied,
+// `.workspace.toml` (legacy `.agent-workspace.toml` as a fallback).
+// Checkbox semantics: ☑ = will be copied,
 // ☐ = excluded.
 //
 // **Defaults**: everything is checked except whatever's currently in

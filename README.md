@@ -397,4 +397,4 @@ Consequences worth knowing:
 
 ## License
 
-MIT
+[MIT](LICENSE) © Anton Zhelezniakou. Fork of [`nekocode/agent-worktree`](https://github.com/nekocode/agent-worktree).

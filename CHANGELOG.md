@@ -13,12 +13,13 @@ notes.
 ## [Unreleased]
 
 ### Added
--
+- `LICENSE` file (MIT) — the package already declared MIT but shipped no license text.
 
 ### Changed
 - The terminal-tab recursion guard (`WS_SPAWNED_IN_TAB`) now takes precedence over an explicit `--in-new-tab`, making it an unconditional spawn-disable (no behavior change in normal use; defense against runaway tab spawning).
 
 ### Fixed
+- `ws config --help` (and related comments) now say `.workspace.toml`, matching where `ws config` / `ws exclude` actually write.
 - `ws update` on the npm channel installed the wrong (unscoped) package; it now uses the correct `@zelanton/agent-workspace`.
 - `ws merge` no longer silently retargets to trunk when the worktree's base branch was deleted — it refuses and points you at `ws merge --into <branch>`, matching snap-mode behavior.
 - jj `ws merge` now advances the explicit destination branch instead of guessing the lexicographically-smallest bookmark on the commit, which could move (and with `--allow-backwards`, lose) the wrong bookmark when several share a commit (e.g. `main` + `master`).

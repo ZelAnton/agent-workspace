@@ -98,7 +98,8 @@ impl VcsChoice {
 ///
 /// **Precedence** (first non-`Auto` wins):
 ///   1. `cli_choice` — explicit `--vcs=...` on the command line.
-///   2. `project_choice` — `[general] vcs` in `.agent-workspace.toml`.
+///   2. `project_choice` — `[general] vcs` in `.workspace.toml` (legacy
+///      `.agent-workspace.toml` as a fallback).
 ///   3. `global_choice` — `[general] vcs` in `~/.agent-workspace/config.toml`.
 ///   4. `vcs_runner::detect_vcs(cwd)` — colocated → `Jj`, jj-only → `Jj`,
 ///      git-only → `Git`.

@@ -96,9 +96,10 @@ enum Command {
     /// scan; auto-refreshed every 30 days. Pass `--refresh` to force.
     RepoInfo(commands::RepoInfoArgs),
 
-    /// Get / set / unset / list per-repo settings in
-    /// `.agent-workspace.toml`. Currently supported keys:
-    /// `workspace.alias` (string), `workspace.use_path_hash` (bool).
+    /// Get / set / unset / list per-repo settings in the local
+    /// `.workspace.toml` (legacy `.agent-workspace.toml` read as a fallback).
+    /// Currently supported keys: `workspace.alias` (string),
+    /// `workspace.use_path_hash` (bool).
     /// Run `ws config list` for the up-to-date roster + descriptions.
     Config(commands::ConfigArgs),
 
