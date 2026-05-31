@@ -72,6 +72,25 @@ fn run_merge(
         }
     }
 
+    // Refuse to silently retarget to trunk when the worktree's recorded base
+    // branch was deleted and the user gave no `--into` override — landing
+    // commits on the wrong branch is a worse failure mode than an explicit
+    // error. Mirrors snap-continue (`resume::gather_context`); read-only
+    // callers (`ws status`/`ws ls`) keep the silent trunk fallback in
+    // `resolve_effective_target` because refusing there would be unhelpful.
+    if args.into.is_none() {
+        let meta_path = meta::meta_path_with_fallback(&wt_dir, &current);
+        if let Ok(m) = meta::WorktreeMeta::load(&meta_path)
+            && !vcs::branch_exists(&m.base_branch).unwrap_or(false)
+        {
+            return Err(Error::Other(format!(
+                "Base branch '{}' no longer exists.\n\
+                 Resolve manually with: ws merge --into <branch>",
+                m.base_branch
+            )));
+        }
+    }
+
     let target = meta::resolve_effective_target(
         &wt_dir,
         &current,
@@ -92,6 +111,19 @@ fn run_merge(
 
     let wt_path = wt_dir.join(&current);
     let inside_worktree = vcs::is_cwd_inside(&wt_path);
+
+    // Same guard `ws rm` enforces: deleting the worktree the user is standing
+    // in requires shell integration to rescue the parent shell back to the
+    // main repo (via the path-file). Without it, `merge -d` would leave the
+    // shell stranded in a deleted directory. The shell wrapper always passes
+    // `--path-file`; this only bites a direct-binary `ws merge -d`.
+    if args.delete && inside_worktree && path_file.is_none() {
+        return Err(Error::Other(
+            "Refusing to delete the current worktree without shell integration.\n\
+             Run 'ws setup' first, or 'cd' to the main repo and retry."
+                .into(),
+        ));
+    }
 
     let strategy = args.strategy.unwrap_or(config.merge_strategy);
 
@@ -241,12 +273,14 @@ pub fn execute_merge(branch: &str, trunk: &str, strategy: MergeStrategy) -> Resu
         return Ok(false);
     }
     let pre_commit = vcs::current_commit().ok();
+    // `trunk` is the merge DESTINATION (the caller checked it out); pass it so
+    // the jj backend advances the right bookmark instead of guessing from `@`.
     match strategy {
         MergeStrategy::Squash => {
-            vcs::merge(branch, true, false, Some(&msg))?;
+            vcs::merge(branch, trunk, true, false, Some(&msg))?;
         }
         MergeStrategy::Merge => {
-            vcs::merge(branch, false, true, Some(&msg))?;
+            vcs::merge(branch, trunk, false, true, Some(&msg))?;
         }
     }
     let post_commit = vcs::current_commit().ok();

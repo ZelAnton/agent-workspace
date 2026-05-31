@@ -210,7 +210,7 @@ fn jj_merge_noop_when_branch_already_in_ancestors() {
         ok_str(""),
     );
     let backend = JjBackend::with_runner(Arc::new(mock));
-    backend.merge("branch", false, false, None).unwrap();
+    backend.merge("branch", "main", false, false, None).unwrap();
     // If the no-op short-circuit failed, MockRunner's strict-by-default
     // mode would panic on the unexpected `jj new` invocation.
 }

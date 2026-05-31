@@ -82,9 +82,19 @@ pub trait VcsBackend: Send + Sync {
     // -------------------------------------------------------------------
     // Mutations
     // -------------------------------------------------------------------
+    /// Merge `branch` into the current checkout, advancing `dest_bookmark`.
+    ///
+    /// `dest_bookmark` is the merge DESTINATION — the bookmark/branch that
+    /// should end up pointing at the merge result. The **git** backend ignores
+    /// it (it merges into the already-checked-out HEAD). The **jj** backend
+    /// needs it explicitly: a commit can carry several bookmarks, so jj must NOT
+    /// guess the destination from `@` (picking e.g. the lexicographically
+    /// smallest would move the wrong bookmark, possibly backward). Callers pass
+    /// the branch they checked out / are standing in.
     fn merge(
         &self,
         branch: &str,
+        dest_bookmark: &str,
         squash: bool,
         no_ff: bool,
         message: Option<&str>,

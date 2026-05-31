@@ -49,6 +49,27 @@ pub fn run(args: MoveArgs, config: &Config, path_file: Option<&Path>) -> Result<
     // Check if we're inside the worktree being renamed
     let inside_target = vcs::is_cwd_inside(&old_path);
 
+    // Same guard `ws rm` enforces: relocating the worktree the user is standing
+    // in needs shell integration to rescue the parent shell to the new path.
+    // Without it the shell is stranded in the old (now-nonexistent) path. The
+    // shell wrapper always passes `--path-file`; this only bites a direct
+    // `ws mv` of the current worktree.
+    if inside_target && path_file.is_none() {
+        return Err(Error::Other(
+            "Refusing to move the current worktree without shell integration.\n\
+             Run 'ws setup' first, or 'cd' to the main repo and retry."
+                .into(),
+        ));
+    }
+
+    // On Windows the OS locks the process cwd, so `git worktree move` would fail
+    // to relocate a directory we're standing in. Step the process out to the
+    // workspaces parent first (the shell is rescued to `new_path` via the
+    // path-file afterwards). Harmless on Unix.
+    if inside_target {
+        std::env::set_current_dir(&wt_dir).map_err(|e| Error::Other(e.to_string()))?;
+    }
+
     // Move worktree to new path (updates git's internal tracking)
     vcs::move_worktree(&old_path, &new_path)?;
 

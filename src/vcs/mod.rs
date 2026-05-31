@@ -232,8 +232,14 @@ pub fn is_rebase_in_progress() -> bool { with_backend(|b| b.is_rebase_in_progres
 pub fn is_merge_in_progress() -> bool { with_backend(|b| b.is_merge_in_progress()) }
 
 // ----- Mutations ----------------------------------------------------------
-pub fn merge(branch: &str, squash: bool, no_ff: bool, message: Option<&str>) -> Result<()> {
-    with_backend(|b| b.merge(branch, squash, no_ff, message))
+pub fn merge(
+    branch: &str,
+    dest_bookmark: &str,
+    squash: bool,
+    no_ff: bool,
+    message: Option<&str>,
+) -> Result<()> {
+    with_backend(|b| b.merge(branch, dest_bookmark, squash, no_ff, message))
 }
 pub fn dry_run_merge(branch: &str, squash: bool) -> Result<bool> {
     with_backend(|b| b.dry_run_merge(branch, squash))

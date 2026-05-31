@@ -70,8 +70,11 @@ pub fn run(
     let mut terminal = setup_terminal()?;
     let _guard = TerminalGuard;
 
+    // Bind the result so `_guard` Drop (terminal restore) runs AFTER the event
+    // loop returns but BEFORE we hand the value back to the caller. clippy's
+    // let_and_return doesn't see the load-bearing Drop ordering here.
+    #[allow(clippy::let_and_return)]
     let result = run_event_loop(&mut terminal, repo_root, current_excludes, hidden_top_level);
-    // _guard runs Drop here, restoring the terminal.
     result
 }
 
@@ -121,11 +124,10 @@ fn install_panic_hook() {
 /// folders are lazy-expanded on demand via `read_dir`.
 struct Node {
     name: String,
-    /// Full path on disk (used for hashing into the unchecked set
-    /// + for size-worker tasks). Stored as `String` because
-    /// `tui-tree-widget` needs `Hash + Clone + Eq + PartialEq +
-    /// Display` for its identifier — `PathBuf` doesn't impl
-    /// `Display`.
+    /// Full path on disk (used for hashing into the unchecked set and for
+    /// size-worker tasks). Stored as `String` because `tui-tree-widget` needs
+    /// `Hash + Clone + Eq + PartialEq + Display` for its identifier, and
+    /// `PathBuf` doesn't impl `Display`.
     path: String,
     is_dir: bool,
     /// `None` = not yet computed. `Some((bytes, complete))` =

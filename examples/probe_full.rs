@@ -5,7 +5,7 @@
 // Usage: cargo run --release --example probe_full -- <src_dir> <dst_dir>
 
 use rayon::prelude::*;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
@@ -22,7 +22,14 @@ fn human_bytes(b: u64) -> String {
 
 enum Op {
     Dir(PathBuf),
-    File { src: PathBuf, dst: PathBuf, size: u64 },
+    // `size` is recorded for parity with ws new's planned-op shape even though
+    // this probe sums bytes separately; allow it to stay unread.
+    File {
+        src: PathBuf,
+        dst: PathBuf,
+        #[allow(dead_code)]
+        size: u64,
+    },
 }
 
 fn main() {

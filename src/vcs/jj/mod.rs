@@ -177,11 +177,12 @@ impl VcsBackend for JjBackend {
     fn merge(
         &self,
         branch: &str,
+        dest_bookmark: &str,
         squash: bool,
         no_ff: bool,
         message: Option<&str>,
     ) -> Result<()> {
-        ops::merge(self.runner.as_ref(), branch, squash, no_ff, message)
+        ops::merge(self.runner.as_ref(), branch, dest_bookmark, squash, no_ff, message)
     }
     fn dry_run_merge(&self, branch: &str, squash: bool) -> Result<bool> {
         ops::dry_run_merge(self.runner.as_ref(), branch, squash)

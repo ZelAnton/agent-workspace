@@ -319,9 +319,17 @@ fn create_worktree_cow(
             .map(|_| ())
             .map_err(map_run_err)?;
         // `jj status` is the cheapest command that forces a working-copy
-        // snapshot. Errors here are non-fatal (worst case: stale @ tree
-        // until next jj command in the new workspace).
-        let _ = runner.run(Cmd::new("jj").in_dir(path).args(["status"]));
+        // snapshot. This is NOT best-effort: step 8 immediately pins the
+        // bookmark to this workspace's `@`, so if the snapshot failed, `@`'s
+        // recorded tree would still be the empty `--sparse-patterns empty`
+        // tree while the reflinked files sit on disk — a corrupt worktree
+        // reported as success. Propagate the error so the rollback
+        // (`op restore` + `remove_dir_all`) fires, mirroring the git path's
+        // `refresh_index_with_progress?`.
+        runner
+            .run(Cmd::new("jj").in_dir(path).args(["status"]))
+            .map(|_| ())
+            .map_err(map_run_err)?;
 
         // 8. Put the bookmark on the new workspace's @. For a NEW branch
         //    we create it; when RESUMING an existing bookmark it sits one

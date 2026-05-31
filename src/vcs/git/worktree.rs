@@ -302,42 +302,71 @@ fn create_worktree_cow(
     // new-branch `checkout base` and the resume detached checkout, and the
     // originally-detached case where `orig_branch == "HEAD" != base`).
     let needs_restore = moved_source;
-    if inner.is_ok() && (needs_restore || needs_stash) {
+    // Restore order matters: checkout BEFORE stash pop so the pop applies to
+    // the original branch's tree, not `base`. Crucially, `git stash pop` must
+    // only run if the restoring checkout actually succeeded — otherwise we'd
+    // apply the user's stashed work onto the WRONG branch (`base`/`branch`)
+    // with no signal. If restore fails, leave the stash intact and tell the
+    // user loudly. This helper enforces that invariant on both the success and
+    // failure paths.
+    let restore_source = |report: bool| {
         let t = std::time::Instant::now();
-        if needs_restore
-            && let Err(e) = super::exec(runner, &["checkout", restore_target])
-        {
-            eprintln!("Warning: failed to restore '{restore_target}': {e}");
+        let restored = if needs_restore {
+            match super::exec(runner, &["checkout", restore_target]) {
+                Ok(_) => true,
+                Err(e) => {
+                    eprintln!("Warning: failed to restore '{restore_target}': {e}");
+                    false
+                }
+            }
+        } else {
+            true
+        };
+        if needs_stash {
+            if restored {
+                if let Err(e) = super::exec(runner, &["stash", "pop"]) {
+                    // Stash pop conflict: user's changes are safe in
+                    // `git stash list` but require manual resolution.
+                    eprintln!(
+                        "Warning: 'git stash pop' failed: {e}\n\
+                         Your changes are saved in 'git stash list'; resolve manually."
+                    );
+                }
+            } else {
+                // Restore checkout failed — do NOT pop onto the wrong branch.
+                eprintln!(
+                    "Warning: could not restore '{restore_target}', so your stashed \
+                     changes were left untouched in 'git stash list'.\n\
+                     Check out the right branch and run 'git stash pop' manually."
+                );
+            }
         }
-        if needs_stash
-            && let Err(e) = super::exec(runner, &["stash", "pop"])
-        {
-            // Stash pop conflict is the worst-case: user's changes are
-            // safe in `git stash list` but require manual resolution.
+        if report {
             eprintln!(
-                "Warning: 'git stash pop' failed: {e}\n\
-                 Your changes are saved in 'git stash list'; resolve manually."
+                "  Restored source branch ({}).",
+                crate::util::format_step(t.elapsed())
             );
         }
-        eprintln!(
-            "  Restored source branch ({}).",
-            crate::util::format_step(t.elapsed())
-        );
+        restored
+    };
+
+    let mut source_restored = true;
+    if inner.is_ok() && (needs_restore || needs_stash) {
+        source_restored = restore_source(true);
     } else if inner.is_err() {
-        // Failure path: still try to restore so the user's repo isn't
-        // left in a half-broken state, but don't time/report — they
-        // have bigger problems.
-        if needs_restore {
-            let _ = super::exec(runner, &["checkout", restore_target]);
-        }
-        if needs_stash {
-            let _ = super::exec(runner, &["stash", "pop"]);
-        }
+        // Failure path: still try to restore so the user's repo isn't left in
+        // a half-broken state, but don't time/report — they have bigger
+        // problems. Same wrong-branch-pop guard applies.
+        source_restored = restore_source(false);
     }
 
     // 7. Colocated post-sync: tell jj about the new worktree's ref
     //    movement and the source repo's branch/stash state restoration.
-    if is_colocated {
+    //    Skip when the source restore failed — importing a known-broken
+    //    intermediate git state would record that inconsistency into jj's
+    //    view. Leave jj on its pre-op state and let the user re-import once
+    //    they've fixed git by hand.
+    if is_colocated && source_restored {
         match std::process::Command::new("jj")
             .current_dir(repo_root)
             .args(["git", "import"])
@@ -358,6 +387,11 @@ fn create_worktree_cow(
             }
             Ok(_) => {}
         }
+    } else if is_colocated && !source_restored {
+        eprintln!(
+            "Warning: skipped post-CoW `jj git import` because the source repo \
+             could not be restored; fix git state, then run `jj git import` manually."
+        );
     }
 
     inner?;

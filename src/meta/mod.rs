@@ -87,10 +87,28 @@ impl WorktreeMeta {
         })
     }
 
-    /// Save to file
+    /// Save to file (atomically).
+    ///
+    /// Write to a sibling temp file, then `rename` over the target. A torn
+    /// write here is not benign: `WorktreeMeta::load` returning `Err` on a
+    /// truncated file makes the merge/sync target resolver silently fall back
+    /// to trunk (`resolve_target_branch` treats "no readable meta" as "no base
+    /// branch"), which would land commits on the wrong branch. `rename` is
+    /// atomic on the same filesystem, so a reader never sees a half-written
+    /// file.
     pub fn save(&self, path: &Path) -> Result<()> {
         let content = toml::to_string_pretty(self)?;
-        std::fs::write(path, content)?;
+        let tmp = path.with_extension(format!(
+            "toml.tmp.{}",
+            std::process::id()
+        ));
+        std::fs::write(&tmp, content)?;
+        // Best-effort cleanup of the temp file if the rename fails (e.g. the
+        // target dir vanished) so we don't leave litter behind.
+        if let Err(e) = std::fs::rename(&tmp, path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e.into());
+        }
         Ok(())
     }
 }

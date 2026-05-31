@@ -170,9 +170,16 @@ fn test_merge_delete_removes_worktree() {
         .output()
         .unwrap();
 
+    // `--path-file` simulates shell integration: deleting the current worktree
+    // requires it so the parent shell can be rescued to the main repo.
     let output = Command::new(ws_binary())
         .env("WS_SPAWNED_IN_TAB", "1")
-        .args(["merge", "--delete"])
+        .args([
+            "merge",
+            "--delete",
+            "--path-file",
+            path_file.to_str().unwrap(),
+        ])
         .current_dir(&wt_path)
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))
@@ -408,9 +415,18 @@ fn test_merge_already_up_to_date_with_merge_strategy() {
     let wt_path = PathBuf::from(read_path_file(&path_file).trim());
 
     // Don't add any commits to wt_path. Merge strategy=Merge, expect "Nothing to merge".
+    // `--path-file` simulates shell integration (required to run `-d` from
+    // inside the worktree).
     let output = Command::new(ws_binary())
         .env("WS_SPAWNED_IN_TAB", "1")
-        .args(["merge", "--strategy", "merge", "-d"])
+        .args([
+            "merge",
+            "--strategy",
+            "merge",
+            "-d",
+            "--path-file",
+            path_file.to_str().unwrap(),
+        ])
         .current_dir(&wt_path)
         .env("HOME", &home)
         .env("AGENT_WORKSPACE_DIR", home.join(".agent-workspace"))

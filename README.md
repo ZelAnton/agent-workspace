@@ -1,18 +1,43 @@
 # agent-workspace
 
-[![npm version](https://img.shields.io/npm/v/agent-workspace)](https://www.npmjs.com/package/agent-workspace)
+[![npm version](https://img.shields.io/npm/v/@zelanton/agent-workspace)](https://www.npmjs.com/package/@zelanton/agent-workspace)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
+[![Backends: git + jj](https://img.shields.io/badge/backends-git%20%2B%20jj-orange.svg)](#vcs-backend-selection)
 
-A Git worktree workflow tool for AI coding agents. Enables parallel development with isolated environments.
+A fast Git/Jujutsu **worktree workflow tool for AI coding agents** (CLI: `ws`).
+Spin up isolated worktrees in milliseconds, run an agent in each, then merge and
+clean up — all from one short command. Distributed as a single static binary.
 
 ![Cover](cover.png)
 
 ## Why
 
-AI coding agents work best with isolated environments:
+AI coding agents work best with isolated environments — one agent per worktree,
+no stepping on each other's files, no half-finished branches polluting your main
+checkout:
 
-- **Parallel execution**: Run multiple agents simultaneously without interference
-- **Clean separation**: Each feature gets its own working directory
-- **Snap mode**: "Use and discard" workflow — create worktree, run agent, merge, cleanup
+- **Parallel execution** — run multiple agents simultaneously without interference; each gets its own working directory and branch.
+- **Clean separation** — a feature's work-in-progress never touches your main checkout. Throw the worktree away and your repo is pristine.
+- **Snap mode** — a "use and discard" loop: create a worktree, run an agent in it, and on exit `ws` walks you through merge-or-keep and tidies up.
+- **Near-instant creation** — Copy-on-Write (reflink) cloning makes `ws new` near-instant even on multi-gigabyte monorepos, using almost no extra disk.
+- **Native git *and* [Jujutsu (`jj`)](https://jj-vcs.github.io/jj/)** — both backends are first-class; colocated repos default to jj.
+- **Terminal-tab aware** — on Windows Terminal / iTerm2 / GNOME Terminal, `ws new` and `ws cd` open the worktree in a fresh tab and leave your current shell put.
+
+### At a glance
+
+```bash
+ws new fix-auth -s claude   # new worktree + branch, run Claude in it, merge on exit
+ws ls                       # see every worktree and its base branch
+ws cd fix-auth              # jump into one (new tab if your terminal supports it)
+ws merge -d                 # squash-merge back to the base branch and delete the worktree
+ws clean                    # garbage-collect worktrees already merged
+```
+
+### Requirements
+
+- **git** ≥ 2.x (always required, including for colocated repos). Optionally **[`jj`](https://jj-vcs.github.io/jj/)** for the Jujutsu backend.
+- A POSIX shell (bash / zsh / fish) or PowerShell — needed for the `cd`-changing commands (`ws setup` installs the integration).
+- Copy-on-Write is opportunistic: a reflink-capable filesystem (Windows ReFS / DevDrive, Linux Btrfs / XFS, macOS APFS) enables it; everything else falls back to a plain copy automatically.
 
 ### Fork notes
 
@@ -54,7 +79,7 @@ ws update
 
 `ws update` detects how `ws` was installed (`~/.agent-workspace/install_channel`):
 - **Shell installer** — downloads the latest release from GitHub and atomically replaces itself (uses [`self_replace`](https://crates.io/crates/self-replace) for the Windows .exe rename-trick).
-- **npm** — re-runs `npm install -g /agent-workspace@latest`.
+- **npm** — re-runs `npm install -g @zelanton/agent-workspace@latest`.
 
 Shell integration is installed automatically by both channels. To reinstall manually:
 
@@ -152,6 +177,8 @@ checks the worktree state:
 | `ws new [branch]` | Create worktree from current branch (random name if omitted) |
 | `ws new --base <branch>` | Create from specific base branch (default: current branch) |
 | `ws new -s <cmd>` | Create + snap mode |
+| `ws new --no-cow` | Skip Copy-on-Write cloning for this creation |
+| `ws new --no-tab` / `--in-new-tab` | Override terminal-tab behavior for this creation |
 | `ws cd [branch]` | Switch to worktree (omit branch to return to main repo) |
 | `ws ls` | List worktrees |
 | `ws ls -l` | Show full path for each worktree |
@@ -181,7 +208,26 @@ checks the worktree state:
 | Command | Description |
 |---------|-------------|
 | `ws status` | Show current worktree info (also reports in-progress `ws sync` rebase/merge with recovery hints) |
+| `ws repo-info` | Show the cached per-repo metadata (file count, size, origin URL, GitHub slug) |
+| `ws repo-info --refresh` | Force-refresh that cache (otherwise auto-refreshed every 30 days) |
 | `ws update` | Update to the latest version |
+
+### Per-repo settings
+
+| Command | Description |
+|---------|-------------|
+| `ws config list` | List supported per-repo keys with descriptions |
+| `ws config get <key>` | Read a setting (e.g. `workspace.alias`, `workspace.use_path_hash`) |
+| `ws config set <key> <value>` | Write a setting to the repo-level config |
+| `ws config unset <key>` | Remove a setting |
+| `ws exclude` | Open the TUI tree picker for `[copy] exclude` patterns |
+| `ws exclude <pattern>...` | Add CoW exclude patterns (e.g. `target node_modules '**/*.iso'`) |
+| `ws exclude --list` | Show current exclude patterns |
+| `ws exclude --remove <pattern>` | Drop a pattern |
+| `ws exclude --clear` | Remove all patterns |
+
+> Both `ws config` and `ws exclude` write the local repo-level `.workspace.toml`
+> and keep it out of git automatically (via `.git/info/exclude`).
 
 ### Configuration
 
@@ -244,13 +290,85 @@ Repo/worktree config lives in `.workspace.toml` — a **local, per-machine** fil
 ```toml
 [general]
 trunk = "main"  # Trunk branch (auto-detected if omitted)
+vcs = "git"     # Force a backend for this repo: "git" | "jj" (default: auto-detect)
 merge_strategy = "merge"  # Override global merge strategy
 sync_strategy = "merge"   # Override global sync strategy
 copy_files = ["*.secret.*"]  # Appended to global copy_files
 
 [hooks]
 post_create = ["pnpm install"]  # Replaces global hooks if set
+
+[copy]
+# Gitignore-style patterns the Copy-on-Write path SKIPS when cloning the source
+# repo into a new worktree. Anchor with a leading `/` for top-level only.
+exclude = ["/target", "/node_modules", "**/*.iso"]
+
+[create]
+use_cow = true          # Copy-on-Write worktree creation (default: true when supported)
+
+[ui]
+open_in_new_tab = true  # Open ws new / ws cd in a new terminal tab (default: true)
+
+[workspace]
+alias = "myrepo"        # Override the workspace directory name (default: repo basename)
+use_path_hash = false   # Append a `-<hash>` suffix to disambiguate same-named repos
 ```
+
+## VCS backend selection
+
+`ws` speaks both git and Jujutsu. The backend is resolved once per invocation,
+in this order:
+
+1. `--vcs <auto|git|jj>` global flag
+2. `[general] vcs` in the repo-level `.workspace.toml`
+3. `[general] vcs` in the global config
+4. auto-detection from `.git/` / `.jj/` presence
+
+**Colocated repos (both `.git/` and `.jj/`) default to jj** — you installed jj
+for a reason, so `ws` respects it. Force git with `--vcs=git` or `vcs = "git"`.
+A handful of git-shaped operations have no clean jj analogue and return a clear
+`Error::Unsupported` with a hint rather than guessing:
+
+| Operation | jj guidance |
+|-----------|-------------|
+| `ws mv` | use `ws rm` + `ws new` |
+| `ws sync --abort` / `--continue` | jj records conflicts in commits — resolve the files and re-run |
+
+See [`AGENTS.md`](AGENTS.md) → "VCS backend compatibility" for the full
+semantic-delta table (no staging area, bookmarks vs branches, atomic operations).
+
+## How shell integration works
+
+A child process can't change its parent shell's directory, so the commands that
+move you (`ws cd`, `ws new`, `ws rm`, `ws mv`, `ws merge -d`, `ws clean`) can't
+`cd` you directly. Instead the binary writes the destination to a temp file and
+a tiny shell wrapper (installed by `ws setup`) reads it and performs the `cd`.
+
+Consequences worth knowing:
+
+- Run `ws setup` once per shell. Without it, the `cd`-changing commands still do
+  their work but can't move your shell — and `ws` refuses to delete or move the
+  **current** worktree without integration (it would strand you in a deleted
+  directory). `cd` to the main repo first, or install the wrapper.
+- The wrapper is bracketed by `# === agent-workspace BEGIN/END ===` markers in
+  your rc file; `ws uninstall` removes exactly that block and nothing else.
+- On terminals with tab support, `ws new` / `ws cd` open a new tab instead, and
+  the originating shell stays exactly where it was.
+
+## Troubleshooting
+
+- **`ws cd` doesn't change my directory** — shell integration isn't active in
+  this shell. Run `ws setup`, then open a new shell (or `source` your rc file).
+- **"Refusing to remove/move the current worktree without shell integration"** —
+  same cause. Run `ws setup`, or `ws cd` back to the main repo and retry.
+- **`ws new` opened a new tab I didn't want** — pass `--no-tab`, or set
+  `[ui] open_in_new_tab = false` in your config.
+- **Creation isn't using Copy-on-Write** — the source repo and
+  `$AGENT_WORKSPACE_DIR` must be on the *same* reflink-capable volume. `ws` probes
+  with a real sentinel reflink and falls back to a plain copy silently otherwise.
+  Force a plain copy with `--no-cow`.
+- **Merge says "Base branch '…' no longer exists"** — the worktree's base branch
+  was deleted. Pick an explicit target: `ws merge --into <branch>`.
 
 ## Storage Layout
 

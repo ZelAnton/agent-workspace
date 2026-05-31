@@ -3,7 +3,7 @@
 // ===========================================================================
 //
 // `ws update` reads the install_channel marker in the base dir and dispatches:
-//   - Channel::Npm   → `npm install -g agent-workspace@latest`
+//   - Channel::Npm   → `npm install -g @zelanton/agent-workspace@latest`
 //   - Channel::Shell → download from GitHub Releases + atomic self-replace
 //                      + re-run `ws setup` for any wrapper template changes
 //
@@ -36,8 +36,13 @@ pub fn determine_action(check_result: update::Result<Option<String>>) -> cli::Re
 }
 
 /// 构造 npm install 命令参数
+///
+/// The published package is SCOPED (`@zelanton/agent-workspace`) — see
+/// `npm/agent-workspace/package.json`. An unscoped `agent-workspace@latest`
+/// would target the wrong (or a non-existent) package, so the npm-channel
+/// update path must use the full scoped name.
 pub fn npm_install_args() -> Vec<&'static str> {
-    vec!["install", "-g", "agent-workspace@latest"]
+    vec!["install", "-g", "@zelanton/agent-workspace@latest"]
 }
 
 pub fn run() -> cli::Result<()> {
@@ -129,6 +134,9 @@ mod tests {
     #[test]
     fn test_npm_install_args() {
         let args = npm_install_args();
-        assert_eq!(args, vec!["install", "-g", "agent-workspace@latest"]);
+        assert_eq!(
+            args,
+            vec!["install", "-g", "@zelanton/agent-workspace@latest"]
+        );
     }
 }

@@ -185,6 +185,12 @@ fn execute_action(
     match action {
         SnapAction::CleanupNoChanges => {
             eprintln!("No changes detected. Cleaning up...");
+            // The snap loop cd'd us INTO the worktree before running the agent,
+            // so `ctx.cwd` is the worktree. On Windows the OS holds an
+            // exclusive handle on the process cwd, so `git worktree remove`
+            // would fail to delete the directory we're standing in. Step out to
+            // the main repo first — same guard the MergeAndCleanup arm uses.
+            std::env::set_current_dir(&ctx.repo_root).map_err(|e| Error::Other(e.to_string()))?;
             cleanup_worktree(&ctx.cwd, &ctx.branch, config)?;
             write_path_file(path_file, &ctx.repo_root)?;
             std::process::exit(EXIT_DONE);

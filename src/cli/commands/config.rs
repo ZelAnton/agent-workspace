@@ -201,17 +201,17 @@ fn unset(config_path: &Path, key: &str) -> Result<()> {
         .split_once('.')
         .ok_or_else(|| Error::Other(format!("malformed key '{key}'")))?;
 
-    if let Some(table) = doc.get_mut(section).and_then(|i| i.as_table_mut()) {
-        if table.remove(field).is_some() {
-            // If we just emptied the section, drop it too so the file
-            // doesn't end up with stale section headers.
-            if table.is_empty() {
-                doc.remove(section);
-            }
-            save_doc(config_path, &doc)?;
-            println!("Unset {key}");
-            return Ok(());
+    if let Some(table) = doc.get_mut(section).and_then(|i| i.as_table_mut())
+        && table.remove(field).is_some()
+    {
+        // If we just emptied the section, drop it too so the file
+        // doesn't end up with stale section headers.
+        if table.is_empty() {
+            doc.remove(section);
         }
+        save_doc(config_path, &doc)?;
+        println!("Unset {key}");
+        return Ok(());
     }
     println!("{key} was not set; nothing to do");
     Ok(())

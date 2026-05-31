@@ -250,7 +250,7 @@ fn test_merge_fast_forward() {
         .unwrap();
 
     with_cwd(dir.path(), || {
-        let result = backend().merge("already-merged", false, false, None);
+        let result = backend().merge("already-merged", "main", false, false, None);
         let _ = result; // may succeed or be no-op
     });
 }

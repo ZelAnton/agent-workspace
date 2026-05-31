@@ -134,7 +134,10 @@ pub fn run(args: SyncArgs, config: &Config) -> Result<()> {
             eprintln!("Rebased onto {target}");
         }
         SyncStrategy::Merge => {
-            vcs::merge(&target, false, false, None)?;
+            // Sync merges `target` (trunk) INTO the worktree, so the
+            // destination bookmark to advance is the worktree's own branch
+            // (`current`), not `target`.
+            vcs::merge(&target, &current, false, false, None)?;
             eprintln!("Merged {target} into {current}");
         }
     }

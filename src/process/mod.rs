@@ -17,20 +17,39 @@ pub enum Error {
 }
 
 /// Run a command in the specified directory, inheriting stdio.
+///
+/// Hooks are an unsandboxed shell-string contract (see AGENTS.md) — the command
+/// is handed to `sh -c` (Unix) / `cmd /C` (Windows) verbatim. On Windows we use
+/// `raw_arg` rather than `.args(["/C", command])`: std's default argument
+/// escaping is tuned for ordinary executables, not cmd.exe's own parser, so for
+/// hook strings containing quotes, `%`, or `^` the default path would mangle
+/// the command (backslash-escaped quotes that cmd.exe doesn't understand).
+/// `raw_arg` passes the line through unaltered.
 pub fn run_interactive(command: &str, cwd: &Path) -> Result<ExitStatus> {
-    let (shell, flag) = if cfg!(windows) {
-        ("cmd", "/C")
-    } else {
-        ("sh", "-c")
-    };
-    let status = Command::new(shell)
-        .args([flag, command])
+    let mut cmd = build_shell_command(command);
+    let status = cmd
         .current_dir(cwd)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .status()?;
     Ok(status)
+}
+
+#[cfg(windows)]
+fn build_shell_command(command: &str) -> Command {
+    use std::os::windows::process::CommandExt;
+    let mut cmd = Command::new("cmd");
+    // Single raw arg containing the whole `/C <command>` tail — no std re-quoting.
+    cmd.raw_arg(format!("/C {command}"));
+    cmd
+}
+
+#[cfg(not(windows))]
+fn build_shell_command(command: &str) -> Command {
+    let mut cmd = Command::new("sh");
+    cmd.args(["-c", command]);
+    cmd
 }
 
 /// Run a hook command
@@ -71,10 +90,15 @@ mod tests {
     // =========================================================================
     // run_interactive tests
     // =========================================================================
+    // Test commands are chosen to run identically under `cmd /C` (Windows) and
+    // `sh -c` (Unix): `exit 0` / `exit 1` are builtins in both shells, and
+    // `echo ... > file` creates a file on both. This keeps the suite green on a
+    // clean Windows CI image that lacks Git's `true`/`touch`/`test` coreutils.
+
     #[test]
     fn test_run_interactive_success() {
         let dir = tempdir().unwrap();
-        let result = run_interactive("true", dir.path());
+        let result = run_interactive("exit 0", dir.path());
         assert!(result.is_ok());
         assert!(result.unwrap().success());
     }
@@ -82,7 +106,7 @@ mod tests {
     #[test]
     fn test_run_interactive_failure() {
         let dir = tempdir().unwrap();
-        let result = run_interactive("false", dir.path());
+        let result = run_interactive("exit 1", dir.path());
         assert!(result.is_ok());
         assert!(!result.unwrap().success());
     }
@@ -98,17 +122,18 @@ mod tests {
     #[test]
     fn test_run_interactive_with_cwd() {
         let dir = tempdir().unwrap();
-        std::fs::write(dir.path().join("test.txt"), "content").unwrap();
-        // Test that cwd is respected
-        let result = run_interactive("test -f test.txt", dir.path());
+        // Verify cwd is respected: the hook writes a marker into its cwd, and we
+        // assert it lands in `dir`. Portable across cmd.exe and sh.
+        let result = run_interactive("echo x > marker.txt", dir.path());
         assert!(result.is_ok());
         assert!(result.unwrap().success());
+        assert!(dir.path().join("marker.txt").exists());
     }
 
     #[test]
     fn test_run_interactive_nonexistent_cwd() {
         let nonexistent = std::path::Path::new("/nonexistent/path/12345");
-        let result = run_interactive("true", nonexistent);
+        let result = run_interactive("exit 0", nonexistent);
         assert!(result.is_err());
     }
 
@@ -118,17 +143,17 @@ mod tests {
     #[test]
     fn test_run_hook_success() {
         let dir = tempdir().unwrap();
-        let result = run_hook("true", dir.path());
+        let result = run_hook("exit 0", dir.path());
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_run_hook_failure() {
         let dir = tempdir().unwrap();
-        let result = run_hook("false", dir.path());
+        let result = run_hook("exit 1", dir.path());
         assert!(result.is_err());
         match result.unwrap_err() {
-            Error::HookFailed(cmd) => assert_eq!(cmd, "false"),
+            Error::HookFailed(cmd) => assert_eq!(cmd, "exit 1"),
             _ => panic!("Expected HookFailed error"),
         }
     }
@@ -158,7 +183,7 @@ mod tests {
     #[test]
     fn test_run_hooks_single() {
         let dir = tempdir().unwrap();
-        let hooks = vec!["true".to_string()];
+        let hooks = vec!["exit 0".to_string()];
         let result = run_hooks(&hooks, dir.path());
         assert!(result.is_ok());
     }
@@ -167,9 +192,9 @@ mod tests {
     fn test_run_hooks_multiple() {
         let dir = tempdir().unwrap();
         let hooks = vec![
-            "true".to_string(),
+            "exit 0".to_string(),
             "echo hello".to_string(),
-            "true".to_string(),
+            "exit 0".to_string(),
         ];
         let result = run_hooks(&hooks, dir.path());
         assert!(result.is_ok());
@@ -181,10 +206,12 @@ mod tests {
         let file1 = dir.path().join("file1.txt");
         let file2 = dir.path().join("file2.txt");
 
+        // `echo x > file` creates the file portably (cmd.exe + sh); we only
+        // assert existence, not content.
         let hooks = vec![
-            format!("touch {}", file1.display()),
-            "false".to_string(), // This will fail
-            format!("touch {}", file2.display()),
+            format!("echo x > {}", file1.display()),
+            "exit 1".to_string(), // This will fail
+            format!("echo x > {}", file2.display()),
         ];
 
         let result = run_hooks(&hooks, dir.path());

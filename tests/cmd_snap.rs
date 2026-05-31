@@ -75,14 +75,17 @@ fn test_new_with_snap_creates_metadata() {
 
     assert!(output.status.success());
 
-    let workspaces_dir = home.join(".agent-workspace");
-    let workspace_dir = std::fs::read_dir(&workspaces_dir)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .find(|e| e.file_name().to_string_lossy().starts_with("repo-"))
-        .expect("workspace directory not found");
-    let meta_path = workspace_dir.path().join("snap-meta-test.toml");
-    assert!(meta_path.exists());
+    // The per-repo workspace dir is the repo basename (no `-<hash>` suffix —
+    // `use_path_hash` defaults to false). Match the direct-join pattern used by
+    // cmd_new.rs rather than scanning for a stale `repo-<hash>` prefix.
+    let repo_name = repo.file_name().unwrap().to_str().unwrap();
+    let workspace_dir = home.join(".agent-workspace").join(repo_name);
+    let meta_path = workspace_dir.join("snap-meta-test.toml");
+    assert!(
+        meta_path.exists(),
+        "expected meta at {}",
+        meta_path.display()
+    );
 
     // snap command no longer persisted in meta — it flows through path_file only.
     let content = std::fs::read_to_string(&meta_path).unwrap();

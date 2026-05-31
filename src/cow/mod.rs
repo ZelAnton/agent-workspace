@@ -425,16 +425,14 @@ enum RobocopyError {
 ///   - `/E`     — copy all subdirectories, including empty ones
 ///   - `/MT:10` — 10-thread parallel copier
 ///   - `/R:1 /W:1` — retry once with a 1s wait (default /R:1M would
-///                  hang ~1M minutes on permission errors)
+///     hang ~1M minutes on permission errors)
 ///   - `/NDL /NJH /NJS /NP /NC` — suppress dir lines, job header/footer,
-///                                percentages, class column. The file
-///                                list itself is KEPT so we can parse
-///                                it in real time for progress.
+///     percentages, class column. The file list itself is KEPT so we can
+///     parse it in real time for progress.
 ///   - `/XD <src>\<excl>` — exclude TOP-LEVEL only (full path makes the
-///                          match exact; a bare name would also exclude
-///                          any deeply-nested directory of the same
-///                          name, which differs from our in-process
-///                          walker's semantics).
+///     match exact; a bare name would also exclude any deeply-nested
+///     directory of the same name, which differs from our in-process
+///     walker's semantics).
 ///
 /// **Exit code semantics**: robocopy uses a bitmap, NOT POSIX 0/non-0.
 ///   - 0     — nothing to do (source == dest, idempotent)
@@ -996,6 +994,19 @@ fn try_clone_dir_except_inproc(
             "  Cloned {total_done} files ({}): {reflinked} reflinked, {copied} copied ({elapsed}).",
             HumanBytes(total_bytes)
         );
+    }
+
+    // A genuine copy failure (both reflink AND plain copy failed for a file,
+    // or a symlink couldn't be recreated) means the new worktree is missing
+    // files. Surface it as an error so the caller's rollback fires
+    // (`remove_dir_all` + `worktree prune`) instead of leaving a corrupt
+    // worktree that git silently reports as "deletions". This mirrors the
+    // robocopy path, which already returns `Err` on exit code >= 8.
+    if errors > 0 {
+        return Err(Error::Io(std::io::Error::other(format!(
+            "{errors} file(s) could not be copied into the new worktree; \
+             the partial worktree will be rolled back (try `ws new --no-cow`)"
+        ))));
     }
 
     Ok(total_bytes)

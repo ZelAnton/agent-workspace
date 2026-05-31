@@ -391,8 +391,8 @@ fn copy_files(from: &Path, to: &Path, config: &Config) -> Result<()> {
 /// Decide whether `ws new` should open a new terminal tab instead of
 /// running the creation inline. Precedence:
 ///   1. `--no-tab` flag → always false (user explicitly disabled)
-///   2. `--in-new-tab` flag → true (user explicitly enabled)
-///   3. Already running inside a spawned tab → false (recursion guard)
+///   2. Already running inside a spawned tab → false (recursion guard)
+///   3. `--in-new-tab` flag → true (user explicitly enabled)
 ///   4. `[ui] open_in_new_tab` config (project over global) → that value
 ///
 /// Terminal-detection still happens at the call site — even if this

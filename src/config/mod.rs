@@ -216,7 +216,7 @@ pub struct ProjectConfig {
 ///   - `node_modules/`     — directory only (not files named the same)
 ///   - `**/*.iso`          — any-depth glob for `.iso` files
 ///   - `!keep-this-anyway` — negation, re-include something excluded
-///                           by an earlier broader pattern
+///     by an earlier broader pattern
 ///
 /// Set via the dedicated `ws exclude` command (positional args, or its
 /// TUI tree picker) or by editing `.workspace.toml` directly:
@@ -251,15 +251,12 @@ pub struct ProjectCopyConfig {
 ///
 /// Defaults (no `[workspace]` table in the project config) give:
 ///   - `alias`         = None → use the repo's basename (e.g.
-///                       `CargoWise`).
-///   - `use_path_hash` = None → resolved to `false`, i.e. NO
-///                       `-<hash>` suffix. Earlier versions of `ws`
-///                       always appended a 6-hex disambiguation suffix
-///                       (`CargoWise-56f172`) computed from the repo
-///                       root path; that's now opt-in via
-///                       `use_path_hash = true` for users with
-///                       multiple same-named repos at different
-///                       paths.
+///     `CargoWise`).
+///   - `use_path_hash` = None → resolved to `false`, i.e. NO `-<hash>`
+///     suffix. Earlier versions of `ws` always appended a 6-hex
+///     disambiguation suffix (`CargoWise-56f172`) computed from the repo
+///     root path; that's now opt-in via `use_path_hash = true` for users
+///     with multiple same-named repos at different paths.
 ///
 /// Set via the new `ws config` subcommand or by editing
 /// `.workspace.toml` directly:
@@ -522,7 +519,6 @@ impl Config {
     pub fn project_dir_for(&self, workspace_id: &str) -> PathBuf {
         let (repo_name, hash) = workspace_id
             .rsplit_once('-')
-            .map(|(n, h)| (n, h))
             .unwrap_or((workspace_id, ""));
 
         let display_name = self.workspace_alias.as_deref().unwrap_or(repo_name);
@@ -715,16 +711,24 @@ fn resolve_main_repo_root(cwd: &Path) -> Option<PathBuf> {
                 // canonical typically ends in `.git`; the main repo root
                 // is its parent. For worktree-internal queries it can be
                 // `.git/worktrees/<name>` — walk back to `.git`.
-                let mut current = canonical.as_path();
-                while !current
-                    .components()
-                    .next_back()
-                    .is_some_and(|c| matches!(c, Component::Normal(s) if s == ".git"))
-                {
-                    current = current.parent()?;
-                }
-                if let Some(parent) = current.parent() {
-                    return Some(parent.to_path_buf());
+                //
+                // If no `.git` component is found (bare repo whose git dir
+                // isn't named `.git`, custom GIT_DIR, etc.), DON'T abort the
+                // whole function — fall through to the `detect_root` fallback
+                // below. Using `?` here would return `None` and silently drop
+                // ALL repo-level config for those layouts.
+                let mut current = Some(canonical.as_path());
+                while let Some(c) = current {
+                    if c.components()
+                        .next_back()
+                        .is_some_and(|comp| matches!(comp, Component::Normal(s) if s == ".git"))
+                    {
+                        if let Some(parent) = c.parent() {
+                            return Some(parent.to_path_buf());
+                        }
+                        break;
+                    }
+                    current = c.parent();
                 }
             }
         }
@@ -939,7 +943,12 @@ post_merge = ["git push", "notify-team"]
 
     #[test]
     fn test_config_base_dir() {
-        let result = Config::base_dir();
+        // Exercise the fallback branch directly (env override = None) rather
+        // than `base_dir()`, which reads the ambient `AGENT_WORKSPACE_DIR` —
+        // a developer/CI machine that actually uses `ws` has that set to a
+        // custom path, which would make a `base_dir()`-based assertion fail
+        // spuriously. `resolve_base_dir` was split out for exactly this.
+        let result = Config::resolve_base_dir(None);
         assert!(result.is_ok());
         let path = result.unwrap();
         assert!(path.to_string_lossy().contains(".agent-workspace"));

@@ -16,10 +16,22 @@ notes.
 -
 
 ### Changed
--
+- The terminal-tab recursion guard (`WS_SPAWNED_IN_TAB`) now takes precedence over an explicit `--in-new-tab`, making it an unconditional spawn-disable (no behavior change in normal use; defense against runaway tab spawning).
 
 ### Fixed
--
+- `ws update` on the npm channel installed the wrong (unscoped) package; it now uses the correct `@zelanton/agent-workspace`.
+- `ws merge` no longer silently retargets to trunk when the worktree's base branch was deleted — it refuses and points you at `ws merge --into <branch>`, matching snap-mode behavior.
+- jj `ws merge` now advances the explicit destination branch instead of guessing the lexicographically-smallest bookmark on the commit, which could move (and with `--allow-backwards`, lose) the wrong bookmark when several share a commit (e.g. `main` + `master`).
+- Snap-mode "no changes" cleanup now steps out of the worktree before removing it, so it works on Windows (the OS locks the process's current directory).
+- `ws merge -d`, `ws clean`, and `ws mv` no longer strand the shell in a deleted/moved directory when run without shell integration — they refuse (or skip) the current worktree, matching `ws rm`.
+- `ws init` now writes its config at the main repo root instead of the current directory, so running it from a subdirectory no longer creates a config that nothing reads.
+- Copy-on-Write worktree creation now fails (and rolls back) instead of silently reporting success when files can't be copied, preventing a corrupt worktree with missing files. The jj backend likewise rolls back if its post-copy snapshot fails.
+- git Copy-on-Write no longer applies a stashed change onto the wrong branch when restoring the source repo after a failed creation.
+- Repo-level `.workspace.toml` is no longer silently ignored on unusual git layouts (bare repos / custom git-dir names) where the repo root couldn't be walked back from the git common dir.
+- Windows hooks are now passed to `cmd /C` verbatim, so hook commands containing quotes, `%`, or `^` are no longer mangled by argument re-quoting.
+- `WorktreeMeta` is now written atomically (temp file + rename), so an interrupted write can't leave a truncated meta file that makes merge/sync silently fall back to trunk.
+- `ws cd <branch>` rejects path-traversal arguments (e.g. `../../foo`) that could move the shell outside the workspace.
+- Hardened shell-wrapper removal to match the `# === agent-workspace BEGIN/END ===` markers as whole lines, so a stray mention of the marker text elsewhere in an rc file can't trigger deletion of unrelated config.
 
 ## [0.15.0] - 2026-05-30
 

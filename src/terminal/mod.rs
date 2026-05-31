@@ -109,18 +109,27 @@ pub fn is_spawned_in_tab() -> bool {
 /// config toggle. Used by both `ws new` and `ws cd`:
 ///
 ///   1. `--no-tab` flag → false (user explicitly disabled)
-///   2. `--in-new-tab` flag → true (user explicitly enabled)
-///   3. Already running inside a spawned tab (recursion guard) → false
+///   2. Already running inside a spawned tab (recursion guard) → false
+///   3. `--in-new-tab` flag → true (user explicitly enabled)
 ///   4. `config_value` (`[ui] open_in_new_tab` resolved project/global)
+///
+/// The recursion guard is checked BEFORE `--in-new-tab` (not after): once
+/// `WS_SPAWNED_IN_TAB` is set, spawning is hard-disabled regardless of any
+/// flag that leaked into the child's argv or env. This matches the
+/// architectural invariant (AGENTS.md) and the integration-test helper, which
+/// relies on the guard to unconditionally suppress tab spawning. In normal
+/// flow the tab-control flags are stripped from the spawned tab's re-invocation
+/// anyway (see `lifecycle::new::spawn_in_new_tab`), so this reordering is pure
+/// defense-in-depth — it can't change behaviour for a non-guarded invocation.
 pub fn should_open_in_new_tab(no_tab: bool, in_new_tab: bool, config_value: bool) -> bool {
     if no_tab {
         return false;
     }
-    if in_new_tab {
-        return true;
-    }
     if is_spawned_in_tab() {
         return false;
+    }
+    if in_new_tab {
+        return true;
     }
     config_value
 }

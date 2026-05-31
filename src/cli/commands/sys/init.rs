@@ -2,8 +2,6 @@
 // ws init - Initialize project configuration
 // ===========================================================================
 
-use std::path::Path;
-
 use clap::Args;
 use clap_complete::engine::ArgValueCompleter;
 
@@ -32,7 +30,15 @@ pub struct InitArgs {
 }
 
 pub fn run(args: InitArgs) -> Result<()> {
-    let config_path = Path::new(".agent-workspace.toml");
+    // Anchor the config at the MAIN repo root — never the process cwd. Run from
+    // a subdirectory, a cwd-relative write would land the file where
+    // `Config::load` (which resolves the repo root independently) never reads
+    // it. `ws init` deliberately writes the *committed, team-shared*
+    // `.agent-workspace.toml` (this repo ships one), distinct from the local,
+    // git-excluded `.workspace.toml` that `ws config`/`ws exclude` manage — so
+    // it is NOT auto-excluded here.
+    let repo_root = vcs::repo_root().map_err(|e| Error::Other(e.to_string()))?;
+    let config_path = repo_root.join(crate::config::LEGACY_PROJECT_CONFIG_FILENAME);
 
     if config_path.exists() {
         return Err(Error::Other("Config file already exists".into()));
@@ -54,9 +60,9 @@ pub fn run(args: InitArgs) -> Result<()> {
 
     let content = toml::to_string_pretty(&config).map_err(|e| Error::Other(e.to_string()))?;
 
-    std::fs::write(config_path, content).map_err(|e| Error::Other(e.to_string()))?;
+    std::fs::write(&config_path, content).map_err(|e| Error::Other(e.to_string()))?;
 
-    eprintln!("Created .agent-workspace.toml");
+    eprintln!("Created {}", config_path.display());
     eprintln!("Trunk branch: {trunk}");
     if let Some(ref strategy) = config.general.merge_strategy {
         eprintln!("Merge strategy: {strategy:?}");

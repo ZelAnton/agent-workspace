@@ -137,7 +137,14 @@ impl VcsBackend for GitBackend {
     }
 
     // ----- Mutations ------------------------------------------------------
-    fn merge(&self, branch: &str, squash: bool, no_ff: bool, message: Option<&str>) -> Result<()> {
+    fn merge(
+        &self,
+        branch: &str,
+        _dest_bookmark: &str, // git merges into the checked-out HEAD; no bookmark to advance
+        squash: bool,
+        no_ff: bool,
+        message: Option<&str>,
+    ) -> Result<()> {
         ops::merge(self.runner.as_ref(), branch, squash, no_ff, message)
     }
     fn dry_run_merge(&self, branch: &str, squash: bool) -> Result<bool> {

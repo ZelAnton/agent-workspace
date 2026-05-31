@@ -558,7 +558,15 @@ fn remove_wrapper(content: &str) -> Result<String> {
     let mut in_wrapper = false;
 
     for (idx, line) in content.lines().enumerate() {
-        if line.contains(MARKER_BEGIN) {
+        // Match the marker as a whole line (modulo surrounding whitespace), NOT
+        // as a substring. The markers are the exact comment lines the installer
+        // writes at column 0; treating any line that merely *contains* the
+        // phrase as a marker would turn a user's own documentation or a pasted
+        // heredoc into a destructive trigger — pairing a stray mention with a
+        // genuine marker would delete everything between, wiping unrelated PATH
+        // exports / aliases. `trim()` keeps tolerance for indentation.
+        let trimmed = line.trim();
+        if trimmed == MARKER_BEGIN {
             if in_wrapper {
                 return Err(Error::Other(format!(
                     "rc file has nested '{MARKER_BEGIN}' at line {} — manual fixup needed before re-running 'ws setup'.",
@@ -568,7 +576,7 @@ fn remove_wrapper(content: &str) -> Result<String> {
             in_wrapper = true;
             continue;
         }
-        if line.contains(MARKER_END) {
+        if trimmed == MARKER_END {
             if !in_wrapper {
                 return Err(Error::Other(format!(
                     "rc file has '{MARKER_END}' without matching BEGIN at line {} — manual fixup needed before re-running 'ws setup'.",

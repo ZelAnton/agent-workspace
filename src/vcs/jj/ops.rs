@@ -225,6 +225,7 @@ pub(super) fn dry_run_merge(runner: &dyn Runner, branch: &str, squash: bool) -> 
 pub(super) fn merge(
     runner: &dyn Runner,
     branch: &str,
+    dest_bookmark: &str,
     squash: bool,
     _no_ff: bool, // jj has no FF/non-FF distinction — always explicit merge commits
     message: Option<&str>,
@@ -240,10 +241,13 @@ pub(super) fn merge(
         return Ok(());
     }
 
-    // Capture target bookmark BEFORE the merge so we can move it after.
-    // current_branch() requires a bookmark on @ — managed worktrees always
-    // have one (locked decision), so this should succeed.
-    let target_bookmark = super::repo::current_branch(runner)?;
+    // The destination bookmark to advance is passed EXPLICITLY by the caller
+    // (the branch it checked out / is standing in). We must NOT re-derive it
+    // from `@` via current_branch(): a commit can carry multiple bookmarks
+    // (e.g. trunk co-located as `main` + `master`), and picking the
+    // lexicographically smallest could move the WRONG bookmark — and, with
+    // `--allow-backwards` below, drag it backward, losing its reference.
+    let target_bookmark = dest_bookmark;
 
     // Capture pre-merge op id for precise rollback on internal failure.
     // Critical: op_id capture goes here, BEFORE any mutation, so a failure
@@ -261,13 +265,13 @@ pub(super) fn merge(
             // new empty change above it. Move the bookmark forward.
             super::exec(
                 runner,
-                &["bookmark", "move", &target_bookmark, "--to", "@-", "--allow-backwards"],
+                &["bookmark", "move", target_bookmark, "--to", "@-", "--allow-backwards"],
             )?;
         } else {
             super::exec(runner, &["new", "-m", msg, "@", branch])?;
             super::exec(
                 runner,
-                &["bookmark", "move", &target_bookmark, "--to", "@", "--allow-backwards"],
+                &["bookmark", "move", target_bookmark, "--to", "@", "--allow-backwards"],
             )?;
         }
         Ok(())

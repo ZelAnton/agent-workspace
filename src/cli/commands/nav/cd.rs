@@ -127,6 +127,14 @@ fn resolve_target_and_title(
             Ok((repo_root, title))
         }
         Some(b) => {
+            // Reject path-traversal in the branch arg: `ws cd ../../foo` would
+            // otherwise resolve outside the workspace dir and the wrapper would
+            // `cd` the parent shell to an arbitrary location, bypassing the
+            // "cd to a worktree" contract. (A real worktree name never contains
+            // `..` or a leading separator.)
+            if b.split(['/', '\\']).any(|seg| seg == "..") || b.starts_with(['/', '\\']) {
+                return Err(Error::Git(vcs::Error::WorktreeNotFound(b.to_string())));
+            }
             let workspace_id = vcs::workspace_id()?;
             let wt_dir = config.project_dir_for(&workspace_id);
             let wt_path = wt_dir.join(b);

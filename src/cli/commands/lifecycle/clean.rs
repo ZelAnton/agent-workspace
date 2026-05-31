@@ -90,6 +90,19 @@ pub fn run(args: CleanArgs, config: &Config, path_file: Option<&Path>) -> Result
 
         let inside = vcs::is_cwd_inside(&wt.path);
 
+        // Removing the worktree the user is standing in needs shell integration
+        // to rescue the parent shell (via the path-file). Without it, SKIP this
+        // one (with a hint) rather than strand the shell — the rest of the
+        // sweep can still proceed. The shell wrapper always passes
+        // `--path-file`, so this only bites a direct-binary `ws clean`.
+        if inside && path_file.is_none() {
+            eprintln!(
+                "Skipping {branch}: it's the current worktree and shell integration \
+                 is off (run 'ws setup', or 'cd' to the main repo first)."
+            );
+            continue;
+        }
+
         eprintln!("Cleaning worktree (no diff from {target}): {branch}");
 
         if let Err(e) = vcs::remove_worktree(&wt.path, false) {

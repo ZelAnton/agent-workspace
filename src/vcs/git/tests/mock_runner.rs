@@ -60,7 +60,7 @@ fn merge_emits_squash_then_commit_when_squash_true_with_message() {
         )
         .expect("git commit -m 'my msg'", ok_str(""));
     let backend = GitBackend::with_runner(Arc::new(mock));
-    backend.merge("feature", true, true, Some("my msg")).unwrap();
+    backend.merge("feature", "main", true, true, Some("my msg")).unwrap();
 }
 
 #[test]
@@ -74,7 +74,7 @@ fn merge_squash_skips_commit_when_nothing_staged() {
         .expect("git diff --cached --quiet", ok_str(""));
     let backend = GitBackend::with_runner(Arc::new(mock));
     // Should succeed without invoking commit.
-    backend.merge("feature", true, false, Some("my msg")).unwrap();
+    backend.merge("feature", "main", true, false, Some("my msg")).unwrap();
 }
 
 #[test]
