@@ -9,13 +9,24 @@ use std::ffi::OsStr;
 
 use clap_complete::engine::CompletionCandidate;
 
+/// Build a `Repo` anchored at the live process cwd for completion queries.
+///
+/// Completers run at tab time via CompleteEnv — *before* `Cli::run`, so they
+/// never see the backend the user might force with `--vcs`. We construct a
+/// git-backed `Repo` at the process cwd, matching the historical behaviour
+/// (the thread-local facade's lazy default was always `GitBackend::new()`).
+fn completion_repo() -> crate::vcs::Repo {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    crate::vcs::Repo::discover(cwd, Box::new(crate::vcs::git::GitBackend::new()))
+}
+
 /// Complete worktree branch names (for cd/rm/mv)
 pub fn complete_worktrees(current: &OsStr) -> Vec<CompletionCandidate> {
     let Some(prefix) = current.to_str() else {
         return vec![];
     };
 
-    let Ok(worktrees) = crate::vcs::list_worktrees() else {
+    let Ok(worktrees) = completion_repo().list_worktrees() else {
         return vec![];
     };
 
@@ -35,7 +46,7 @@ pub fn complete_branches(current: &OsStr) -> Vec<CompletionCandidate> {
         return vec![];
     };
 
-    let Ok(branches) = crate::vcs::local_branches() else {
+    let Ok(branches) = completion_repo().local_branches() else {
         return vec![];
     };
 

@@ -61,20 +61,6 @@ impl GitBackend {
         Self { runner, cwd: None }
     }
 
-    /// Construct pinned to an explicit working directory. Unused in Stage 1
-    /// (kept for the follow-up stage that stops relying on the process cwd)
-    /// but exposed now so call sites can migrate without touching this file.
-    #[allow(dead_code)]
-    pub fn at(cwd: PathBuf) -> Self {
-        Self { runner: Arc::new(DefaultRunner), cwd: Some(cwd) }
-    }
-
-    /// As [`with_runner`](Self::with_runner) but pinned to an explicit cwd.
-    #[allow(dead_code)]
-    pub fn with_runner_at(runner: Arc<dyn Runner>, cwd: PathBuf) -> Self {
-        Self { runner, cwd: Some(cwd) }
-    }
-
     /// Resolve the working directory for a git invocation. `Some` returns the
     /// pinned path; `None` falls back to the live process cwd, exactly as the
     /// helpers used to do via `std::env::current_dir()`.

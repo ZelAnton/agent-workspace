@@ -2,17 +2,13 @@
 // vcs/repo - explicit Repo context
 // ===========================================================================
 //
-// `Repo` is the explicit-cwd successor to the thread-local facade. It pins a
-// `VcsBackend` to a specific directory (no reliance on the process cwd) and
-// exposes thin wrappers over the backend methods the migrated, non-steering
-// commands need.
+// `Repo` is the explicit-cwd successor to the (now-removed) thread-local
+// facade. It pins a `VcsBackend` to a specific directory (no reliance on the
+// process cwd) and exposes thin wrappers over the backend methods commands
+// need. It is the ONLY way the CLI reaches a backend.
 //
-// The thread-local facade (`vcs::repo_root()` etc.) still exists for the
-// cwd-STEERING commands (merge/rm/clean/move/snap) that call
-// `std::env::set_current_dir`; those are out of scope for this migration.
-// Wrappers here are added lazily — only the methods used by the migrated
-// commands are covered today; the rest can be added as more commands move
-// off the facade.
+// Wrappers here mirror the `VcsBackend` trait; new trait methods get a
+// matching wrapper added when a command needs them.
 
 use std::path::{Path, PathBuf};
 
@@ -67,6 +63,9 @@ impl Repo {
     }
     pub fn current_commit(&self) -> Result<String> {
         self.backend.current_commit()
+    }
+    pub fn detect_trunk(&self) -> Result<String> {
+        self.backend.detect_trunk()
     }
 
     // ----- Branches -------------------------------------------------------

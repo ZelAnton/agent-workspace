@@ -125,7 +125,7 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>, format: Out
     }
 
     // Determine trunk branch
-    let trunk = config.resolve_trunk();
+    let trunk = config.resolve_trunk(repo);
 
     // Default base branch: --base flag > current branch > trunk. This is the
     // creation start point for a NEW branch and the recorded merge/sync

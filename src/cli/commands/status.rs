@@ -23,7 +23,7 @@ pub fn run(config: &Config, format: OutputFormat, repo: &vcs::Repo) -> Result<()
         )));
     }
 
-    let trunk = config.resolve_trunk();
+    let trunk = config.resolve_trunk(repo);
 
     let meta_path = meta::meta_path_with_fallback(&wt_dir, &current);
     let loaded = WorktreeMeta::load(&meta_path).ok();

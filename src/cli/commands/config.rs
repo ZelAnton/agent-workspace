@@ -30,7 +30,6 @@ use clap::{Args, Subcommand};
 use toml_edit::{value, DocumentMut};
 
 use crate::cli::{Error, Result};
-use crate::vcs;
 
 /// Allow-listed dotted keys. Anything not in this list is rejected
 /// with a hint so the user doesn't accidentally write
@@ -94,11 +93,11 @@ enum ConfigCommand {
     List,
 }
 
-pub fn run(args: ConfigArgs) -> Result<()> {
+pub fn run(args: ConfigArgs, repo: &crate::vcs::Repo) -> Result<()> {
     // Anchor everything in the current repo's root, even if invoked
     // from a worktree or deeper subdirectory. Same lookup the rest
     // of the CLI uses.
-    let repo_root = vcs::repo_root().map_err(|e| Error::Other(e.to_string()))?;
+    let repo_root = repo.repo_root().map_err(|e| Error::Other(e.to_string()))?;
     // Prefer `.workspace.toml`; edit the legacy `.agent-workspace.toml` in
     // place when only it exists (no surprise second file). New repos get
     // `.workspace.toml`.

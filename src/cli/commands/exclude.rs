@@ -32,7 +32,6 @@ use clap::Args;
 use toml_edit::{value, Array, DocumentMut, Item};
 
 use crate::cli::{Error, Result};
-use crate::vcs;
 
 #[derive(Args)]
 pub struct ExcludeArgs {
@@ -57,8 +56,8 @@ pub struct ExcludeArgs {
     clear: bool,
 }
 
-pub fn run(args: ExcludeArgs) -> Result<()> {
-    let repo_root = vcs::repo_root().map_err(|e| Error::Other(e.to_string()))?;
+pub fn run(args: ExcludeArgs, repo: &crate::vcs::Repo) -> Result<()> {
+    let repo_root = repo.repo_root().map_err(|e| Error::Other(e.to_string()))?;
     // Prefer `.workspace.toml`; edit a legacy `.agent-workspace.toml` in
     // place when only it exists. New repos get `.workspace.toml`.
     let config_path = crate::config::project_config_path_with_fallback(&repo_root);

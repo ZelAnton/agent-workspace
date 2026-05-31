@@ -90,7 +90,7 @@ pub fn gather_context(config: &Config, repo: &vcs::Repo) -> Result<SnapContext> 
                  Resolve manually with: ws merge --into <branch>"
             )));
         }
-        None => config.resolve_trunk(),
+        None => config.resolve_trunk(repo),
     };
 
     let has_uncommitted = repo.has_uncommitted_changes().unwrap_or(false);

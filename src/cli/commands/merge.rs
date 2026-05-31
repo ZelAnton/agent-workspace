@@ -116,7 +116,7 @@ fn run_merge(
         &current,
         args.into.as_deref(),
         |b| repo.branch_exists(b).unwrap_or(false),
-        &config.resolve_trunk(),
+        &config.resolve_trunk(repo),
     );
 
     if current == target {

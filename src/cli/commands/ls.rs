@@ -41,7 +41,7 @@ pub fn run(args: LsArgs, config: &Config, format: OutputFormat, repo: &vcs::Repo
         return emit_no_worktrees(format);
     }
 
-    let trunk = config.resolve_trunk();
+    let trunk = config.resolve_trunk(repo);
     // Fetch all local branches once instead of N subprocess calls.
     let known_branches: HashSet<String> = repo.local_branches()
         .unwrap_or_default()

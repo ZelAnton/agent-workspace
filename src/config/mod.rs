@@ -552,10 +552,10 @@ impl Config {
     }
 
     /// 解析 trunk 分支：配置 > 自动检测 > 默认 "main"
-    pub fn resolve_trunk(&self) -> String {
+    pub fn resolve_trunk(&self, repo: &crate::vcs::Repo) -> String {
         self.trunk
             .clone()
-            .unwrap_or_else(|| crate::vcs::detect_trunk().unwrap_or_else(|_| "main".into()))
+            .unwrap_or_else(|| repo.detect_trunk().unwrap_or_else(|_| "main".into()))
     }
 
     pub fn base_dir() -> Result<PathBuf> {
@@ -585,9 +585,9 @@ impl Config {
     /// legacy `.agent-workspace.toml` fallback) and the optional worktree-level
     /// overlay (current worktree root, `.workspace.toml` only).
     ///
-    /// **Why resolve roots here instead of `crate::vcs::repo_root()`?** This
-    /// runs BEFORE `Cli::run` calls `set_backend(...)`, so no backend is
-    /// installed yet. In a pure-jj repo (no `.git`), GitBackend's
+    /// **Why resolve roots here instead of `Repo::repo_root()`?** This runs
+    /// BEFORE `Cli::run` builds the `Repo`, so no backend is available yet.
+    /// In a pure-jj repo (no `.git`), GitBackend's
     /// `git rev-parse --git-common-dir` would fail → `Error::NotInRepo` →
     /// project config silently lost. We resolve roots with raw `vcs_runner`
     /// calls instead — see [`resolve_main_repo_root`] /

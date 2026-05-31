@@ -12,12 +12,12 @@
 //
 // **How callers use this module**:
 // Don't import `Backend`/`VcsBackend` directly unless you're constructing
-// or replacing the active backend. The intended surface is the free
-// functions at the bottom of this file — `vcs::repo_root()`,
-// `vcs::create_worktree(...)`, etc. — which forward to the active backend
-// via a thread-local. That keeps call sites in `src/cli/commands/` from
-// caring which backend is in use, and matches the pre-refactor `git::*`
-// shape so the migration is a pure rename.
+// a backend (e.g. in tests). The intended surface is the [`Repo`] context
+// (`src/vcs/repo.rs`): `Cli::run` resolves a backend once via
+// [`resolve_backend`], wraps it in a `Repo` pinned to the process cwd, and
+// passes `&Repo` into every command. That keeps call sites in
+// `src/cli/commands/` from caring which backend is in use, with no reliance
+// on the process cwd or any thread-local state.
 
 pub mod backend;
 pub mod common;
@@ -26,8 +26,7 @@ pub mod git;
 pub mod jj;
 pub mod repo;
 
-use std::cell::RefCell;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub use backend::VcsBackend;
 pub use repo::Repo;
@@ -128,148 +127,6 @@ pub fn resolve_backend(
         Backend::Git => Box::new(git::GitBackend::new()),
         Backend::Jj => Box::new(jj::JjBackend::new()),
     }
-}
-
-thread_local! {
-    static BACKEND: RefCell<Option<Box<dyn VcsBackend>>> = const { RefCell::new(None) };
-}
-
-/// Install a backend for this thread. Production code calls this once
-/// from `Cli::run` after argument parsing + `resolve_backend(...)`; tests
-/// call it inside their cwd helper. Replaces any previously installed
-/// backend on this thread.
-pub fn set_backend(b: Box<dyn VcsBackend>) {
-    BACKEND.with(|c| {
-        *c.borrow_mut() = Some(b);
-    });
-}
-
-/// Short identifier of the active backend — `"git"` or `"jj"`.
-///
-/// Intended for **UI-only branching** of help text and hint messages
-/// (e.g. `ws status` prints a jj-specific "conflicts in commits" line
-/// instead of git's "merge in progress"). Don't use this for behavioural
-/// switches in command logic — the trait abstraction is the right place
-/// for those. The free function is a deliberate, narrow leak of the
-/// backend tag for human-readable output.
-pub fn backend_name() -> &'static str {
-    with_backend(|b| b.name())
-}
-
-/// Run a closure against the active backend.
-///
-/// **Lazy default**: if no backend has been installed on this thread,
-/// constructs a `GitBackend::new()` on demand. That keeps simple test
-/// setups (and any early-init code path that runs before `Cli::run`)
-/// working without an explicit `set_backend` call. Production code paths
-/// reach this *after* `Cli::run` has set the backend explicitly, so the
-/// lazy default never fires for real users.
-pub(crate) fn with_backend<R>(f: impl FnOnce(&dyn VcsBackend) -> R) -> R {
-    BACKEND.with(|c| {
-        let mut borrow = c.borrow_mut();
-        if borrow.is_none() {
-            *borrow = Some(Box::new(git::GitBackend::new()));
-        }
-        // Safe: we just guaranteed Some above.
-        f(borrow.as_deref().expect("backend must be set"))
-    })
-}
-
-// ---------------------------------------------------------------------------
-// Free-function facade — one wrapper per `VcsBackend` method.
-//
-// The wrappers exist so call sites read like the pre-refactor code
-// (`vcs::repo_root()`, `vcs::create_worktree(...)`) and don't have to
-// fish out the backend explicitly. The list mirrors the trait exactly —
-// every new trait method needs a matching wrapper added here.
-// ---------------------------------------------------------------------------
-
-// ----- Identity -----------------------------------------------------------
-pub fn repo_root() -> Result<PathBuf> { with_backend(|b| b.repo_root()) }
-pub fn repo_name() -> Result<String> { with_backend(|b| b.repo_name()) }
-pub fn workspace_id() -> Result<String> { with_backend(|b| b.workspace_id()) }
-pub fn current_branch() -> Result<String> { with_backend(|b| b.current_branch()) }
-pub fn current_commit() -> Result<String> { with_backend(|b| b.current_commit()) }
-pub fn detect_trunk() -> Result<String> { with_backend(|b| b.detect_trunk()) }
-
-// ----- Branches -----------------------------------------------------------
-pub fn local_branches() -> Result<Vec<String>> { with_backend(|b| b.local_branches()) }
-pub fn branch_exists(name: &str) -> Result<bool> { with_backend(|b| b.branch_exists(name)) }
-pub fn remote_branch_exists(name: &str) -> Result<bool> {
-    with_backend(|b| b.remote_branch_exists(name))
-}
-pub fn is_merged(branch: &str, target: &str) -> Result<bool> {
-    with_backend(|b| b.is_merged(branch, target))
-}
-pub fn has_diff_from(branch: &str, target: &str) -> Result<bool> {
-    with_backend(|b| b.has_diff_from(branch, target))
-}
-pub fn delete_branch(name: &str, force: bool) -> Result<()> {
-    with_backend(|b| b.delete_branch(name, force))
-}
-pub fn rename_branch(old: &str, new: &str) -> Result<()> {
-    with_backend(|b| b.rename_branch(old, new))
-}
-pub fn log_oneline(from: &str, to: &str) -> Result<String> {
-    with_backend(|b| b.log_oneline(from, to))
-}
-pub fn commit_count(from: &str, to: &str) -> Result<usize> {
-    with_backend(|b| b.commit_count(from, to))
-}
-pub fn diff_shortstat(from: &str, to: &str) -> Result<DiffStat> {
-    with_backend(|b| b.diff_shortstat(from, to))
-}
-pub fn diff_shortstat_in(path: &Path) -> Result<DiffStat> {
-    with_backend(|b| b.diff_shortstat_in(path))
-}
-
-// ----- Working-copy state -------------------------------------------------
-pub fn has_uncommitted_changes() -> Result<bool> { with_backend(|b| b.has_uncommitted_changes()) }
-pub fn uncommitted_count_in(path: &Path) -> Result<usize> {
-    with_backend(|b| b.uncommitted_count_in(path))
-}
-pub fn has_changes_from_trunk(trunk: &str) -> Result<bool> {
-    with_backend(|b| b.has_changes_from_trunk(trunk))
-}
-pub fn is_rebase_in_progress() -> bool { with_backend(|b| b.is_rebase_in_progress()) }
-pub fn is_merge_in_progress() -> bool { with_backend(|b| b.is_merge_in_progress()) }
-
-// ----- Mutations ----------------------------------------------------------
-pub fn merge(
-    branch: &str,
-    dest_bookmark: &str,
-    squash: bool,
-    no_ff: bool,
-    message: Option<&str>,
-) -> Result<()> {
-    with_backend(|b| b.merge(branch, dest_bookmark, squash, no_ff, message))
-}
-pub fn dry_run_merge(branch: &str, squash: bool) -> Result<bool> {
-    with_backend(|b| b.dry_run_merge(branch, squash))
-}
-pub fn rebase(onto: &str) -> Result<()> { with_backend(|b| b.rebase(onto)) }
-pub fn checkout(branch: &str) -> Result<()> { with_backend(|b| b.checkout(branch)) }
-pub fn commit(message: &str) -> Result<()> { with_backend(|b| b.commit(message)) }
-pub fn fetch() -> Result<()> { with_backend(|b| b.fetch()) }
-pub fn rebase_abort() -> Result<()> { with_backend(|b| b.rebase_abort()) }
-pub fn rebase_continue() -> Result<()> { with_backend(|b| b.rebase_continue()) }
-pub fn merge_abort() -> Result<()> { with_backend(|b| b.merge_abort()) }
-pub fn merge_continue() -> Result<()> { with_backend(|b| b.merge_continue()) }
-pub fn reset_merge() -> Result<()> { with_backend(|b| b.reset_merge()) }
-
-// ----- Worktrees ----------------------------------------------------------
-pub fn list_worktrees() -> Result<Vec<WorktreeInfo>> { with_backend(|b| b.list_worktrees()) }
-pub fn create_worktree(path: &Path, branch: &str, base: &str) -> Result<CreateOutcome> {
-    with_backend(|b| b.create_worktree(path, branch, base))
-}
-pub fn create_worktree_from_remote(path: &Path, branch: &str) -> Result<CreateOutcome> {
-    with_backend(|b| b.create_worktree_from_remote(path, branch))
-}
-pub fn remove_worktree(path: &Path, force: bool) -> Result<()> {
-    with_backend(|b| b.remove_worktree(path, force))
-}
-pub fn move_worktree(old: &Path, new: &Path) -> Result<()> {
-    with_backend(|b| b.move_worktree(old, new))
 }
 
 /// Step the ws PROCESS out of `doomed` (into `escape_to`) before deleting or

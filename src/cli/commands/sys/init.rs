@@ -8,7 +8,6 @@ use clap_complete::engine::ArgValueCompleter;
 use crate::cli::{Error, Result};
 use crate::complete;
 use crate::config::{MergeStrategy, ProjectConfig, SyncStrategy};
-use crate::vcs;
 
 #[derive(Args)]
 pub struct InitArgs {
@@ -29,7 +28,7 @@ pub struct InitArgs {
     copy_files: Vec<String>,
 }
 
-pub fn run(args: InitArgs) -> Result<()> {
+pub fn run(args: InitArgs, repo: &crate::vcs::Repo) -> Result<()> {
     // Anchor the config at the MAIN repo root — never the process cwd. Run from
     // a subdirectory, a cwd-relative write would land the file where
     // `Config::load` (which resolves the repo root independently) never reads
@@ -37,7 +36,7 @@ pub fn run(args: InitArgs) -> Result<()> {
     // `.agent-workspace.toml` (this repo ships one), distinct from the local,
     // git-excluded `.workspace.toml` that `ws config`/`ws exclude` manage — so
     // it is NOT auto-excluded here.
-    let repo_root = vcs::repo_root().map_err(|e| Error::Other(e.to_string()))?;
+    let repo_root = repo.repo_root().map_err(|e| Error::Other(e.to_string()))?;
     let config_path = repo_root.join(crate::config::LEGACY_PROJECT_CONFIG_FILENAME);
 
     if config_path.exists() {
@@ -47,7 +46,7 @@ pub fn run(args: InitArgs) -> Result<()> {
     // Detect trunk if not specified
     let trunk = args
         .trunk
-        .or_else(|| vcs::detect_trunk().ok())
+        .or_else(|| repo.detect_trunk().ok())
         .unwrap_or_else(|| "main".into());
 
     let mut config = ProjectConfig::default();

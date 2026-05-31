@@ -170,22 +170,11 @@ impl Cli {
         let path_file = self.path_file.as_deref();
         let format = self.format;
 
-        // Install the VCS backend once, before any command dispatches.
-        // Precedence: CLI flag > project config > global config > detect.
-        // Subsequent calls to `crate::vcs::*` resolve through the thread-local.
-        //
-        // The thread-local facade still backs the cwd-STEERING commands
-        // (merge/rm/clean/move/snap) that haven't migrated to `Repo` yet.
-        // The migrated, non-steering commands instead receive an explicit
-        // `Repo` anchored at the process cwd — behaviour-identical because
-        // those commands never `set_current_dir`. We resolve a backend for
-        // each (the resolve is cheap).
-        crate::vcs::set_backend(crate::vcs::resolve_backend(
-            self.vcs,
-            config.vcs,
-            config.vcs_global,
-        ));
-
+        // Resolve the VCS backend once, before any command dispatches, and
+        // anchor it in a `Repo` at the process cwd. Precedence: CLI flag >
+        // project config > global config > detect. Every command reaches the
+        // backend through this explicit `Repo` handle — there is no longer a
+        // thread-local facade.
         let cwd = std::env::current_dir()
             .map_err(|e| Error::Other(format!("cannot read current directory: {e}")))?;
         let backend = crate::vcs::resolve_backend(self.vcs, config.vcs, config.vcs_global);
@@ -202,13 +191,13 @@ impl Cli {
             Command::Merge(args) => commands::merge::run(args, &config, path_file, format, &repo),
             Command::Status => commands::status::run(&config, format, &repo),
             Command::RepoInfo(args) => commands::repo_info::run(args, &config, format, &repo),
-            Command::Config(args) => commands::config::run(args),
-            Command::Exclude(args) => commands::exclude::run(args),
+            Command::Config(args) => commands::config::run(args, &repo),
+            Command::Exclude(args) => commands::exclude::run(args, &repo),
             Command::Sync(args) => commands::sync::run(args, &config, &repo),
             Command::Mv(args) => commands::r#move::run(args, &config, path_file, &repo),
             Command::Setup(args) => commands::sys::setup::run(args),
             Command::Uninstall(args) => commands::sys::uninstall::run(args),
-            Command::Init(args) => commands::sys::init::run(args),
+            Command::Init(args) => commands::sys::init::run(args, &repo),
             Command::Update => commands::sys::update::run(),
             Command::SnapContinue => commands::snap::resume::run(&config, path_file, &repo),
         }

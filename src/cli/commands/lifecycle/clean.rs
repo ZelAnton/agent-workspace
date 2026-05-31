@@ -33,7 +33,7 @@ pub fn run(args: CleanArgs, config: &Config, path_file: Option<&Path>, repo: &vc
     // Re-anchor at the main repo for branch deletion — no process chdir.
     let main = repo.at(&main_path);
 
-    let trunk = config.resolve_trunk();
+    let trunk = config.resolve_trunk(repo);
     let known_branches: HashSet<String> = repo
         .local_branches()
         .unwrap_or_default()

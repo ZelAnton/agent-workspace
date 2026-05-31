@@ -54,19 +54,6 @@ impl JjBackend {
         Self { runner, cwd: None }
     }
 
-    /// Construct pinned to an explicit working directory. Unused in Stage 1
-    /// but exposed for the follow-up stage; mirrors `GitBackend::at`.
-    #[allow(dead_code)]
-    pub fn at(cwd: PathBuf) -> Self {
-        Self { runner: Arc::new(DefaultRunner), cwd: Some(cwd) }
-    }
-
-    /// As [`with_runner`](Self::with_runner) but pinned to an explicit cwd.
-    #[allow(dead_code)]
-    pub fn with_runner_at(runner: Arc<dyn Runner>, cwd: PathBuf) -> Self {
-        Self { runner, cwd: Some(cwd) }
-    }
-
     /// Resolve the working directory for a jj invocation. `Some` returns the
     /// pinned path; `None` falls back to the live process cwd, exactly as the
     /// helpers used to do via `std::env::current_dir()`.

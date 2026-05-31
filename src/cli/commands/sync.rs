@@ -116,7 +116,7 @@ pub fn run(args: SyncArgs, config: &Config, repo: &vcs::Repo) -> Result<()> {
             &current,
             args.from.as_deref(),
             |b| repo.branch_exists(b).unwrap_or(false),
-            &config.resolve_trunk(),
+            &config.resolve_trunk(repo),
         )
     };
 
