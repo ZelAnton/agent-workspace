@@ -2,12 +2,16 @@
 // ws status - Show current worktree information
 // ===========================================================================
 
+use chrono::{DateTime, Utc};
+use serde::Serialize;
+
+use crate::cli::output::{self, OutputFormat, Render};
 use crate::cli::{Error, Result};
 use crate::config::Config;
-use crate::vcs;
 use crate::meta::{self, WorktreeMeta};
+use crate::vcs;
 
-pub fn run(config: &Config) -> Result<()> {
+pub fn run(config: &Config, format: OutputFormat) -> Result<()> {
     let current = vcs::current_branch()?;
     let workspace_id = vcs::workspace_id()?;
     let wt_dir = config.project_dir_for(&workspace_id);
@@ -24,10 +28,10 @@ pub fn run(config: &Config) -> Result<()> {
     let meta_path = meta::meta_path_with_fallback(&wt_dir, &current);
     let loaded = WorktreeMeta::load(&meta_path).ok();
 
-    let base_branch = loaded.as_ref().map(|m| m.base_branch.as_str());
+    let base_branch = loaded.as_ref().map(|m| m.base_branch.clone());
     let effective_target = meta::resolve_target_branch(
         None,
-        base_branch,
+        base_branch.as_deref(),
         |b| vcs::branch_exists(b).unwrap_or(false),
         &trunk,
     );
@@ -44,66 +48,148 @@ pub fn run(config: &Config) -> Result<()> {
         deletions: 0,
     });
 
-    println!("Branch:       {current}");
+    let view = StatusView {
+        branch: current,
+        base_branch,
+        trunk,
+        merge_target: effective_target,
+        created_at: loaded.as_ref().map(|m| m.created_at),
+        commits,
+        uncommitted,
+        insertions: diff.insertions + unstaged.insertions,
+        deletions: diff.deletions + unstaged.deletions,
+        path: wt_path.display().to_string(),
+        in_progress: detect_in_progress_state(),
+    };
 
-    if let Some(bb) = base_branch {
-        println!("Base branch:  {bb}");
-    }
-
-    println!("Trunk:        {trunk}");
-    println!("Merge target: {effective_target}");
-
-    if let Some(ref m) = loaded {
-        println!(
-            "Created:      {}",
-            m.created_at.format("%Y-%m-%d %H:%M:%S UTC")
-        );
-    }
-
-    println!("Commits:      {commits}");
-    println!("Uncommitted:  {uncommitted}");
-
-    let total_ins = diff.insertions + unstaged.insertions;
-    let total_del = diff.deletions + unstaged.deletions;
-    if total_ins > 0 || total_del > 0 {
-        println!("Diff:         +{total_ins} -{total_del}");
-    } else {
-        println!("Diff:         -");
-    }
-
-    println!("Path:         {}", wt_path.display());
-
-    // Show in-progress sync state (git-native only, no WT_MERGE_BRANCH)
-    print_in_progress_state();
-
+    output::emit(&view, format);
     Ok(())
 }
 
-/// Detect and display sync in-progress state.
-///
-/// jj has no "in progress" transient state — conflicts are recorded into
-/// commits. When the active backend is jj and `is_merge_in_progress` is
-/// true, that means `jj st` shows unresolved conflicts in the working
-/// copy commit. The guidance is different: edit the files; jj snapshots
-/// the resolution automatically. No `--continue`/`--abort` apply.
-fn print_in_progress_state() {
+/// Machine-facing `ws status` payload. `in_progress` exposes the sync state
+/// machine-readably (agents no longer scrape "REBASE IN PROGRESS").
+#[derive(Serialize)]
+struct StatusView {
+    branch: String,
+    base_branch: Option<String>,
+    trunk: String,
+    merge_target: String,
+    created_at: Option<DateTime<Utc>>,
+    commits: usize,
+    uncommitted: usize,
+    insertions: usize,
+    deletions: usize,
+    path: String,
+    in_progress: Option<InProgressState>,
+}
+
+/// In-progress `ws sync` state. jj has no transient in-progress state —
+/// conflicts are recorded into the working-copy commit — hence the distinct
+/// `jj_conflicts` variant with different recovery guidance.
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum InProgressState {
+    RebaseSync,
+    MergeSync,
+    JjConflicts,
+}
+
+/// Detect the in-progress sync state (git-native; jj records conflicts in `@`).
+fn detect_in_progress_state() -> Option<InProgressState> {
     if vcs::is_rebase_in_progress() {
         // Only reachable on git — jj always returns false here.
-        println!();
-        println!("State:        REBASE IN PROGRESS (sync)");
-        println!("  Resolve conflicts, then: ws sync --continue");
-        println!("  Or abort: ws sync --abort");
+        Some(InProgressState::RebaseSync)
     } else if vcs::is_merge_in_progress() {
-        println!();
         if vcs::backend_name() == "jj" {
-            println!("State:        CONFLICTS IN COMMIT");
-            println!("  jj records conflicts in `@`. Resolve the markers in your files;");
-            println!("  jj snapshots the resolution into `@` on the next command.");
-            println!("  (No `ws sync --continue/--abort` — those are git-only.)");
+            Some(InProgressState::JjConflicts)
         } else {
-            println!("State:        MERGE IN PROGRESS (sync)");
-            println!("  Resolve conflicts, then: ws sync --continue");
-            println!("  Or abort: ws sync --abort");
+            Some(InProgressState::MergeSync)
         }
+    } else {
+        None
+    }
+}
+
+impl Render for StatusView {
+    fn render_human(&self) {
+        println!("Branch:       {}", self.branch);
+        if let Some(bb) = &self.base_branch {
+            println!("Base branch:  {bb}");
+        }
+        println!("Trunk:        {}", self.trunk);
+        println!("Merge target: {}", self.merge_target);
+        if let Some(created) = self.created_at {
+            println!("Created:      {}", created.format("%Y-%m-%d %H:%M:%S UTC"));
+        }
+        println!("Commits:      {}", self.commits);
+        println!("Uncommitted:  {}", self.uncommitted);
+        if self.insertions > 0 || self.deletions > 0 {
+            println!("Diff:         +{} -{}", self.insertions, self.deletions);
+        } else {
+            println!("Diff:         -");
+        }
+        println!("Path:         {}", self.path);
+
+        match self.in_progress {
+            Some(InProgressState::RebaseSync) => {
+                println!();
+                println!("State:        REBASE IN PROGRESS (sync)");
+                println!("  Resolve conflicts, then: ws sync --continue");
+                println!("  Or abort: ws sync --abort");
+            }
+            Some(InProgressState::MergeSync) => {
+                println!();
+                println!("State:        MERGE IN PROGRESS (sync)");
+                println!("  Resolve conflicts, then: ws sync --continue");
+                println!("  Or abort: ws sync --abort");
+            }
+            Some(InProgressState::JjConflicts) => {
+                println!();
+                println!("State:        CONFLICTS IN COMMIT");
+                println!("  jj records conflicts in `@`. Resolve the markers in your files;");
+                println!("  jj snapshots the resolution into `@` on the next command.");
+                println!("  (No `ws sync --continue/--abort` — those are git-only.)");
+            }
+            None => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn in_progress_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_value(InProgressState::JjConflicts).unwrap(),
+            serde_json::json!("jj_conflicts")
+        );
+        assert_eq!(
+            serde_json::to_value(InProgressState::RebaseSync).unwrap(),
+            serde_json::json!("rebase_sync")
+        );
+    }
+
+    #[test]
+    fn status_view_json_shape() {
+        let view = StatusView {
+            branch: "b".into(),
+            base_branch: None,
+            trunk: "main".into(),
+            merge_target: "main".into(),
+            created_at: None,
+            commits: 1,
+            uncommitted: 0,
+            insertions: 0,
+            deletions: 0,
+            path: "/x".into(),
+            in_progress: None,
+        };
+        let v = serde_json::to_value(&view).unwrap();
+        assert_eq!(v["branch"], "b");
+        assert_eq!(v["merge_target"], "main");
+        assert!(v["in_progress"].is_null());
+        assert!(v["base_branch"].is_null());
     }
 }

@@ -3,12 +3,14 @@
 // ===========================================================================
 
 mod commands;
+pub mod output;
 
 use std::path::Path;
 
 use clap::{CommandFactory, Parser, Subcommand};
 
 use crate::config::Config;
+pub use output::OutputFormat;
 
 /// Write path to file for shell integration
 pub fn write_path_file(path_file: Option<&Path>, path: &Path) -> Result<()> {
@@ -66,6 +68,12 @@ pub struct Cli {
     /// debugging.
     #[arg(long, global = true, hide_short_help = true, value_enum, default_value = "auto")]
     vcs: crate::vcs::VcsChoice,
+
+    /// Output format. `human` (default) is the aligned/labelled text; `json`
+    /// emits a single machine-readable object on stdout (progress/notices stay
+    /// on stderr). Honored by `ls`, `status`, `repo-info`, `new`, and `merge`.
+    #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Human)]
+    format: OutputFormat,
 }
 
 #[derive(Subcommand)]
@@ -151,9 +159,16 @@ impl Cli {
         !matches!(self.command, Command::Update | Command::Setup(_))
     }
 
+    /// The selected output format. `main` reads this before `run` (which
+    /// consumes `self`) so the top-level error path can render JSON errors.
+    pub fn format(&self) -> OutputFormat {
+        self.format
+    }
+
     pub fn run(self) -> Result<()> {
         let config = Config::load()?;
         let path_file = self.path_file.as_deref();
+        let format = self.format;
 
         // Install the VCS backend once, before any command dispatches.
         // Precedence: CLI flag > project config > global config > detect.
@@ -165,14 +180,14 @@ impl Cli {
         ));
 
         match self.command {
-            Command::New(args) => commands::lifecycle::new::run(args, &config, path_file),
-            Command::Ls(args) => commands::ls::run(args, &config),
+            Command::New(args) => commands::lifecycle::new::run(args, &config, path_file, format),
+            Command::Ls(args) => commands::ls::run(args, &config, format),
             Command::Cd(args) => commands::nav::cd::run(args, &config, path_file),
             Command::Rm(args) => commands::lifecycle::rm::run(args, &config, path_file),
             Command::Clean(args) => commands::lifecycle::clean::run(args, &config, path_file),
-            Command::Merge(args) => commands::merge::run(args, &config, path_file),
-            Command::Status => commands::status::run(&config),
-            Command::RepoInfo(args) => commands::repo_info::run(args, &config),
+            Command::Merge(args) => commands::merge::run(args, &config, path_file, format),
+            Command::Status => commands::status::run(&config, format),
+            Command::RepoInfo(args) => commands::repo_info::run(args, &config, format),
             Command::Config(args) => commands::config::run(args),
             Command::Exclude(args) => commands::exclude::run(args),
             Command::Sync(args) => commands::sync::run(args, &config),

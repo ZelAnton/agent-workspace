@@ -6,13 +6,25 @@ use std::path::Path;
 
 use clap::Args;
 use clap_complete::engine::ArgValueCompleter;
+use serde::Serialize;
 
+use crate::cli::output::{self, OutputFormat};
 use crate::cli::{write_path_file, Error, Result};
 use crate::complete;
 use crate::config::{Config, MergeStrategy};
 use crate::vcs;
 use crate::meta;
 use crate::process;
+
+/// Machine-facing `ws merge` result (json mode).
+#[derive(Serialize)]
+struct MergeResult {
+    merged: bool,
+    branch: String,
+    target: String,
+    commits: usize,
+    deleted: bool,
+}
 
 #[derive(Args)]
 pub struct MergeArgs {
@@ -33,9 +45,9 @@ pub struct MergeArgs {
     skip_hooks: bool,
 }
 
-pub fn run(args: MergeArgs, config: &Config, path_file: Option<&Path>) -> Result<()> {
+pub fn run(args: MergeArgs, config: &Config, path_file: Option<&Path>, format: OutputFormat) -> Result<()> {
     let main_repo = vcs::repo_root()?;
-    run_merge(args, config, path_file, &main_repo)
+    run_merge(args, config, path_file, &main_repo, format)
 }
 
 fn run_merge(
@@ -43,6 +55,7 @@ fn run_merge(
     config: &Config,
     path_file: Option<&Path>,
     main_repo: &Path,
+    format: OutputFormat,
 ) -> Result<()> {
     let current = vcs::current_branch()?;
     let workspace_id = vcs::workspace_id()?;
@@ -174,6 +187,16 @@ fn run_merge(
             if let Some(orig) = &original_main_branch {
                 let _ = vcs::checkout(orig);
             }
+            output::emit_json(
+                &MergeResult {
+                    merged: false,
+                    branch: current.clone(),
+                    target: target.clone(),
+                    commits: commit_count,
+                    deleted: false,
+                },
+                format,
+            );
             return Ok(());
         }
         Err(e) => {
@@ -203,6 +226,17 @@ fn run_merge(
     }
 
     eprintln!("Merge complete: {current} into {target}.");
+
+    output::emit_json(
+        &MergeResult {
+            merged: true,
+            branch: current.clone(),
+            target: target.clone(),
+            commits: commit_count,
+            deleted: args.delete,
+        },
+        format,
+    );
 
     Ok(())
 }

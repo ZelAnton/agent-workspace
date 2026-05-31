@@ -1,4 +1,4 @@
-use agent_workspace::cli::Cli;
+use agent_workspace::cli::{Cli, OutputFormat};
 use agent_workspace::config::Config;
 use agent_workspace::update;
 use clap::Parser;
@@ -19,6 +19,9 @@ fn main() {
     clap_complete::env::CompleteEnv::with_factory(agent_workspace::cli::build_command).complete();
 
     let cli = Cli::parse();
+    // Captured before `run` consumes `cli` so the error path can render
+    // machine-readable errors in json mode.
+    let format = cli.format();
 
     // Check for updates (once per day), runs in a background thread. Skipped for
     // the update-flow commands (`update`/`setup`) where the passive notice would
@@ -49,7 +52,9 @@ fn main() {
     // finished (or finishes within a short window). We do NOT block on the
     // thread: if it's still talking to the network, we drop the receiver and
     // exit — the detached thread is reaped on process exit.
-    if let Some(rx) = update_rx
+    // Suppress the passive nag in json mode to keep an agent's stderr clean.
+    if !format.is_json()
+        && let Some(rx) = update_rx
         && let Ok(Some(latest)) = rx.recv_timeout(UPDATE_NOTICE_WAIT)
     {
         eprintln!(
@@ -59,8 +64,28 @@ fn main() {
     }
 
     if let Err(e) = result {
-        print_error_chain(&e);
+        match format {
+            OutputFormat::Json => print_error_json(&e),
+            OutputFormat::Human => print_error_chain(&e),
+        }
         std::process::exit(1);
+    }
+}
+
+/// Render an error as a single JSON object on **stderr** (stdout stays clean so
+/// a `--format json` pipeline isn't corrupted by a half-result). The `causes`
+/// array mirrors the human cause-chain.
+fn print_error_json(err: &dyn std::error::Error) {
+    let mut causes = Vec::new();
+    let mut source = err.source();
+    while let Some(e) = source {
+        causes.push(e.to_string());
+        source = e.source();
+    }
+    let obj = serde_json::json!({ "error": err.to_string(), "causes": causes });
+    match serde_json::to_string_pretty(&obj) {
+        Ok(s) => eprintln!("{s}"),
+        Err(_) => eprintln!("{{\"error\":{:?}}}", err.to_string()),
     }
 }
 

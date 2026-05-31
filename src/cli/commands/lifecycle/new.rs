@@ -7,7 +7,9 @@ use std::path::Path;
 
 use clap::Args;
 use clap_complete::engine::ArgValueCompleter;
+use serde::Serialize;
 
+use crate::cli::output::{self, OutputFormat};
 use crate::cli::{write_path_file, write_path_file_lines, Error, Result};
 use crate::complete;
 use crate::config::Config;
@@ -15,6 +17,20 @@ use crate::vcs;
 use crate::meta::{self, WorktreeMeta};
 use crate::process;
 use crate::util;
+
+/// Machine-facing `ws new` result (json mode). The path-file shell-integration
+/// channel is unaffected — this lets an agent read the created path from stdout
+/// directly instead of the path-file dance.
+#[derive(Serialize)]
+struct NewResult {
+    branch: String,
+    path: String,
+    base_branch: String,
+    /// True = a brand-new branch was created; false = an existing local/remote
+    /// branch was resumed.
+    created: bool,
+    snap: bool,
+}
 
 #[derive(Args)]
 pub struct NewArgs {
@@ -60,7 +76,7 @@ enum CreateMode {
     NewFromBase,
 }
 
-pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<()> {
+pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>, format: OutputFormat) -> Result<()> {
     // Wall-clock measurement of the full `ws new` body. Printed at the
     // end as `Elapsed: HH:MM:SS` so the user knows how long a clone of
     // their repo actually takes (useful when comparing CoW vs plain
@@ -269,29 +285,46 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>) -> Result<(
         );
     }
 
+    let result = NewResult {
+        branch: branch.clone(),
+        path: wt_path.display().to_string(),
+        base_branch: meta.base_branch.clone(),
+        created: matches!(mode, CreateMode::NewFromBase),
+        snap: args.snap.is_some(),
+    };
+    let quiet = format.is_json();
+
     // Handle snap mode - write path + command for shell wrapper to execute
     if let Some(cmd) = args.snap {
-        if path_file.is_some() {
-            eprintln!("Worktree '{branch}' ready — starting snap mode...");
-            eprintln!("Elapsed: {}", crate::util::format_total(total_start.elapsed()));
-            write_path_file_lines(path_file, &[&wt_path.display().to_string(), &cmd])?;
-        } else {
+        if path_file.is_none() {
             return Err(Error::Other(
                 "Snap mode requires shell integration. Run 'ws setup' first.".into(),
             ));
         }
+        if !quiet {
+            eprintln!("Worktree '{branch}' ready — starting snap mode...");
+            eprintln!("Elapsed: {}", crate::util::format_total(total_start.elapsed()));
+        }
+        output::emit_json(&result, format);
+        write_path_file_lines(path_file, &[&wt_path.display().to_string(), &cmd])?;
         return Ok(());
     }
 
     // Write path for shell integration
     if path_file.is_some() {
-        eprintln!("Worktree '{branch}' ready at {}", wt_path.display());
-        eprintln!("Elapsed: {}", crate::util::format_total(total_start.elapsed()));
+        if !quiet {
+            eprintln!("Worktree '{branch}' ready at {}", wt_path.display());
+            eprintln!("Elapsed: {}", crate::util::format_total(total_start.elapsed()));
+        }
+        output::emit_json(&result, format);
         write_path_file(path_file, &wt_path)?;
     } else {
-        eprintln!("Created worktree: {branch} (from {})", meta.base_branch);
-        eprintln!("Path: {}", wt_path.display());
-        eprintln!("Elapsed: {}", crate::util::format_total(total_start.elapsed()));
+        if !quiet {
+            eprintln!("Created worktree: {branch} (from {})", meta.base_branch);
+            eprintln!("Path: {}", wt_path.display());
+            eprintln!("Elapsed: {}", crate::util::format_total(total_start.elapsed()));
+        }
+        output::emit_json(&result, format);
     }
 
     Ok(())

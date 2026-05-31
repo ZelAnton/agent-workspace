@@ -242,6 +242,26 @@ checks the worktree state:
 | `ws init --sync-strategy <strategy>` | Set default sync strategy (rebase/merge) |
 | `ws init --copy-files <pattern>` | Files to copy to new worktrees (repeatable) |
 
+## Machine-readable output (`--format json`)
+
+`ws` is built to be driven by AI agents, so the read/result commands can emit a
+stable JSON object instead of scraped text. Add the global `--format json` flag:
+
+```bash
+ws ls --format json          # { "worktrees": [ { "branch", "base_branch", "is_current", "commits", ... } ] }
+ws status --format json      # { "branch", "merge_target", "commits", "uncommitted", "in_progress", ... }
+ws repo-info --format json   # { "repo_name", "origin", "total_files", "total_bytes", "from_cache", ... }
+ws new feature-x --format json   # { "branch", "path", "base_branch", "created", "snap" }
+ws merge --format json           # { "merged", "branch", "target", "commits", "deleted" }
+```
+
+Discipline: in JSON mode **stdout carries only the single JSON object**; all
+progress, notices, and the update nag go to stderr (so `ws ls --format json | jq`
+just works). Errors are emitted as `{ "error", "causes": [...] }` on stderr with a
+non-zero exit. `ws new --format json` prints the created worktree path on stdout —
+an agent can read it directly instead of relying on shell integration. Human
+output (the default, `--format human`) is unchanged.
+
 ## Configuration
 
 ### Base Directory

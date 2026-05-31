@@ -15,7 +15,9 @@
 // See `src/repo_meta.rs` for the schema and refresh semantics.
 
 use clap::Args;
+use serde::Serialize;
 
+use crate::cli::output::{self, OutputFormat, Render};
 use crate::cli::{Error, Result};
 use crate::config::Config;
 use crate::repo_meta;
@@ -32,7 +34,7 @@ pub struct RepoInfoArgs {
     refresh: bool,
 }
 
-pub fn run(args: RepoInfoArgs, config: &Config) -> Result<()> {
+pub fn run(args: RepoInfoArgs, config: &Config, format: OutputFormat) -> Result<()> {
     // Resolve which repo we're in. Same lookup as every other `ws`
     // subcommand: the active VCS backend's `repo_root()` follows
     // git/jj worktree gitlinks back to the main repo.
@@ -75,9 +77,14 @@ pub fn run(args: RepoInfoArgs, config: &Config) -> Result<()> {
         ))
     })?;
 
-    eprintln!("Computing repository metadata...");
-    eprintln!("  Source: {}", repo_root.display());
-    eprintln!("  Cache:  {}", cache_path.display());
+    // Decorative progress goes to stderr and is suppressed in json mode so an
+    // agent's run stays quiet (the payload is the only thing it consumes).
+    let chatty = !format.is_json();
+    if chatty {
+        eprintln!("Computing repository metadata...");
+        eprintln!("  Source: {}", repo_root.display());
+        eprintln!("  Cache:  {}", cache_path.display());
+    }
 
     // Mirror the cow path: the cache should reflect what `ws new` will
     // actually copy — i.e. it must honor `[copy] exclude` patterns too.
@@ -87,45 +94,69 @@ pub fn run(args: RepoInfoArgs, config: &Config) -> Result<()> {
             |e| Error::Other(format!("repo-meta load/refresh failed: {e}")),
         )?;
 
-    eprintln!();
-    if result.from_cache {
-        eprintln!("(loaded from cache — use --refresh to regenerate)");
-    } else {
-        eprintln!("Regenerated cache.");
+    if chatty {
+        eprintln!();
+        if result.from_cache {
+            eprintln!("(loaded from cache — use --refresh to regenerate)");
+        } else {
+            eprintln!("Regenerated cache.");
+        }
+        eprintln!();
     }
-    eprintln!();
 
-    // Pretty-print the TOML we just wrote (or read) so the user sees
-    // exactly what's persisted, without needing to `cat` the file.
-    print_meta(&result.meta);
+    let view = RepoInfoView {
+        repo_name: result.meta.repo_name,
+        origin: result.meta.origin,
+        github_repo: result.meta.github_repo,
+        total_files: result.meta.total_files,
+        total_bytes: result.meta.total_bytes,
+        last_refresh: result.meta.last_refresh,
+        from_cache: result.from_cache,
+    };
+    output::emit(&view, format);
     Ok(())
 }
 
-fn print_meta(meta: &repo_meta::RepoMeta) {
-    use indicatif::HumanBytes;
-    println!("[repository]");
-    println!("name         = {:?}", meta.repo_name);
-    println!(
-        "origin       = {}",
-        meta.origin
-            .as_deref()
-            .map(|s| format!("{s:?}"))
-            .unwrap_or_else(|| "<none>".to_string())
-    );
-    println!(
-        "github_repo  = {}",
-        meta.github_repo
-            .as_deref()
-            .map(|s| format!("{s:?}"))
-            .unwrap_or_else(|| "<none>".to_string())
-    );
-    println!("total_files  = {}", meta.total_files);
-    println!(
-        "total_bytes  = {}  # {}",
-        meta.total_bytes,
-        HumanBytes(meta.total_bytes)
-    );
-    println!("last_refresh = {}  # unix seconds", meta.last_refresh);
+/// Machine-facing `ws repo-info` payload (the persisted cache + a `from_cache`
+/// flag telling whether this run recomputed or read the cache).
+#[derive(Serialize)]
+struct RepoInfoView {
+    repo_name: String,
+    origin: Option<String>,
+    github_repo: Option<String>,
+    total_files: u64,
+    total_bytes: u64,
+    last_refresh: u64,
+    from_cache: bool,
+}
+
+impl Render for RepoInfoView {
+    fn render_human(&self) {
+        use indicatif::HumanBytes;
+        println!("[repository]");
+        println!("name         = {:?}", self.repo_name);
+        println!(
+            "origin       = {}",
+            self.origin
+                .as_deref()
+                .map(|s| format!("{s:?}"))
+                .unwrap_or_else(|| "<none>".to_string())
+        );
+        println!(
+            "github_repo  = {}",
+            self.github_repo
+                .as_deref()
+                .map(|s| format!("{s:?}"))
+                .unwrap_or_else(|| "<none>".to_string())
+        );
+        println!("total_files  = {}", self.total_files);
+        println!(
+            "total_bytes  = {}  # {}",
+            self.total_bytes,
+            HumanBytes(self.total_bytes)
+        );
+        println!("last_refresh = {}  # unix seconds", self.last_refresh);
+    }
 }
 
 #[cfg(test)]

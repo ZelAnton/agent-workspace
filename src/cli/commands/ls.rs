@@ -5,9 +5,11 @@
 use std::collections::HashSet;
 
 use clap::Args;
+use serde::Serialize;
 
 use chrono::{DateTime, Utc};
 
+use crate::cli::output::{self, OutputFormat, Render};
 use crate::cli::Result;
 use crate::config::Config;
 use crate::vcs;
@@ -20,13 +22,12 @@ pub struct LsArgs {
     pub long: bool,
 }
 
-pub fn run(args: LsArgs, config: &Config) -> Result<()> {
+pub fn run(args: LsArgs, config: &Config, format: OutputFormat) -> Result<()> {
     let workspace_id = vcs::workspace_id()?;
     let wt_dir = config.project_dir_for(&workspace_id);
 
     if !wt_dir.exists() {
-        eprintln!("No worktrees for this project.");
-        return Ok(());
+        return emit_no_worktrees(format);
     }
 
     let worktrees = vcs::list_worktrees()?;
@@ -37,8 +38,7 @@ pub fn run(args: LsArgs, config: &Config) -> Result<()> {
         .collect();
 
     if managed.is_empty() {
-        eprintln!("No worktrees for this project.");
-        return Ok(());
+        return emit_no_worktrees(format);
     }
 
     let trunk = config.resolve_trunk();
@@ -51,7 +51,7 @@ pub fn run(args: LsArgs, config: &Config) -> Result<()> {
     let current = vcs::current_branch().ok();
     let home = dirs::home_dir();
 
-    let mut rows: Vec<Row> = Vec::new();
+    let mut rows: Vec<LsItem> = Vec::new();
     for wt in &managed {
         let branch = wt.branch.as_deref().unwrap_or("(detached)");
         let is_current = current.as_deref() == Some(branch);
@@ -87,7 +87,7 @@ pub fn run(args: LsArgs, config: &Config) -> Result<()> {
             None
         };
 
-        rows.push(Row {
+        rows.push(LsItem {
             branch: branch.to_string(),
             base_branch,
             is_current,
@@ -103,11 +103,35 @@ pub fn run(args: LsArgs, config: &Config) -> Result<()> {
     // Sort newest-first; rows without meta sink to the bottom (None < Some).
     rows.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
-    print_table(&rows);
+    output::emit(&LsOutput { worktrees: rows }, format);
     Ok(())
 }
 
-struct Row {
+/// In `human` mode a friendly notice on stderr; in `json` mode a valid empty
+/// object on stdout (an agent piping to a parser must never get a bare notice).
+fn emit_no_worktrees(format: OutputFormat) -> Result<()> {
+    match format {
+        OutputFormat::Human => eprintln!("No worktrees for this project."),
+        OutputFormat::Json => output::emit(&LsOutput { worktrees: Vec::new() }, format),
+    }
+    Ok(())
+}
+
+/// Machine-facing `ws ls` payload. An object (not a bare array) so it stays
+/// extensible — future fields like `project`/`trunk` can be added alongside.
+#[derive(Serialize)]
+struct LsOutput {
+    worktrees: Vec<LsItem>,
+}
+
+impl Render for LsOutput {
+    fn render_human(&self) {
+        print_table(&self.worktrees);
+    }
+}
+
+#[derive(Serialize)]
+struct LsItem {
     branch: String,
     base_branch: Option<String>,
     is_current: bool,
@@ -119,7 +143,7 @@ struct Row {
     created_at: Option<DateTime<Utc>>,
 }
 
-fn print_table(rows: &[Row]) {
+fn print_table(rows: &[LsItem]) {
     let bw = rows
         .iter()
         .map(|r| r.branch.len())
@@ -197,5 +221,44 @@ fn shorten_path(path: &std::path::Path, home: &Option<std::path::PathBuf>) -> St
             format!("~/{}", path.strip_prefix(h).unwrap().display())
         }
         _ => path.display().to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ls_output_json_shape() {
+        let out = LsOutput {
+            worktrees: vec![LsItem {
+                branch: "feat".into(),
+                base_branch: Some("main".into()),
+                is_current: true,
+                uncommitted: 2,
+                commits: 3,
+                insertions: 10,
+                deletions: 1,
+                path: None,
+                created_at: None,
+            }],
+        };
+        let v = serde_json::to_value(&out).unwrap();
+        let item = &v["worktrees"][0];
+        assert_eq!(item["branch"], "feat");
+        assert_eq!(item["base_branch"], "main");
+        assert_eq!(item["is_current"], true);
+        assert_eq!(item["commits"], 3);
+        assert!(item["path"].is_null());
+    }
+
+    #[test]
+    fn ls_empty_is_object_with_array() {
+        let out = LsOutput {
+            worktrees: vec![],
+        };
+        let v = serde_json::to_value(&out).unwrap();
+        assert!(v["worktrees"].is_array());
+        assert_eq!(v["worktrees"].as_array().unwrap().len(), 0);
     }
 }
