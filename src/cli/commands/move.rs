@@ -22,13 +22,13 @@ pub struct MoveArgs {
     new_branch: String,
 }
 
-pub fn run(args: MoveArgs, config: &Config, path_file: Option<&Path>) -> Result<()> {
-    let workspace_id = vcs::workspace_id()?;
+pub fn run(args: MoveArgs, config: &Config, path_file: Option<&Path>, repo: &vcs::Repo) -> Result<()> {
+    let workspace_id = repo.workspace_id()?;
     let wt_dir = config.project_dir_for(&workspace_id);
 
     // Resolve '.' to current branch
     let old_branch = if args.old_branch == "." {
-        vcs::current_branch()?
+        repo.current_branch()?
     } else {
         args.old_branch
     };
@@ -66,15 +66,13 @@ pub fn run(args: MoveArgs, config: &Config, path_file: Option<&Path>) -> Result<
     // to relocate a directory we're standing in. Step the process out to the
     // workspaces parent first (the shell is rescued to `new_path` via the
     // path-file afterwards). Harmless on Unix.
-    if inside_target {
-        std::env::set_current_dir(&wt_dir).map_err(|e| Error::Other(e.to_string()))?;
-    }
+    vcs::step_out_of(&old_path, &wt_dir).map_err(|e| Error::Other(e.to_string()))?;
 
     // Move worktree to new path (updates git's internal tracking)
-    vcs::move_worktree(&old_path, &new_path)?;
+    repo.move_worktree(&old_path, &new_path)?;
 
     // Rename branch
-    vcs::rename_branch(&old_branch, &args.new_branch)?;
+    repo.rename_branch(&old_branch, &args.new_branch)?;
 
     // Rename metadata file (find old with fallback, write new format)
     let old_meta = crate::meta::meta_path_with_fallback(&wt_dir, &old_branch);

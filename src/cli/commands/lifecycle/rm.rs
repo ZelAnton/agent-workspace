@@ -23,15 +23,19 @@ pub struct RmArgs {
     force: bool,
 }
 
-pub fn run(args: RmArgs, config: &Config, path_file: Option<&Path>) -> Result<()> {
+pub fn run(args: RmArgs, config: &Config, path_file: Option<&Path>, repo: &vcs::Repo) -> Result<()> {
     // Get main repo path BEFORE any destructive operations
-    let main_path = vcs::repo_root()?;
-    let workspace_id = vcs::workspace_id()?;
+    let main_path = repo.repo_root()?;
+    let workspace_id = repo.workspace_id()?;
     let wt_dir = config.project_dir_for(&workspace_id);
+
+    // Re-anchor at the main repo so worktree removal + branch deletion run
+    // against it explicitly — no process chdir steering.
+    let main = repo.at(&main_path);
 
     // Resolve '.' to current branch
     let branch = if args.branch == "." {
-        vcs::current_branch()?
+        repo.current_branch()?
     } else {
         args.branch
     };
@@ -58,20 +62,15 @@ pub fn run(args: RmArgs, config: &Config, path_file: Option<&Path>) -> Result<()
 
     // On Windows the OS holds an exclusive handle on every process's cwd —
     // git's directory delete would fail with "Permission denied" if we sit
-    // on the worktree while removing it. Switch to the main repo *before*
-    // the remove, not after. Harmless on Unix (lazy-unlink semantics).
-    if inside_target {
-        std::env::set_current_dir(&main_path).ok();
-    }
+    // on the worktree while removing it. Step the process out to the main
+    // repo *before* the remove, not after. Harmless on Unix (lazy-unlink).
+    vcs::step_out_of(&wt_path, &main_path).ok();
 
-    // Remove worktree
-    vcs::remove_worktree(&wt_path, args.force)?;
-
-    // Switch to main repo before deleting branch (avoid "not in repo" error)
-    std::env::set_current_dir(&main_path).ok();
+    // Remove worktree (via the main-repo handle).
+    main.remove_worktree(&wt_path, args.force)?;
 
     // Delete branch — best-effort, failure doesn't block worktree cleanup
-    let _ = vcs::delete_branch(&branch, args.force);
+    let _ = main.delete_branch(&branch, args.force);
 
     // Remove metadata
     crate::meta::remove_meta(&wt_dir, &branch);

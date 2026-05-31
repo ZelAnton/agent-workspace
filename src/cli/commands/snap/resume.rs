@@ -50,10 +50,10 @@ pub struct SnapContext {
 // ===========================================================================
 
 /// Run snap-continue command.
-pub fn run(config: &Config, path_file: Option<&Path>) -> Result<()> {
-    let ctx = gather_context(config)?;
+pub fn run(config: &Config, path_file: Option<&Path>, repo: &vcs::Repo) -> Result<()> {
+    let ctx = gather_context(config, repo)?;
     let action = determine_action(&ctx)?;
-    execute_action(&ctx, &action, config, path_file)
+    execute_action(&ctx, &action, config, path_file, repo)
 }
 
 // ===========================================================================
@@ -61,11 +61,14 @@ pub fn run(config: &Config, path_file: Option<&Path>) -> Result<()> {
 // ===========================================================================
 
 /// Gather context from git state
-pub fn gather_context(config: &Config) -> Result<SnapContext> {
-    let cwd = std::env::current_dir().map_err(|e| Error::Other(e.to_string()))?;
-    let branch = vcs::current_branch()?;
-    let workspace_id = vcs::workspace_id()?;
-    let repo_root = vcs::repo_root()?;
+pub fn gather_context(config: &Config, repo: &vcs::Repo) -> Result<SnapContext> {
+    // The snap loop cd'd the process INTO the worktree before running the
+    // agent, so the worktree IS the Repo's anchor — read it from `repo.cwd()`
+    // instead of the process cwd (no `std::env::current_dir()` here).
+    let cwd = repo.cwd().to_path_buf();
+    let branch = repo.current_branch()?;
+    let workspace_id = repo.workspace_id()?;
+    let repo_root = repo.repo_root()?;
 
     // Load metadata to get base_branch (fallback to legacy .status.toml).
     let wt_dir = config.project_dir_for(&workspace_id);
@@ -80,7 +83,7 @@ pub fn gather_context(config: &Config) -> Result<SnapContext> {
     // landing commits on the wrong branch is a worse failure mode than an
     // explicit error that points the user at `ws merge --into <branch>`.
     let merge_target = match loaded_meta.as_ref().map(|m| m.base_branch.as_str()) {
-        Some(bb) if vcs::branch_exists(bb).unwrap_or(false) => bb.to_string(),
+        Some(bb) if repo.branch_exists(bb).unwrap_or(false) => bb.to_string(),
         Some(bb) => {
             return Err(Error::Other(format!(
                 "Base branch '{bb}' no longer exists.\n\
@@ -90,8 +93,8 @@ pub fn gather_context(config: &Config) -> Result<SnapContext> {
         None => config.resolve_trunk(),
     };
 
-    let has_uncommitted = vcs::has_uncommitted_changes().unwrap_or(false);
-    let has_commits_ahead = vcs::commit_count(&merge_target, "HEAD").unwrap_or(0) > 0;
+    let has_uncommitted = repo.has_uncommitted_changes().unwrap_or(false);
+    let has_commits_ahead = repo.commit_count(&merge_target, "HEAD").unwrap_or(0) > 0;
 
     Ok(SnapContext {
         cwd,
@@ -158,12 +161,17 @@ pub fn determine_action_with_choice(
 /// Uses non-force removal so that any untracked files left in the worktree
 /// (build artifacts, .env, agent-generated scratch) cause the cleanup to
 /// fail loudly instead of silently deleting work.
-pub fn cleanup_worktree(wt_path: &Path, branch: &str, config: &Config) -> Result<()> {
-    vcs::remove_worktree(wt_path, false)?;
-    vcs::delete_branch(branch, true).ok();
+pub fn cleanup_worktree(
+    main: &vcs::Repo,
+    wt_path: &Path,
+    branch: &str,
+    config: &Config,
+) -> Result<()> {
+    main.remove_worktree(wt_path, false)?;
+    main.delete_branch(branch, true).ok();
 
     // Remove metadata
-    if let Ok(workspace_id) = vcs::workspace_id() {
+    if let Ok(workspace_id) = main.workspace_id() {
         let wt_dir = config.project_dir_for(&workspace_id);
         meta::remove_meta(&wt_dir, branch);
     }
@@ -181,7 +189,14 @@ fn execute_action(
     action: &SnapAction,
     config: &Config,
     path_file: Option<&Path>,
+    repo: &vcs::Repo,
 ) -> Result<()> {
+    // Main-repo handle for every main-repo op below — replaces the old
+    // `set_current_dir(&ctx.repo_root)` steering. No process chdir for steering;
+    // the only process-cwd move left is the Windows-lock `step_out_of` on the
+    // cleanup paths (which `exit()` immediately after).
+    let main = repo.at(&ctx.repo_root);
+
     match action {
         SnapAction::CleanupNoChanges => {
             eprintln!("No changes detected. Cleaning up...");
@@ -190,8 +205,8 @@ fn execute_action(
             // exclusive handle on the process cwd, so `git worktree remove`
             // would fail to delete the directory we're standing in. Step out to
             // the main repo first — same guard the MergeAndCleanup arm uses.
-            std::env::set_current_dir(&ctx.repo_root).map_err(|e| Error::Other(e.to_string()))?;
-            cleanup_worktree(&ctx.cwd, &ctx.branch, config)?;
+            vcs::step_out_of(&ctx.cwd, &ctx.repo_root).map_err(|e| Error::Other(e.to_string()))?;
+            cleanup_worktree(&main, &ctx.cwd, &ctx.branch, config)?;
             write_path_file(path_file, &ctx.repo_root)?;
             std::process::exit(EXIT_DONE);
         }
@@ -205,12 +220,10 @@ fn execute_action(
 
             eprintln!("Merging {} into {}...", ctx.branch, ctx.merge_target);
 
-            std::env::set_current_dir(&ctx.repo_root).map_err(|e| Error::Other(e.to_string()))?;
-            vcs::checkout(&ctx.merge_target)?;
+            main.checkout(&ctx.merge_target)?;
 
-            if !vcs::dry_run_merge(&ctx.branch, config.merge_strategy.is_squash())? {
-                vcs::checkout(&ctx.merge_target).ok();
-                let _ = std::env::set_current_dir(&ctx.cwd);
+            if !main.dry_run_merge(&ctx.branch, config.merge_strategy.is_squash())? {
+                main.checkout(&ctx.merge_target).ok();
                 super::super::merge::print_conflict_hint();
                 eprintln!();
                 eprintln!(
@@ -221,14 +234,14 @@ fn execute_action(
             }
 
             if let Err(e) = super::super::merge::execute_merge(
+                &main,
                 &ctx.branch,
                 &ctx.merge_target,
                 config.merge_strategy,
             ) {
                 eprintln!("Merge failed: {e}");
-                let _ = vcs::reset_merge();
-                let _ = vcs::checkout(&ctx.merge_target);
-                let _ = std::env::set_current_dir(&ctx.cwd);
+                let _ = main.reset_merge();
+                let _ = main.checkout(&ctx.merge_target);
                 eprintln!(
                     "Worktree '{}' preserved. Inspect there and retry.",
                     ctx.branch
@@ -245,7 +258,9 @@ fn execute_action(
                     .map_err(|e| Error::Other(e.to_string()))?;
             }
 
-            cleanup_worktree(&ctx.cwd, &ctx.branch, config)?;
+            // Step out of the worktree (Windows lock) before removing it.
+            vcs::step_out_of(&ctx.cwd, &ctx.repo_root).map_err(|e| Error::Other(e.to_string()))?;
+            cleanup_worktree(&main, &ctx.cwd, &ctx.branch, config)?;
             write_path_file(path_file, &ctx.repo_root)?;
             std::process::exit(EXIT_DONE);
         }

@@ -19,10 +19,10 @@ pub struct CleanArgs {
     pub dry_run: bool,
 }
 
-pub fn run(args: CleanArgs, config: &Config, path_file: Option<&Path>) -> Result<()> {
+pub fn run(args: CleanArgs, config: &Config, path_file: Option<&Path>, repo: &vcs::Repo) -> Result<()> {
     // Get main repo path before any operations
-    let main_path = vcs::repo_root()?;
-    let workspace_id = vcs::workspace_id()?;
+    let main_path = repo.repo_root()?;
+    let workspace_id = repo.workspace_id()?;
     let wt_dir = config.project_dir_for(&workspace_id);
 
     if !wt_dir.exists() {
@@ -30,13 +30,17 @@ pub fn run(args: CleanArgs, config: &Config, path_file: Option<&Path>) -> Result
         return Ok(());
     }
 
+    // Re-anchor at the main repo for branch deletion — no process chdir.
+    let main = repo.at(&main_path);
+
     let trunk = config.resolve_trunk();
-    let known_branches: HashSet<String> = vcs::local_branches()
+    let known_branches: HashSet<String> = repo
+        .local_branches()
         .unwrap_or_default()
         .into_iter()
         .collect();
 
-    let worktrees = vcs::list_worktrees()?;
+    let worktrees = repo.list_worktrees()?;
     let mut cleaned = 0;
     let mut checked = 0;
     let mut skipped_dirty = 0;
@@ -68,14 +72,14 @@ pub fn run(args: CleanArgs, config: &Config, path_file: Option<&Path>) -> Result
 
         // Skip worktrees that still differ from target — committed diff is
         // the cheap check, run it before the per-worktree dirty status call.
-        if vcs::has_diff_from(branch, &target).unwrap_or(true) {
+        if repo.has_diff_from(branch, &target).unwrap_or(true) {
             continue;
         }
 
         // Dirty worktrees aren't clean even with no committed diff: git
         // refuses non-force removal anyway, and silently discarding
         // in-flight work would be a footgun.
-        let dirty = vcs::uncommitted_count_in(&wt.path).unwrap_or(0);
+        let dirty = repo.uncommitted_count_in(&wt.path).unwrap_or(0);
         if dirty > 0 {
             eprintln!("Skipping {branch}: {dirty} uncommitted change(s)");
             skipped_dirty += 1;
@@ -105,15 +109,14 @@ pub fn run(args: CleanArgs, config: &Config, path_file: Option<&Path>) -> Result
 
         eprintln!("Cleaning worktree (no diff from {target}): {branch}");
 
-        if let Err(e) = vcs::remove_worktree(&wt.path, false) {
+        if let Err(e) = repo.remove_worktree(&wt.path, false) {
             eprintln!("Warning: failed to remove worktree {branch}: {e}");
             continue;
         }
 
-        // Switch to main repo before deleting branch — git refuses to
-        // delete the branch a worktree is on.
-        std::env::set_current_dir(&main_path).ok();
-        vcs::delete_branch(branch, false).ok();
+        // Delete branch via the main-repo handle — git refuses to delete the
+        // branch a worktree is on. (Was a `set_current_dir(main)` steer.)
+        main.delete_branch(branch, false).ok();
 
         crate::meta::remove_meta(&wt_dir, branch);
 

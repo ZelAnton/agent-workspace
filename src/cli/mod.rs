@@ -197,20 +197,20 @@ impl Cli {
             }
             Command::Ls(args) => commands::ls::run(args, &config, format, &repo),
             Command::Cd(args) => commands::nav::cd::run(args, &config, path_file, &repo),
-            Command::Rm(args) => commands::lifecycle::rm::run(args, &config, path_file),
-            Command::Clean(args) => commands::lifecycle::clean::run(args, &config, path_file),
-            Command::Merge(args) => commands::merge::run(args, &config, path_file, format),
+            Command::Rm(args) => commands::lifecycle::rm::run(args, &config, path_file, &repo),
+            Command::Clean(args) => commands::lifecycle::clean::run(args, &config, path_file, &repo),
+            Command::Merge(args) => commands::merge::run(args, &config, path_file, format, &repo),
             Command::Status => commands::status::run(&config, format, &repo),
             Command::RepoInfo(args) => commands::repo_info::run(args, &config, format, &repo),
             Command::Config(args) => commands::config::run(args),
             Command::Exclude(args) => commands::exclude::run(args),
             Command::Sync(args) => commands::sync::run(args, &config, &repo),
-            Command::Mv(args) => commands::r#move::run(args, &config, path_file),
+            Command::Mv(args) => commands::r#move::run(args, &config, path_file, &repo),
             Command::Setup(args) => commands::sys::setup::run(args),
             Command::Uninstall(args) => commands::sys::uninstall::run(args),
             Command::Init(args) => commands::sys::init::run(args),
             Command::Update => commands::sys::update::run(),
-            Command::SnapContinue => commands::snap::resume::run(&config, path_file),
+            Command::SnapContinue => commands::snap::resume::run(&config, path_file, &repo),
         }
     }
 }

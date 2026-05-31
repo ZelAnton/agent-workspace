@@ -45,9 +45,15 @@ pub struct MergeArgs {
     skip_hooks: bool,
 }
 
-pub fn run(args: MergeArgs, config: &Config, path_file: Option<&Path>, format: OutputFormat) -> Result<()> {
-    let main_repo = vcs::repo_root()?;
-    run_merge(args, config, path_file, &main_repo, format)
+pub fn run(
+    args: MergeArgs,
+    config: &Config,
+    path_file: Option<&Path>,
+    format: OutputFormat,
+    repo: &vcs::Repo,
+) -> Result<()> {
+    let main_repo = repo.repo_root()?;
+    run_merge(args, config, path_file, &main_repo, format, repo)
 }
 
 fn run_merge(
@@ -56,9 +62,10 @@ fn run_merge(
     path_file: Option<&Path>,
     main_repo: &Path,
     format: OutputFormat,
+    repo: &vcs::Repo,
 ) -> Result<()> {
-    let current = vcs::current_branch()?;
-    let workspace_id = vcs::workspace_id()?;
+    let current = repo.current_branch()?;
+    let workspace_id = repo.workspace_id()?;
     let wt_dir = config.project_dir_for(&workspace_id);
 
     // --into target must exist AND not be checked out elsewhere.
@@ -66,13 +73,13 @@ fn run_merge(
     // the second check, merge would fail mid-flight with a confusing
     // low-level git error instead of a clear upfront message.
     if let Some(ref branch) = args.into {
-        if !vcs::branch_exists(branch)? {
+        if !repo.branch_exists(branch)? {
             return Err(Error::Other(format!("Branch '{branch}' does not exist")));
         }
         let main_canon = main_repo
             .canonicalize()
             .unwrap_or_else(|_| main_repo.to_path_buf());
-        let conflict = vcs::list_worktrees()?.into_iter().find(|wt| {
+        let conflict = repo.list_worktrees()?.into_iter().find(|wt| {
             wt.branch.as_deref() == Some(branch.as_str())
                 && wt.path.canonicalize().unwrap_or_else(|_| wt.path.clone()) != main_canon
         });
@@ -94,7 +101,7 @@ fn run_merge(
     if args.into.is_none() {
         let meta_path = meta::meta_path_with_fallback(&wt_dir, &current);
         if let Ok(m) = meta::WorktreeMeta::load(&meta_path)
-            && !vcs::branch_exists(&m.base_branch).unwrap_or(false)
+            && !repo.branch_exists(&m.base_branch).unwrap_or(false)
         {
             return Err(Error::Other(format!(
                 "Base branch '{}' no longer exists.\n\
@@ -108,7 +115,7 @@ fn run_merge(
         &wt_dir,
         &current,
         args.into.as_deref(),
-        |b| vcs::branch_exists(b).unwrap_or(false),
+        |b| repo.branch_exists(b).unwrap_or(false),
         &config.resolve_trunk(),
     );
 
@@ -116,7 +123,7 @@ fn run_merge(
         return Err(Error::Other(format!("Cannot merge {current} into itself")));
     }
 
-    if vcs::has_uncommitted_changes()? {
+    if repo.has_uncommitted_changes()? {
         return Err(Error::Other(format!(
             "Worktree '{current}' has uncommitted changes. Commit or stash first."
         )));
@@ -147,45 +154,50 @@ fn run_merge(
             .map_err(|e| Error::Other(e.to_string()))?;
     }
 
-    let commit_count = vcs::commit_count(&target, &current).unwrap_or(0);
+    let commit_count = repo.commit_count(&target, &current).unwrap_or(0);
     eprintln!("Merging {current} into {target} ({commit_count} commits, {strategy:?})");
 
-    std::env::set_current_dir(main_repo).map_err(|e| Error::Other(e.to_string()))?;
+    // Re-anchor at the main repo for every main-repo operation that follows —
+    // replaces the old `set_current_dir(main_repo)` steering with an explicit
+    // handle. No process cwd mutation: the worktree stays the process cwd (so
+    // post-merge hooks below still see it), and the main-repo ops run via
+    // `main`, anchored at `main_repo` through `backend.at_cwd`.
+    let main = repo.at(main_repo);
 
-    if vcs::has_uncommitted_changes()? {
+    if main.has_uncommitted_changes()? {
         return Err(Error::Other(
             "Main repo has uncommitted changes. Commit or stash before merging.".into(),
         ));
     }
-    if vcs::is_merge_in_progress() {
+    if main.is_merge_in_progress() {
         return Err(Error::Other("Main repo has a merge in progress.".into()));
     }
-    if vcs::is_rebase_in_progress() {
+    if main.is_rebase_in_progress() {
         return Err(Error::Other("Main repo has a rebase in progress.".into()));
     }
 
     // Capture main repo's current branch *before* we move HEAD, so we can
     // restore it if any subsequent step fails.
-    let original_main_branch = vcs::current_branch().ok();
+    let original_main_branch = main.current_branch().ok();
 
-    vcs::checkout(&target)?;
+    main.checkout(&target)?;
 
-    if !vcs::dry_run_merge(&current, strategy.is_squash())? {
+    if !main.dry_run_merge(&current, strategy.is_squash())? {
         if let Some(orig) = &original_main_branch {
-            let _ = vcs::checkout(orig);
+            let _ = main.checkout(orig);
         }
         print_conflict_hint();
         return Err(Error::Other("Merge aborted due to conflicts".into()));
     }
 
-    match execute_merge(&current, &target, strategy) {
+    match execute_merge(&main, &current, &target, strategy) {
         Ok(false) => {
             eprintln!("Nothing to merge: {current} is already up to date with {target}");
             // Restore main repo to its prior branch — moving HEAD is a side
             // effect of the dry-run + checkout sequence; the user didn't
             // ask for it.
             if let Some(orig) = &original_main_branch {
-                let _ = vcs::checkout(orig);
+                let _ = main.checkout(orig);
             }
             output::emit_json(
                 &MergeResult {
@@ -201,9 +213,9 @@ fn run_merge(
         }
         Err(e) => {
             // Roll back any squash staging, then return HEAD to where it was.
-            let _ = vcs::reset_merge();
+            let _ = main.reset_merge();
             if let Some(orig) = &original_main_branch {
-                let _ = vcs::checkout(orig);
+                let _ = main.checkout(orig);
             }
             return Err(e);
         }
@@ -219,7 +231,13 @@ fn run_merge(
     }
 
     if args.delete {
-        cleanup_worktree(&current, config)?;
+        // On Windows the OS holds an exclusive handle on the process cwd. The
+        // process is still standing in the worktree here (post-merge hooks ran
+        // with CWD = worktree), so step out to the main repo before removing
+        // it, or `git worktree remove` fails "Permission denied". Harmless on
+        // Unix. Previously implicit because the flow had chdir'd to main.
+        vcs::step_out_of(&wt_path, main_repo).ok();
+        cleanup_worktree(&main, &current, config)?;
         if inside_worktree {
             write_path_file(path_file, main_repo)?;
         }
@@ -274,11 +292,17 @@ pub fn build_merge_message(branch: &str, log: &str) -> String {
     }
 }
 
-/// Execute squash/merge. Caller must already be on trunk.
+/// Execute squash/merge. `main` must already be on trunk (the caller checked
+/// it out via this same handle).
 ///
 /// Returns true if changes were merged, false if already up to date.
-pub fn execute_merge(branch: &str, trunk: &str, strategy: MergeStrategy) -> Result<bool> {
-    let log = vcs::log_oneline(trunk, branch).unwrap_or_default();
+pub fn execute_merge(
+    main: &vcs::Repo,
+    branch: &str,
+    trunk: &str,
+    strategy: MergeStrategy,
+) -> Result<bool> {
+    let log = main.log_oneline(trunk, branch).unwrap_or_default();
     let msg = build_merge_message(branch, &log);
 
     // No-op detection in two layers so cleanup paths only run when
@@ -303,21 +327,21 @@ pub fn execute_merge(branch: &str, trunk: &str, strategy: MergeStrategy) -> Resu
     // A two-dot tree diff `git diff trunk branch` would be correct, but
     // we don't expose that primitive — and the post-merge check below
     // works for both backends without a new trait method.
-    if vcs::commit_count(trunk, branch)? == 0 {
+    if main.commit_count(trunk, branch)? == 0 {
         return Ok(false);
     }
-    let pre_commit = vcs::current_commit().ok();
+    let pre_commit = main.current_commit().ok();
     // `trunk` is the merge DESTINATION (the caller checked it out); pass it so
     // the jj backend advances the right bookmark instead of guessing from `@`.
     match strategy {
         MergeStrategy::Squash => {
-            vcs::merge(branch, trunk, true, false, Some(&msg))?;
+            main.merge(branch, trunk, true, false, Some(&msg))?;
         }
         MergeStrategy::Merge => {
-            vcs::merge(branch, trunk, false, true, Some(&msg))?;
+            main.merge(branch, trunk, false, true, Some(&msg))?;
         }
     }
-    let post_commit = vcs::current_commit().ok();
+    let post_commit = main.current_commit().ok();
     // Git: HEAD stays put when `merge --squash` stages nothing and the
     //      commit step is skipped — pre == post → return false.
     // Jj:  `@` always advances on merge() (new change for squash, merge
@@ -331,19 +355,23 @@ pub fn execute_merge(branch: &str, trunk: &str, strategy: MergeStrategy) -> Resu
     Ok(true)
 }
 
-/// Clean up worktree after successful merge
-pub fn cleanup_worktree(branch: &str, config: &Config) -> Result<()> {
-    let workspace_id = vcs::workspace_id()?;
+/// Clean up worktree after successful merge.
+///
+/// `main` is the main-repo `Repo` handle — worktree removal and branch
+/// deletion run against it explicitly (the branch the worktree is on can't be
+/// deleted from the worktree itself).
+pub fn cleanup_worktree(main: &vcs::Repo, branch: &str, config: &Config) -> Result<()> {
+    let workspace_id = main.workspace_id()?;
     let wt_dir = config.project_dir_for(&workspace_id);
     let wt_path = wt_dir.join(branch);
 
     eprintln!("Cleaning up worktree: {branch}");
 
-    vcs::remove_worktree(&wt_path, false).ok();
+    main.remove_worktree(&wt_path, false).ok();
 
     // Force delete: squash merge rewrites history so -d thinks
     // the branch is "not fully merged" even though changes are in trunk
-    vcs::delete_branch(branch, true).ok();
+    main.delete_branch(branch, true).ok();
 
     crate::meta::remove_meta(&wt_dir, branch);
 

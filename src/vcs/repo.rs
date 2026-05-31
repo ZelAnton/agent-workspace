@@ -65,6 +65,9 @@ impl Repo {
     pub fn current_branch(&self) -> Result<String> {
         self.backend.current_branch()
     }
+    pub fn current_commit(&self) -> Result<String> {
+        self.backend.current_commit()
+    }
 
     // ----- Branches -------------------------------------------------------
     pub fn local_branches(&self) -> Result<Vec<String>> {
@@ -75,6 +78,18 @@ impl Repo {
     }
     pub fn remote_branch_exists(&self, name: &str) -> Result<bool> {
         self.backend.remote_branch_exists(name)
+    }
+    pub fn has_diff_from(&self, branch: &str, target: &str) -> Result<bool> {
+        self.backend.has_diff_from(branch, target)
+    }
+    pub fn delete_branch(&self, name: &str, force: bool) -> Result<()> {
+        self.backend.delete_branch(name, force)
+    }
+    pub fn rename_branch(&self, old: &str, new: &str) -> Result<()> {
+        self.backend.rename_branch(old, new)
+    }
+    pub fn log_oneline(&self, from: &str, to: &str) -> Result<String> {
+        self.backend.log_oneline(from, to)
     }
     pub fn commit_count(&self, from: &str, to: &str) -> Result<usize> {
         self.backend.commit_count(from, to)
@@ -87,6 +102,9 @@ impl Repo {
     }
 
     // ----- Working-copy state --------------------------------------------
+    pub fn has_uncommitted_changes(&self) -> Result<bool> {
+        self.backend.has_uncommitted_changes()
+    }
     pub fn uncommitted_count_in(&self, path: &Path) -> Result<usize> {
         self.backend.uncommitted_count_in(path)
     }
@@ -107,6 +125,15 @@ impl Repo {
         message: Option<&str>,
     ) -> Result<()> {
         self.backend.merge(branch, dest_bookmark, squash, no_ff, message)
+    }
+    pub fn dry_run_merge(&self, branch: &str, squash: bool) -> Result<bool> {
+        self.backend.dry_run_merge(branch, squash)
+    }
+    pub fn checkout(&self, branch: &str) -> Result<()> {
+        self.backend.checkout(branch)
+    }
+    pub fn reset_merge(&self) -> Result<()> {
+        self.backend.reset_merge()
     }
     pub fn rebase(&self, onto: &str) -> Result<()> {
         self.backend.rebase(onto)
@@ -142,5 +169,11 @@ impl Repo {
         branch: &str,
     ) -> Result<CreateOutcome> {
         self.backend.create_worktree_from_remote(path, branch)
+    }
+    pub fn remove_worktree(&self, path: &Path, force: bool) -> Result<()> {
+        self.backend.remove_worktree(path, force)
+    }
+    pub fn move_worktree(&self, old: &Path, new: &Path) -> Result<()> {
+        self.backend.move_worktree(old, new)
     }
 }

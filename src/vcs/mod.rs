@@ -272,6 +272,20 @@ pub fn move_worktree(old: &Path, new: &Path) -> Result<()> {
     with_backend(|b| b.move_worktree(old, new))
 }
 
+/// Step the ws PROCESS out of `doomed` (into `escape_to`) before deleting or
+/// moving `doomed`. REQUIRED on Windows: the OS holds an exclusive handle on
+/// every process's current directory, so `git worktree remove`/`move` of the
+/// dir we're standing in fails "Permission denied" regardless of the git
+/// subprocess's own cwd. No-op when we're not inside `doomed`. This is the
+/// ONE sanctioned process-cwd mutation — it is NOT steering (which is now
+/// done with explicit `Repo` handles).
+pub fn step_out_of(doomed: &Path, escape_to: &Path) -> std::io::Result<()> {
+    if is_cwd_inside(doomed) {
+        std::env::set_current_dir(escape_to)?;
+    }
+    Ok(())
+}
+
 /// Shared cwd-serialization mutex for backend test suites.
 ///
 /// `std::env::current_dir()` is process-global; any test that calls
