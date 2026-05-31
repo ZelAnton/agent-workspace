@@ -640,11 +640,11 @@ jj_test!(test_create_worktree_restores_source_change_id, |dir: &Path| {
         let runner = procpilot::DefaultRunner;
         let pre_commit = b.current_commit().unwrap();
         let pre_change =
-            crate::vcs::jj::repo::current_change_id(&runner).unwrap();
+            crate::vcs::jj::repo::current_change_id(&runner, dir).unwrap();
         b.create_worktree(&wt_path, "feat-restore", "main").unwrap();
         let post_commit = b.current_commit().unwrap();
         let post_change =
-            crate::vcs::jj::repo::current_change_id(&runner).unwrap();
+            crate::vcs::jj::repo::current_change_id(&runner, dir).unwrap();
         assert_eq!(
             pre_commit, post_commit,
             "source workspace's @ commit must be restored after create_worktree"

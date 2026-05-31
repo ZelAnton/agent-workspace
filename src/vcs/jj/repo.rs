@@ -6,7 +6,7 @@
 // bookmark-shaped methods. Implementations go through `vcs_runner::Cmd`
 // with the `jj` binary; all reuse the `Runner` injection so tests can mock.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use vcs_runner::{
@@ -24,10 +24,9 @@ use crate::vcs::error::{Error, Result};
 /// is the same canonical path git's `repo_root()` returns, so
 /// [`workspace_id`] produces an identical hash across both backends — the
 /// load-bearing invariant for git→jj migration in colocated repos.
-pub(super) fn repo_root(runner: &dyn Runner) -> Result<PathBuf> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn repo_root(runner: &dyn Runner, cwd: &Path) -> Result<PathBuf> {
     let out = runner
-        .run(Cmd::new("jj").in_dir(&cwd).args(["root"]))
+        .run(Cmd::new("jj").in_dir(cwd).args(["root"]))
         .map_err(|e| match e {
             RunError::NonZeroExit { .. } => Error::NotInRepo,
             other => map_run_err(other),
@@ -38,8 +37,8 @@ pub(super) fn repo_root(runner: &dyn Runner) -> Result<PathBuf> {
 
 /// Repo name = the working-copy root's directory name. Same algorithm as
 /// git's `repo_name()` so the two backends agree for colocated repos.
-pub(super) fn repo_name(runner: &dyn Runner) -> Result<String> {
-    let root = repo_root(runner)?;
+pub(super) fn repo_name(runner: &dyn Runner, cwd: &Path) -> Result<String> {
+    let root = repo_root(runner, cwd)?;
     root.file_name()
         .and_then(|n| n.to_str())
         .map(|s| s.to_string())
@@ -50,12 +49,12 @@ pub(super) fn repo_name(runner: &dyn Runner) -> Result<String> {
 /// colocated repos keep the same `$AGENT_WORKSPACE_DIR/<id>/` directory
 /// whether `ws` resolves to git or jj. **Don't change the algorithm in
 /// isolation** — both backends must move in lockstep.
-pub(super) fn workspace_id(runner: &dyn Runner) -> Result<String> {
+pub(super) fn workspace_id(runner: &dyn Runner, cwd: &Path) -> Result<String> {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
-    let root = repo_root(runner)?;
-    let name = repo_name(runner)?;
+    let root = repo_root(runner, cwd)?;
+    let name = repo_name(runner, cwd)?;
 
     let mut hasher = DefaultHasher::new();
     root.hash(&mut hasher);
@@ -70,12 +69,11 @@ pub(super) fn workspace_id(runner: &dyn Runner) -> Result<String> {
 ///
 /// Uses vcs-runner's `LOG_TEMPLATE` + `parse_log_output` so the bookmark
 /// list comes back already parsed; pick `entries[0].local_bookmarks.min()`.
-pub(super) fn current_branch(runner: &dyn Runner) -> Result<String> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn current_branch(runner: &dyn Runner, cwd: &Path) -> Result<String> {
     let out = runner
         .run(
             Cmd::new("jj")
-                .in_dir(&cwd)
+                .in_dir(cwd)
                 .args(["log", "-r", "@", "-T", LOG_TEMPLATE, "--no-graph", "--limit", "1"]),
         )
         .map_err(|e| match e {
@@ -106,12 +104,11 @@ pub(super) fn current_branch(runner: &dyn Runner) -> Result<String> {
 /// `jj edit <commit_id>` jumps to a frozen point in history; `jj edit
 /// <change_id>` jumps to whichever revision currently bears that
 /// change-id, which is what we want after intervening snapshots.
-pub(super) fn current_change_id(runner: &dyn Runner) -> Result<String> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn current_change_id(runner: &dyn Runner, cwd: &Path) -> Result<String> {
     runner
         .run(
             Cmd::new("jj")
-                .in_dir(&cwd)
+                .in_dir(cwd)
                 .args(["log", "-r", "@", "-T", "change_id", "--no-graph", "--limit", "1"]),
         )
         .map(|out| out.stdout_lossy().trim().to_string())
@@ -124,12 +121,11 @@ pub(super) fn current_change_id(runner: &dyn Runner) -> Result<String> {
 /// HEAD commit id (short form, matching git's behaviour of returning
 /// whatever `rev-parse HEAD` prints — a full sha for git, a short id for jj.
 /// Callers use this as an opaque pointer; full vs short doesn't matter).
-pub(super) fn current_commit(runner: &dyn Runner) -> Result<String> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn current_commit(runner: &dyn Runner, cwd: &Path) -> Result<String> {
     runner
         .run(
             Cmd::new("jj")
-                .in_dir(&cwd)
+                .in_dir(cwd)
                 .args(["log", "-r", "@", "-T", "commit_id", "--no-graph", "--limit", "1"]),
         )
         .map(|out| out.stdout_lossy().trim().to_string())
@@ -150,9 +146,8 @@ pub(super) fn current_commit(runner: &dyn Runner) -> Result<String> {
 /// `main` → `master` → lex-smallest. jj's internal bookmark iteration
 /// order is implementation-defined and could shift across versions; we
 /// pin a stable choice so `ws status`/`ws cd` output doesn't flicker.
-pub(super) fn detect_trunk(runner: &dyn Runner) -> Result<String> {
-    let cwd = std::env::current_dir()?;
-    if let Ok(out) = runner.run(Cmd::new("jj").in_dir(&cwd).args([
+pub(super) fn detect_trunk(runner: &dyn Runner, cwd: &Path) -> Result<String> {
+    if let Ok(out) = runner.run(Cmd::new("jj").in_dir(cwd).args([
         "log",
         "-r",
         "trunk()",
@@ -184,7 +179,7 @@ pub(super) fn detect_trunk(runner: &dyn Runner) -> Result<String> {
     }
 
     for candidate in ["main", "master"] {
-        if branch_exists(runner, candidate)? {
+        if branch_exists(runner, cwd, candidate)? {
             return Ok(candidate.to_string());
         }
     }
@@ -195,11 +190,10 @@ pub(super) fn detect_trunk(runner: &dyn Runner) -> Result<String> {
 ///
 /// Reuses vcs-runner's `parse_bookmark_output`. Filters to `RemoteStatus::Local`
 /// to match the git impl's `for-each-ref refs/heads/` semantics.
-pub(super) fn local_branches(runner: &dyn Runner) -> Result<Vec<String>> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn local_branches(runner: &dyn Runner, cwd: &Path) -> Result<Vec<String>> {
     match runner.run(
         Cmd::new("jj")
-            .in_dir(&cwd)
+            .in_dir(cwd)
             .args(["bookmark", "list", "-T", BOOKMARK_TEMPLATE]),
     ) {
         Ok(out) => {
@@ -228,8 +222,8 @@ pub(super) fn local_branches(runner: &dyn Runner) -> Result<Vec<String>> {
 /// than `jj log -r <name>` because the latter resolves through the full
 /// revset language — including potentially-ambiguous prefix matching —
 /// which would falsely succeed on partial change-id matches.
-pub(super) fn branch_exists(runner: &dyn Runner, name: &str) -> Result<bool> {
-    let bookmarks = local_branches(runner)?;
+pub(super) fn branch_exists(runner: &dyn Runner, cwd: &Path, name: &str) -> Result<bool> {
+    let bookmarks = local_branches(runner, cwd)?;
     Ok(bookmarks.iter().any(|b| b == name))
 }
 
@@ -242,17 +236,16 @@ pub(super) fn branch_exists(runner: &dyn Runner, name: &str) -> Result<bool> {
 /// auth prompt, or a timeout all map to `Ok(false)` so `ws new` never
 /// blocks on the probe (and we never fall back to an expensive
 /// `jj git fetch` just to answer an existence question).
-pub(super) fn remote_branch_exists(runner: &dyn Runner, name: &str) -> Result<bool> {
-    let Ok(root) = repo_root(runner) else {
+pub(super) fn remote_branch_exists(runner: &dyn Runner, cwd: &Path, name: &str) -> Result<bool> {
+    let Ok(root) = repo_root(runner, cwd) else {
         return Ok(false);
     };
     if !root.join(".git").exists() {
         return Ok(false);
     }
-    let cwd = std::env::current_dir()?;
     match runner.run(
         Cmd::new("git")
-            .in_dir(&cwd)
+            .in_dir(cwd)
             .args(["ls-remote", "--heads", "origin", name])
             .env("GIT_TERMINAL_PROMPT", "0")
             .timeout(Duration::from_secs(10)),
@@ -263,14 +256,14 @@ pub(super) fn remote_branch_exists(runner: &dyn Runner, name: &str) -> Result<bo
 }
 
 /// Rename a bookmark. `jj bookmark rename` is a direct equivalent.
-pub(super) fn rename_branch(runner: &dyn Runner, old: &str, new: &str) -> Result<()> {
-    super::exec(runner, &["bookmark", "rename", old, new])
+pub(super) fn rename_branch(runner: &dyn Runner, cwd: &Path, old: &str, new: &str) -> Result<()> {
+    super::exec(runner, cwd, &["bookmark", "rename", old, new])
 }
 
 /// Delete a bookmark. jj has no "force" flag — the `_force` parameter is
 /// accepted for trait parity but is a no-op here. (jj's `bookmark delete`
 /// is already safe: it just removes the local pointer; the commits remain
 /// reachable via `change_id` and `op log`.)
-pub(super) fn delete_branch(runner: &dyn Runner, name: &str, _force: bool) -> Result<()> {
-    super::exec(runner, &["bookmark", "delete", name])
+pub(super) fn delete_branch(runner: &dyn Runner, cwd: &Path, name: &str, _force: bool) -> Result<()> {
+    super::exec(runner, cwd, &["bookmark", "delete", name])
 }

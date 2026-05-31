@@ -2,7 +2,7 @@
 // vcs/git/repo - Repository identity (root, name, branch, commit, trunk)
 // ===========================================================================
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use vcs_runner::{Cmd, RunError, Runner};
@@ -17,10 +17,9 @@ use crate::vcs::error::{Error, Result};
 /// in. Note: this is **not** equivalent to `vcs_runner::detect_vcs`, which
 /// finds the nearest `.git`/`.jj` ancestor and would point at the worktree's
 /// own gitdir instead.
-pub(super) fn repo_root(runner: &dyn Runner) -> Result<PathBuf> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn repo_root(runner: &dyn Runner, cwd: &Path) -> Result<PathBuf> {
     let out = runner
-        .run(Cmd::new("git").in_dir(&cwd).args(["rev-parse", "--git-common-dir"]))
+        .run(Cmd::new("git").in_dir(cwd).args(["rev-parse", "--git-common-dir"]))
         .map_err(|e| match e {
             // Outside-a-repo is the most common failure here; collapse it to
             // the friendly NotInRepo variant rather than the raw git stderr.
@@ -30,10 +29,12 @@ pub(super) fn repo_root(runner: &dyn Runner) -> Result<PathBuf> {
 
     let git_dir = PathBuf::from(out.stdout_lossy().trim());
 
+    // Resolve a relative `--git-common-dir` against the same directory the
+    // command ran in (was `current_dir()` — identical when `cwd` is `None`).
     let git_dir = if git_dir.is_absolute() {
         git_dir
     } else {
-        std::env::current_dir()?.join(&git_dir)
+        cwd.join(&git_dir)
     };
 
     let git_dir = git_dir.canonicalize().map_err(|_| Error::NotInRepo)?;
@@ -61,8 +62,8 @@ pub(super) fn repo_root(runner: &dyn Runner) -> Result<PathBuf> {
 }
 
 /// Get the directory name of the current repository.
-pub(super) fn repo_name(runner: &dyn Runner) -> Result<String> {
-    let root = repo_root(runner)?;
+pub(super) fn repo_name(runner: &dyn Runner, cwd: &Path) -> Result<String> {
+    let root = repo_root(runner, cwd)?;
     root.file_name()
         .and_then(|n| n.to_str())
         .map(|s| s.to_string())
@@ -74,12 +75,12 @@ pub(super) fn repo_name(runner: &dyn Runner) -> Result<String> {
 /// Format: `{repo_name}-{hash[0:6]}` where hash is derived from the
 /// absolute repo path. Ensures repos with the same directory name living
 /// in different absolute locations get distinct workspace directories.
-pub(super) fn workspace_id(runner: &dyn Runner) -> Result<String> {
+pub(super) fn workspace_id(runner: &dyn Runner, cwd: &Path) -> Result<String> {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
-    let root = repo_root(runner)?;
-    let name = repo_name(runner)?;
+    let root = repo_root(runner, cwd)?;
+    let name = repo_name(runner, cwd)?;
 
     let mut hasher = DefaultHasher::new();
     root.hash(&mut hasher);
@@ -89,10 +90,9 @@ pub(super) fn workspace_id(runner: &dyn Runner) -> Result<String> {
 }
 
 /// Get the current branch name (`HEAD` symbolic ref).
-pub(super) fn current_branch(runner: &dyn Runner) -> Result<String> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn current_branch(runner: &dyn Runner, cwd: &Path) -> Result<String> {
     runner
-        .run(Cmd::new("git").in_dir(&cwd).args(["rev-parse", "--abbrev-ref", "HEAD"]))
+        .run(Cmd::new("git").in_dir(cwd).args(["rev-parse", "--abbrev-ref", "HEAD"]))
         .map(|out| out.stdout_lossy().trim().to_string())
         .map_err(|e| match e {
             RunError::NonZeroExit { .. } => Error::NotInRepo,
@@ -101,10 +101,9 @@ pub(super) fn current_branch(runner: &dyn Runner) -> Result<String> {
 }
 
 /// Get the current HEAD commit hash.
-pub(super) fn current_commit(runner: &dyn Runner) -> Result<String> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn current_commit(runner: &dyn Runner, cwd: &Path) -> Result<String> {
     runner
-        .run(Cmd::new("git").in_dir(&cwd).args(["rev-parse", "HEAD"]))
+        .run(Cmd::new("git").in_dir(cwd).args(["rev-parse", "HEAD"]))
         .map(|out| out.stdout_lossy().trim().to_string())
         .map_err(|e| match e {
             RunError::NonZeroExit { .. } => Error::NotInRepo,
@@ -119,11 +118,10 @@ pub(super) fn current_commit(runner: &dyn Runner) -> Result<String> {
 /// `origin/HEAD` wins because it reflects the upstream's actual default
 /// branch — avoids silently picking `main` when the real trunk is `master`
 /// (or vice versa) just because both happen to exist locally.
-pub(super) fn detect_trunk(runner: &dyn Runner) -> Result<String> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn detect_trunk(runner: &dyn Runner, cwd: &Path) -> Result<String> {
     if let Ok(out) = runner.run(
         Cmd::new("git")
-            .in_dir(&cwd)
+            .in_dir(cwd)
             .args(["symbolic-ref", "refs/remotes/origin/HEAD"]),
     ) {
         let full = out.stdout_lossy().trim().to_string();
@@ -133,7 +131,7 @@ pub(super) fn detect_trunk(runner: &dyn Runner) -> Result<String> {
     }
 
     for branch in ["main", "master"] {
-        if branch_exists(runner, branch)? {
+        if branch_exists(runner, cwd, branch)? {
             return Ok(branch.to_string());
         }
     }
@@ -142,9 +140,8 @@ pub(super) fn detect_trunk(runner: &dyn Runner) -> Result<String> {
 }
 
 /// List all local branch names. One subprocess instead of N `branch_exists` calls.
-pub(super) fn local_branches(runner: &dyn Runner) -> Result<Vec<String>> {
-    let cwd = std::env::current_dir()?;
-    match runner.run(Cmd::new("git").in_dir(&cwd).args([
+pub(super) fn local_branches(runner: &dyn Runner, cwd: &Path) -> Result<Vec<String>> {
+    match runner.run(Cmd::new("git").in_dir(cwd).args([
         "for-each-ref",
         "--format=%(refname:short)",
         "refs/heads/",
@@ -165,12 +162,11 @@ pub(super) fn local_branches(runner: &dyn Runner) -> Result<Vec<String>> {
 /// Check whether a local branch exists. Uses `show-ref --verify --quiet`
 /// — non-zero exit means "no", and we map that to `Ok(false)` rather than
 /// surfacing an error.
-pub(super) fn branch_exists(runner: &dyn Runner, name: &str) -> Result<bool> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn branch_exists(runner: &dyn Runner, cwd: &Path, name: &str) -> Result<bool> {
     let refname = format!("refs/heads/{name}");
     match runner.run(
         Cmd::new("git")
-            .in_dir(&cwd)
+            .in_dir(cwd)
             .args(["show-ref", "--verify", "--quiet", &refname]),
     ) {
         Ok(_) => Ok(true),
@@ -184,12 +180,11 @@ pub(super) fn branch_exists(runner: &dyn Runner, name: &str) -> Result<bool> {
 /// point at; for a plain branch it's a no-op. Used by the CoW resume path
 /// to check out a branch's commit *detached* (so the branch ref stays free
 /// for `git worktree add <path> <branch>`).
-pub(super) fn resolve_commit(runner: &dyn Runner, rev: &str) -> Result<String> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn resolve_commit(runner: &dyn Runner, cwd: &Path, rev: &str) -> Result<String> {
     let out = runner
         .run(
             Cmd::new("git")
-                .in_dir(&cwd)
+                .in_dir(cwd)
                 .args(["rev-parse", "--verify", &format!("{rev}^{{commit}}")]),
         )
         .map_err(map_run_err)?;
@@ -204,11 +199,10 @@ pub(super) fn resolve_commit(runner: &dyn Runner, rev: &str) -> Result<String> {
 /// the probe. `GIT_TERMINAL_PROMPT=0` makes a private remote without
 /// cached credentials fail fast instead of hanging on an interactive
 /// prompt; a 10 s timeout caps a wedged connection.
-pub(super) fn remote_branch_exists(runner: &dyn Runner, name: &str) -> Result<bool> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn remote_branch_exists(runner: &dyn Runner, cwd: &Path, name: &str) -> Result<bool> {
     match runner.run(
         Cmd::new("git")
-            .in_dir(&cwd)
+            .in_dir(cwd)
             .args(["ls-remote", "--heads", "origin", name])
             .env("GIT_TERMINAL_PROMPT", "0")
             .timeout(Duration::from_secs(10)),

@@ -14,6 +14,8 @@
 //   - `fetch` uses `jj git fetch` with retry on transient errors (DNS /
 //     connection / EOF) via `vcs_runner::is_transient_error`.
 
+use std::path::Path;
+
 use vcs_runner::{is_transient_error, Cmd, RetryPolicy, RunError, Runner};
 
 use super::errmap::map_run_err;
@@ -25,8 +27,8 @@ use crate::vcs::error::{Error, Result};
 /// commits rather than blocking the operation. Caller should call
 /// `is_merge_in_progress()` (== "jj st shows conflicts") afterward to
 /// detect that case.
-pub(super) fn rebase(runner: &dyn Runner, onto: &str) -> Result<()> {
-    super::exec(runner, &["rebase", "-d", onto])
+pub(super) fn rebase(runner: &dyn Runner, cwd: &Path, onto: &str) -> Result<()> {
+    super::exec(runner, cwd, &["rebase", "-d", onto])
 }
 
 /// `jj edit <branch>` — move `@` to the named bookmark's commit.
@@ -35,11 +37,11 @@ pub(super) fn rebase(runner: &dyn Runner, onto: &str) -> Result<()> {
 /// that resolves to a commit; we want the stricter "named bookmark"
 /// semantic that matches git's `checkout` behaviour with our locked
 /// decision that managed worktrees always have bookmarks).
-pub(super) fn checkout(runner: &dyn Runner, branch: &str) -> Result<()> {
-    if !super::repo::branch_exists(runner, branch)? {
+pub(super) fn checkout(runner: &dyn Runner, cwd: &Path, branch: &str) -> Result<()> {
+    if !super::repo::branch_exists(runner, cwd, branch)? {
         return Err(Error::BranchNotFound(branch.to_string()));
     }
-    super::exec(runner, &["edit", branch])
+    super::exec(runner, cwd, &["edit", branch])
 }
 
 /// `jj describe -m <message>` — set description on `@`.
@@ -48,8 +50,8 @@ pub(super) fn checkout(runner: &dyn Runner, branch: &str) -> Result<()> {
 /// working-copy commit always exists, and `describe` is how you attach a
 /// message to it. Use after a squash-merge atomicity primitive that
 /// materialises a commit without a description.
-pub(super) fn commit(runner: &dyn Runner, message: &str) -> Result<()> {
-    super::exec(runner, &["describe", "-m", message])
+pub(super) fn commit(runner: &dyn Runner, cwd: &Path, message: &str) -> Result<()> {
+    super::exec(runner, cwd, &["describe", "-m", message])
 }
 
 /// `jj git fetch` with retry on transient network errors.
@@ -59,12 +61,11 @@ pub(super) fn commit(runner: &dyn Runner, message: &str) -> Result<()> {
 /// the plan. Non-zero exits that don't match the transient predicate are
 /// **silently swallowed** to match git's "fetch failing is often not
 /// critical" behaviour. Spawn errors still propagate.
-pub(super) fn fetch(runner: &dyn Runner) -> Result<()> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn fetch(runner: &dyn Runner, cwd: &Path) -> Result<()> {
     let policy = RetryPolicy::default().when(is_transient_error);
     match runner.run(
         Cmd::new("jj")
-            .in_dir(&cwd)
+            .in_dir(cwd)
             .args(["git", "fetch"])
             .retry(policy),
     ) {
@@ -79,13 +80,12 @@ pub(super) fn fetch(runner: &dyn Runner) -> Result<()> {
 /// callers reach it only after `remote_branch_exists` confirmed the
 /// bookmark is there, so a failure here is real. Transient network blips
 /// retry first.
-pub(super) fn fetch_remote_branch(runner: &dyn Runner, branch: &str) -> Result<()> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn fetch_remote_branch(runner: &dyn Runner, cwd: &Path, branch: &str) -> Result<()> {
     let policy = RetryPolicy::default().when(is_transient_error);
     runner
         .run(
             Cmd::new("jj")
-                .in_dir(&cwd)
+                .in_dir(cwd)
                 .args(["git", "fetch", "--remote", "origin", "-b", branch])
                 .retry(policy),
         )
@@ -103,11 +103,10 @@ pub(super) fn fetch_remote_branch(runner: &dyn Runner, branch: &str) -> Result<(
 /// and `merge` to pin the rollback target precisely (more reliable than
 /// `jj op undo`, which only walks back one op and can lose track if a
 /// snapshot op slipped in).
-pub(super) fn capture_op_id(runner: &dyn Runner) -> Result<String> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn capture_op_id(runner: &dyn Runner, cwd: &Path) -> Result<String> {
     let out = runner
         .run(
-            Cmd::new("jj").in_dir(&cwd).args([
+            Cmd::new("jj").in_dir(cwd).args([
                 "op",
                 "log",
                 "-T",
@@ -122,11 +121,8 @@ pub(super) fn capture_op_id(runner: &dyn Runner) -> Result<String> {
 }
 
 /// True iff the commit at `revset` has conflicts.
-fn has_conflict_at(runner: &dyn Runner, revset: &str) -> bool {
-    let Ok(cwd) = std::env::current_dir() else {
-        return false;
-    };
-    let Ok(out) = runner.run(Cmd::new("jj").in_dir(&cwd).args([
+fn has_conflict_at(runner: &dyn Runner, cwd: &Path, revset: &str) -> bool {
+    let Ok(out) = runner.run(Cmd::new("jj").in_dir(cwd).args([
         "log",
         "-r",
         revset,
@@ -157,12 +153,13 @@ fn has_conflict_at(runner: &dyn Runner, revset: &str) -> bool {
 /// plan — documented in AGENTS.md.
 ///
 /// Returns `Ok(true)` if merge would be clean, `Ok(false)` on conflicts.
-pub(super) fn dry_run_merge(runner: &dyn Runner, branch: &str, squash: bool) -> Result<bool> {
-    let pre_op = capture_op_id(runner)?;
+pub(super) fn dry_run_merge(runner: &dyn Runner, cwd: &Path, branch: &str, squash: bool) -> Result<bool> {
+    let pre_op = capture_op_id(runner, cwd)?;
 
     // Pre-flight: already up to date?
     if super::branch::commit_count_via_revset(
         runner,
+        cwd,
         &format!("({branch}) ~ ancestors(@)"),
     )? == 0
     {
@@ -171,17 +168,17 @@ pub(super) fn dry_run_merge(runner: &dyn Runner, branch: &str, squash: bool) -> 
 
     // Materialise the merge. Use a sentinel description so we can identify
     // the dry-run op in audits if someone reads `jj op log`.
-    let new_result = super::exec(runner, &["new", "-m", "WT-DRY-RUN", "@", branch]);
+    let new_result = super::exec(runner, cwd, &["new", "-m", "WT-DRY-RUN", "@", branch]);
 
     // Whether or not `jj new` itself errored, attempt rollback before
     // returning. If the new command produced a conflicted commit, jj returns
     // 0 exit but `jj log -r @ -T conflict` says "true".
-    let conflicted_at = has_conflict_at(runner, "@");
-    let conflicted_parent = squash && has_conflict_at(runner, "@-");
+    let conflicted_at = has_conflict_at(runner, cwd, "@");
+    let conflicted_parent = squash && has_conflict_at(runner, cwd, "@-");
     let clean = !conflicted_at && !conflicted_parent && new_result.is_ok();
 
     // Roll back precisely. `jj op restore` errors are best-effort logged.
-    let _ = super::exec(runner, &["op", "restore", &pre_op]);
+    let _ = super::exec(runner, cwd, &["op", "restore", &pre_op]);
 
     match new_result {
         Ok(_) => Ok(clean),
@@ -224,6 +221,7 @@ pub(super) fn dry_run_merge(runner: &dyn Runner, branch: &str, squash: bool) -> 
 /// command-layer pre-check.
 pub(super) fn merge(
     runner: &dyn Runner,
+    cwd: &Path,
     branch: &str,
     dest_bookmark: &str,
     squash: bool,
@@ -235,6 +233,7 @@ pub(super) fn merge(
     // when `ws sync` calls merge() on an up-to-date worktree.
     if super::branch::commit_count_via_revset(
         runner,
+        cwd,
         &format!("({branch}) ~ ancestors(@)"),
     )? == 0
     {
@@ -253,24 +252,26 @@ pub(super) fn merge(
     // Critical: op_id capture goes here, BEFORE any mutation, so a failure
     // at any subsequent step can restore the full pre-merge state in one
     // op_restore — far more reliable than jj op undo's "last op only".
-    let pre_op = capture_op_id(runner)?;
+    let pre_op = capture_op_id(runner, cwd)?;
 
     let msg = message.unwrap_or("(merge)");
 
     let attempt: Result<()> = (|| {
         if squash {
-            super::exec(runner, &["new", "-m", msg, "@", branch])?;
-            super::exec(runner, &["squash", "--into", "@-"])?;
+            super::exec(runner, cwd, &["new", "-m", msg, "@", branch])?;
+            super::exec(runner, cwd, &["squash", "--into", "@-"])?;
             // After squash, the description on @- is the user's <msg>; @ is a
             // new empty change above it. Move the bookmark forward.
             super::exec(
                 runner,
+                cwd,
                 &["bookmark", "move", target_bookmark, "--to", "@-", "--allow-backwards"],
             )?;
         } else {
-            super::exec(runner, &["new", "-m", msg, "@", branch])?;
+            super::exec(runner, cwd, &["new", "-m", msg, "@", branch])?;
             super::exec(
                 runner,
+                cwd,
                 &["bookmark", "move", target_bookmark, "--to", "@", "--allow-backwards"],
             )?;
         }
@@ -281,7 +282,7 @@ pub(super) fn merge(
         // Best-effort rollback to pre-merge state. Errors from op restore
         // are intentionally ignored — bubbling them would mask the original
         // error the user needs to see.
-        let _ = super::exec(runner, &["op", "restore", &pre_op]);
+        let _ = super::exec(runner, cwd, &["op", "restore", &pre_op]);
         return Err(e);
     }
     Ok(())
@@ -293,6 +294,6 @@ pub(super) fn merge(
 /// the last operation. We use `jj op undo` which is precisely "undo the
 /// most recent op". Less precise than the op-id capture in [`dry_run_merge`]
 /// but adequate for `merge.rs` cleanup paths that haven't captured an id.
-pub(super) fn reset_merge(runner: &dyn Runner) -> Result<()> {
-    super::exec(runner, &["op", "undo"])
+pub(super) fn reset_merge(runner: &dyn Runner, cwd: &Path) -> Result<()> {
+    super::exec(runner, cwd, &["op", "undo"])
 }

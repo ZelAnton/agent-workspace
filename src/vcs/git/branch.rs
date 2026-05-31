@@ -11,9 +11,8 @@ use crate::vcs::common::DiffStat;
 use crate::vcs::error::Result;
 
 /// Check if branch is merged into target.
-pub(super) fn is_merged(runner: &dyn Runner, branch: &str, target: &str) -> Result<bool> {
-    let cwd = std::env::current_dir()?;
-    match runner.run(Cmd::new("git").in_dir(&cwd).args(["branch", "--merged", target])) {
+pub(super) fn is_merged(runner: &dyn Runner, cwd: &Path, branch: &str, target: &str) -> Result<bool> {
+    match runner.run(Cmd::new("git").in_dir(cwd).args(["branch", "--merged", target])) {
         Ok(out) => Ok(out
             .stdout_lossy()
             .lines()
@@ -24,32 +23,30 @@ pub(super) fn is_merged(runner: &dyn Runner, branch: &str, target: &str) -> Resu
 }
 
 /// True if `branch` has any committed-or-uncommitted diff from `target`.
-pub(super) fn has_diff_from(runner: &dyn Runner, branch: &str, target: &str) -> Result<bool> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn has_diff_from(runner: &dyn Runner, cwd: &Path, branch: &str, target: &str) -> Result<bool> {
     let range = format!("{target}...{branch}");
     // `git diff --quiet`: exit 0 = no diff, exit 1 = has diff. Exit 1 is a
     // signal, not an error.
-    match runner.run(Cmd::new("git").in_dir(&cwd).args(["diff", "--quiet", &range])) {
+    match runner.run(Cmd::new("git").in_dir(cwd).args(["diff", "--quiet", &range])) {
         Ok(_) => {}
         Err(RunError::NonZeroExit { .. }) => return Ok(true),
         Err(e) => return Err(map_run_err(e)),
     }
 
     // No diff in the tree — check if branch has commits the target lacks.
-    Ok(commit_count(runner, target, branch)? > 0)
+    Ok(commit_count(runner, cwd, target, branch)? > 0)
 }
 
 /// Delete a branch (`-d` / `-D` for force).
-pub(super) fn delete_branch(runner: &dyn Runner, name: &str, force: bool) -> Result<()> {
+pub(super) fn delete_branch(runner: &dyn Runner, cwd: &Path, name: &str, force: bool) -> Result<()> {
     let flag = if force { "-D" } else { "-d" };
-    super::exec(runner, &["branch", flag, name])
+    super::exec(runner, cwd, &["branch", flag, name])
 }
 
 /// Check for any uncommitted changes in the current working directory.
-pub(super) fn has_uncommitted_changes(runner: &dyn Runner) -> Result<bool> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn has_uncommitted_changes(runner: &dyn Runner, cwd: &Path) -> Result<bool> {
     let out = runner
-        .run(Cmd::new("git").in_dir(&cwd).args(["status", "--porcelain"]))
+        .run(Cmd::new("git").in_dir(cwd).args(["status", "--porcelain"]))
         .map_err(map_run_err)?;
     Ok(!out.stdout.is_empty())
 }
@@ -65,10 +62,9 @@ pub(super) fn uncommitted_count_in(runner: &dyn Runner, path: &Path) -> Result<u
 /// Get diff `--shortstat` between two refs (committed changes).
 ///
 /// Output format: `" 3 files changed, 120 insertions(+), 30 deletions(-)"`
-pub(super) fn diff_shortstat(runner: &dyn Runner, from: &str, to: &str) -> Result<DiffStat> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn diff_shortstat(runner: &dyn Runner, cwd: &Path, from: &str, to: &str) -> Result<DiffStat> {
     let range = format!("{from}...{to}");
-    match runner.run(Cmd::new("git").in_dir(&cwd).args(["diff", "--shortstat", &range])) {
+    match runner.run(Cmd::new("git").in_dir(cwd).args(["diff", "--shortstat", &range])) {
         Ok(out) => Ok(parse_shortstat(&out.stdout_lossy())),
         Err(RunError::NonZeroExit { .. }) => Ok(DiffStat::default()),
         Err(e) => Err(map_run_err(e)),
@@ -120,23 +116,22 @@ pub fn parse_shortstat(output: &str) -> DiffStat {
 }
 
 /// True if current branch has any uncommitted changes OR commits ahead of trunk.
-pub(super) fn has_changes_from_trunk(runner: &dyn Runner, trunk: &str) -> Result<bool> {
-    if has_uncommitted_changes(runner)? {
+pub(super) fn has_changes_from_trunk(runner: &dyn Runner, cwd: &Path, trunk: &str) -> Result<bool> {
+    if has_uncommitted_changes(runner, cwd)? {
         return Ok(true);
     }
-    Ok(commit_count(runner, trunk, "HEAD")? > 0)
+    Ok(commit_count(runner, cwd, trunk, "HEAD")? > 0)
 }
 
 /// Rename a branch in place.
-pub(super) fn rename_branch(runner: &dyn Runner, old: &str, new: &str) -> Result<()> {
-    super::exec(runner, &["branch", "-m", old, new])
+pub(super) fn rename_branch(runner: &dyn Runner, cwd: &Path, old: &str, new: &str) -> Result<()> {
+    super::exec(runner, cwd, &["branch", "-m", old, new])
 }
 
 /// Short log of commits between two refs (`git log --oneline from..to`).
-pub(super) fn log_oneline(runner: &dyn Runner, from: &str, to: &str) -> Result<String> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn log_oneline(runner: &dyn Runner, cwd: &Path, from: &str, to: &str) -> Result<String> {
     let range = format!("{from}..{to}");
-    match runner.run(Cmd::new("git").in_dir(&cwd).args(["log", "--oneline", &range])) {
+    match runner.run(Cmd::new("git").in_dir(cwd).args(["log", "--oneline", &range])) {
         Ok(out) => Ok(out.stdout_lossy().to_string()),
         Err(RunError::NonZeroExit { .. }) => Ok(String::new()),
         Err(e) => Err(map_run_err(e)),
@@ -144,10 +139,9 @@ pub(super) fn log_oneline(runner: &dyn Runner, from: &str, to: &str) -> Result<S
 }
 
 /// Count commits in a range (`git rev-list --count from..to`).
-pub(super) fn commit_count(runner: &dyn Runner, from: &str, to: &str) -> Result<usize> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn commit_count(runner: &dyn Runner, cwd: &Path, from: &str, to: &str) -> Result<usize> {
     let range = format!("{from}..{to}");
-    match runner.run(Cmd::new("git").in_dir(&cwd).args(["rev-list", "--count", &range])) {
+    match runner.run(Cmd::new("git").in_dir(cwd).args(["rev-list", "--count", &range])) {
         Ok(out) => Ok(out.stdout_lossy().trim().parse().unwrap_or(0)),
         Err(RunError::NonZeroExit { .. }) => Ok(0),
         Err(e) => Err(map_run_err(e)),

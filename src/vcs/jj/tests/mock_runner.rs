@@ -184,8 +184,15 @@ fn workspace_name_for_path_uses_registered_name_not_basename() {
         );
 
     // The path argument is the same dir jj reported — exercises the equality
-    // branch without going through canonicalize (the dir doesn't exist).
-    let result = workspace_name_for_path(&mock, std::path::Path::new(root_path)).unwrap();
+    // branch without going through canonicalize (the dir doesn't exist). The
+    // cwd arg only feeds `Cmd::in_dir` (the MockRunner matches on args, not
+    // cwd), so any path works.
+    let result = workspace_name_for_path(
+        &mock,
+        std::path::Path::new(root_path), // cwd — only feeds Cmd::in_dir
+        std::path::Path::new(root_path), // the path being looked up
+    )
+    .unwrap();
     assert_eq!(
         result, "feat_x",
         "must use the workspace's registered name, not basename ('x')"
@@ -316,7 +323,12 @@ fn workspace_name_for_path_slash_branch_full_round_trip() {
             ok_str(format!("{path_str}\n")),
         );
 
-    let result = workspace_name_for_path(&mock, std::path::Path::new(path_str)).unwrap();
+    let result = workspace_name_for_path(
+        &mock,
+        std::path::Path::new(path_str), // cwd — only feeds Cmd::in_dir
+        std::path::Path::new(path_str), // the path being looked up
+    )
+    .unwrap();
     assert_eq!(
         result, "feat_x",
         "slash-branch round-trip must return 'feat_x' (registered name), not 'x' (path basename)"

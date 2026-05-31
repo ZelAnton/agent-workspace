@@ -78,6 +78,7 @@ pub(super) fn workspace_name_for(branch: &str) -> String {
 ///      `current_branch()` query inside the workspace returns it.
 pub(super) fn create_worktree(
     runner: &dyn Runner,
+    cwd: &Path,
     path: &Path,
     branch: &str,
     base: &str,
@@ -87,9 +88,9 @@ pub(super) fn create_worktree(
     // one — parity with the git backend. We only refuse when the bookmark
     // is already checked out in another workspace (jj, like git, forbids
     // the same branch being live in two working copies).
-    let branch_already_exists = super::repo::branch_exists(runner, branch)?;
+    let branch_already_exists = super::repo::branch_exists(runner, cwd, branch)?;
     if branch_already_exists {
-        let worktrees = list_worktrees(runner)?;
+        let worktrees = list_worktrees(runner, cwd)?;
         if worktrees.iter().any(|wt| wt.branch.as_deref() == Some(branch)) {
             return Err(Error::WorktreeExists(branch.to_string()));
         }
@@ -105,12 +106,13 @@ pub(super) fn create_worktree(
     // shape exactly so behaviour is consistent across backends.
     let parent = path.parent().unwrap_or(path);
     if std::env::var(crate::cow::DISABLE_COW_ENV).is_err()
-        && let Ok(repo_root) = super::repo::repo_root(runner)
+        && let Ok(repo_root) = super::repo::repo_root(runner, cwd)
         && parent.exists()
         && crate::cow::can_clone(&repo_root, parent)
     {
         return create_worktree_cow(
             runner,
+            cwd,
             &repo_root,
             path,
             branch,
@@ -119,7 +121,7 @@ pub(super) fn create_worktree(
         );
     }
 
-    create_worktree_plain(runner, path, branch, effective_base, branch_already_exists)
+    create_worktree_plain(runner, cwd, path, branch, effective_base, branch_already_exists)
 }
 
 /// Create a workspace from a bookmark that exists only on `origin`: fetch
@@ -133,17 +135,18 @@ pub(super) fn create_worktree(
 /// resulting workspace carries a usable local bookmark.
 pub(super) fn create_worktree_from_remote(
     runner: &dyn Runner,
+    cwd: &Path,
     path: &Path,
     branch: &str,
 ) -> Result<CreateOutcome> {
     eprintln!("  Fetching '{branch}' from origin...");
-    super::ops::fetch_remote_branch(runner, branch)?;
-    let base = if super::repo::branch_exists(runner, branch)? {
+    super::ops::fetch_remote_branch(runner, cwd, branch)?;
+    let base = if super::repo::branch_exists(runner, cwd, branch)? {
         branch.to_string()
     } else {
         format!("{branch}@origin")
     };
-    create_worktree(runner, path, branch, &base)
+    create_worktree(runner, cwd, path, branch, &base)
 }
 
 /// Standard `jj workspace add` — jj materialises the working copy itself.
@@ -154,6 +157,7 @@ pub(super) fn create_worktree_from_remote(
 /// we skip minting a new bookmark.
 fn create_worktree_plain(
     runner: &dyn Runner,
+    cwd: &Path,
     path: &Path,
     branch: &str,
     base: &str,
@@ -166,6 +170,7 @@ fn create_worktree_plain(
     eprintln!("  Running jj workspace add...");
     super::exec(
         runner,
+        cwd,
         &["workspace", "add", "--name", &ws_name, "-r", base, path_arg],
     )?;
 
@@ -182,10 +187,10 @@ fn create_worktree_plain(
     let revset = format!("{ws_name}@");
     if branch_already_exists {
         eprintln!("  Moving bookmark to workspace...");
-        super::exec(runner, &["bookmark", "set", branch, "-r", &revset])?;
+        super::exec(runner, cwd, &["bookmark", "set", branch, "-r", &revset])?;
     } else {
         eprintln!("  Creating bookmark...");
-        super::exec(runner, &["bookmark", "create", branch, "-r", &revset])?;
+        super::exec(runner, cwd, &["bookmark", "create", branch, "-r", &revset])?;
     }
 
     Ok(CreateOutcome::Plain)
@@ -208,6 +213,7 @@ fn create_worktree_plain(
 /// directory.
 fn create_worktree_cow(
     runner: &dyn Runner,
+    cwd: &Path,
     repo_root: &Path,
     path: &Path,
     branch: &str,
@@ -218,12 +224,12 @@ fn create_worktree_cow(
     let path_arg = path_str(path)?;
 
     // 1. Capture pre-op for precise op-log rollback.
-    let pre_op = super::ops::capture_op_id(runner)?;
+    let pre_op = super::ops::capture_op_id(runner, cwd)?;
 
     // 2. Capture source @ change-id (NOT commit-id — change-id survives
     //    snapshot rewrites, so a later `jj edit <change_id>` lands on
     //    whatever the same logical change has become).
-    let orig_change_id = super::repo::current_change_id(runner)?;
+    let orig_change_id = super::repo::current_change_id(runner, cwd)?;
 
     // 3. Resolve `base` to a concrete commit-id BEFORE moving. `base`
     //    may be a local bookmark, remote ref (`origin/main`), revset, or
@@ -243,7 +249,7 @@ fn create_worktree_cow(
     let base_commit = runner
         .run(
             Cmd::new("jj")
-                .in_dir(&std::env::current_dir()?)
+                .in_dir(cwd)
                 .args(["log", "-r", base, "-T", "commit_id", "--no-graph", "--limit", "1"]),
         )
         .map(|out| out.stdout_lossy().trim().to_string())
@@ -256,11 +262,11 @@ fn create_worktree_cow(
 
     // 4. Move source workspace to base. Skip if @ already there
     //    (commit-id equality means @ is on base's commit).
-    let orig_commit = super::repo::current_commit(runner)?;
+    let orig_commit = super::repo::current_commit(runner, cwd)?;
     let needs_move = orig_commit != base_commit;
     if needs_move {
         eprintln!("  Switching to base revision...");
-        super::exec(runner, &["edit", &base_commit])?;
+        super::exec(runner, cwd, &["edit", &base_commit])?;
     }
 
     // Windows uses CopyFileExW which transparently block-clones on ReFS.
@@ -275,6 +281,7 @@ fn create_worktree_cow(
         eprintln!("  Creating workspace skeleton...");
         super::exec(
             runner,
+            cwd,
             &[
                 "workspace",
                 "add",
@@ -340,10 +347,10 @@ fn create_worktree_cow(
         let revset = format!("{ws_name}@");
         if branch_already_exists {
             eprintln!("  Moving bookmark to workspace...");
-            super::exec(runner, &["bookmark", "set", branch, "-r", &revset])?;
+            super::exec(runner, cwd, &["bookmark", "set", branch, "-r", &revset])?;
         } else {
             eprintln!("  Creating bookmark...");
-            super::exec(runner, &["bookmark", "create", branch, "-r", &revset])?;
+            super::exec(runner, cwd, &["bookmark", "create", branch, "-r", &revset])?;
         }
 
         Ok(())
@@ -365,7 +372,7 @@ fn create_worktree_cow(
         Ok(_) => {
             if needs_move {
                 eprintln!("  Restoring source workspace...");
-                if let Err(e) = super::exec(runner, &["edit", &orig_change_id]) {
+                if let Err(e) = super::exec(runner, cwd, &["edit", &orig_change_id]) {
                     eprintln!(
                         "Warning: failed to restore source workspace @ '{orig_change_id}': {e}"
                     );
@@ -373,7 +380,7 @@ fn create_worktree_cow(
             }
         }
         Err(_) => {
-            let _ = super::exec(runner, &["op", "restore", &pre_op]);
+            let _ = super::exec(runner, cwd, &["op", "restore", &pre_op]);
             // Filesystem cleanup may fail on Windows when files are held
             // open by background indexers / antivirus. Logging the
             // failure beats silently leaving an orphan dir that the
@@ -405,10 +412,10 @@ fn create_worktree_cow(
 /// workspace attached but intact, and a `forget` failure (rare once the
 /// dir is gone) is benign — jj's `forget` doesn't require the dir to
 /// exist anyway.
-pub(super) fn remove_worktree(runner: &dyn Runner, path: &Path, _force: bool) -> Result<()> {
+pub(super) fn remove_worktree(runner: &dyn Runner, cwd: &Path, path: &Path, _force: bool) -> Result<()> {
     // Resolve workspace name BEFORE deleting the dir (we need the live
     // workspace list to find which name corresponds to this path).
-    let ws_name = workspace_name_for_path(runner, path)?;
+    let ws_name = workspace_name_for_path(runner, cwd, path)?;
 
     // Step 1: filesystem removal first.
     if path.exists() {
@@ -420,7 +427,7 @@ pub(super) fn remove_worktree(runner: &dyn Runner, path: &Path, _force: bool) ->
     // but if it fails after the fs removal, we log and move on (the
     // user-visible state is "no worktree at this path", which is what
     // remove_worktree promises).
-    let _ = super::exec(runner, &["workspace", "forget", &ws_name]);
+    let _ = super::exec(runner, cwd, &["workspace", "forget", &ws_name]);
 
     Ok(())
 }
@@ -439,12 +446,11 @@ pub(super) struct WorkspaceRow {
 /// List all workspaces with their internal `name` field (which the public
 /// `WorktreeInfo` drops). Used internally for path→name lookups when
 /// removing workspaces by path.
-pub(super) fn list_workspace_rows(runner: &dyn Runner) -> Result<Vec<WorkspaceRow>> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn list_workspace_rows(runner: &dyn Runner, cwd: &Path) -> Result<Vec<WorkspaceRow>> {
     let out = runner
         .run(
             Cmd::new("jj")
-                .in_dir(&cwd)
+                .in_dir(cwd)
                 .args(["workspace", "list", "-T", WORKSPACE_TEMPLATE]),
         )
         .map_err(|e| match e {
@@ -471,7 +477,7 @@ pub(super) fn list_workspace_rows(runner: &dyn Runner) -> Result<Vec<WorkspaceRo
 
         // Resolve path via per-workspace call. Failures skip the row —
         // there's no useful WorkspaceRow without a path.
-        let path = match runner.run(Cmd::new("jj").in_dir(&cwd).args([
+        let path = match runner.run(Cmd::new("jj").in_dir(cwd).args([
             "workspace", "root", "--name", &name,
         ])) {
             Ok(p_out) => PathBuf::from(p_out.stdout_lossy().trim()),
@@ -518,9 +524,9 @@ fn normalize_for_compare(p: &Path) -> PathBuf {
 ///     basename `x`); the re-derived guess would forget the wrong ws.
 ///   - the @ bookmark was deleted (the `branch` field becomes None, but
 ///     the registered ws name is still recoverable from list output).
-pub(super) fn workspace_name_for_path(runner: &dyn Runner, path: &Path) -> Result<String> {
+pub(super) fn workspace_name_for_path(runner: &dyn Runner, cwd: &Path, path: &Path) -> Result<String> {
     let target = normalize_for_compare(path);
-    for row in list_workspace_rows(runner)? {
+    for row in list_workspace_rows(runner, cwd)? {
         let row_normalized = normalize_for_compare(&row.path);
         if row_normalized == target || row.path == target || row.path == path {
             return Ok(row.name);
@@ -536,8 +542,8 @@ pub(super) fn workspace_name_for_path(runner: &dyn Runner, path: &Path) -> Resul
 /// backend-agnostic `WorktreeInfo` shape. The workspace name itself is
 /// dropped here — only `remove_worktree` needs it, and it goes through
 /// the internal helper directly.
-pub(super) fn list_worktrees(runner: &dyn Runner) -> Result<Vec<WorktreeInfo>> {
-    Ok(list_workspace_rows(runner)?
+pub(super) fn list_worktrees(runner: &dyn Runner, cwd: &Path) -> Result<Vec<WorktreeInfo>> {
+    Ok(list_workspace_rows(runner, cwd)?
         .into_iter()
         .map(|row| WorktreeInfo {
             path: row.path,

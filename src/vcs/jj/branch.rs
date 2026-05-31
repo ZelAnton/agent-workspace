@@ -25,12 +25,11 @@ use crate::vcs::error::Result;
 /// so `@-..@` captures exactly what a user thinks of as "uncommitted
 /// changes" — the modifications they've made since the last described
 /// change.
-pub(super) fn has_uncommitted_changes(runner: &dyn Runner) -> Result<bool> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn has_uncommitted_changes(runner: &dyn Runner, cwd: &Path) -> Result<bool> {
     let out = runner
         .run(
             Cmd::new("jj")
-                .in_dir(&cwd)
+                .in_dir(cwd)
                 .args(["diff", "-r", "@-..@", "--summary"]),
         )
         .map_err(map_run_err)?;
@@ -53,11 +52,11 @@ pub(super) fn uncommitted_count_in(runner: &dyn Runner, path: &Path) -> Result<u
 }
 
 /// True iff the working copy has changes OR commits ahead of `trunk`.
-pub(super) fn has_changes_from_trunk(runner: &dyn Runner, trunk: &str) -> Result<bool> {
-    if has_uncommitted_changes(runner)? {
+pub(super) fn has_changes_from_trunk(runner: &dyn Runner, cwd: &Path, trunk: &str) -> Result<bool> {
+    if has_uncommitted_changes(runner, cwd)? {
         return Ok(true);
     }
-    Ok(commit_count(runner, trunk, "@")? > 0)
+    Ok(commit_count(runner, cwd, trunk, "@")? > 0)
 }
 
 /// True iff `@` is a conflicted commit (jj's first-class conflict state).
@@ -71,9 +70,18 @@ pub(super) fn has_changes_from_trunk(runner: &dyn Runner, trunk: &str) -> Result
 /// The string `"There are unresolved conflicts"` has been stable since
 /// jj 0.16. If we need to support older versions later, swap to a regex
 /// over the parenthetical `(conflict)` flag in `jj st` output.
-pub(super) fn is_merge_in_progress(runner: &dyn Runner) -> bool {
-    let Ok(cwd) = std::env::current_dir() else {
-        return false;
+pub(super) fn is_merge_in_progress(runner: &dyn Runner, cwd: Option<&Path>) -> bool {
+    // `None` means "read the live process cwd" — same as the historical
+    // `std::env::current_dir()` call. Best-effort: any cwd-read failure (or
+    // jj failure) collapses to "no merge in progress".
+    let cwd = match cwd {
+        Some(d) => d.to_path_buf(),
+        None => {
+            let Ok(d) = std::env::current_dir() else {
+                return false;
+            };
+            d
+        }
     };
     let Ok(out) = runner.run(Cmd::new("jj").in_dir(&cwd).args(["st"])) else {
         return false;
@@ -88,9 +96,9 @@ pub(super) fn is_merge_in_progress(runner: &dyn Runner) -> bool {
 
 /// True iff `branch`'s bookmark is reachable from `target`'s ancestors —
 /// i.e. branch is fully merged into target.
-pub(super) fn is_merged(runner: &dyn Runner, branch: &str, target: &str) -> Result<bool> {
+pub(super) fn is_merged(runner: &dyn Runner, cwd: &Path, branch: &str, target: &str) -> Result<bool> {
     let revset = format!("ancestors({target}) & {branch}");
-    Ok(commit_count_via_revset(runner, &revset)? > 0)
+    Ok(commit_count_via_revset(runner, cwd, &revset)? > 0)
 }
 
 /// True iff there are any commits divergent between `branch` and `target`.
@@ -98,8 +106,8 @@ pub(super) fn is_merged(runner: &dyn Runner, branch: &str, target: &str) -> Resu
 /// Returns true if either side has commits the other lacks. This unifies
 /// git's "diff or commits-ahead" check into a single revset query — jj
 /// has no working-copy/index split, so the answer is symmetric.
-pub(super) fn has_diff_from(runner: &dyn Runner, branch: &str, target: &str) -> Result<bool> {
-    Ok(commit_count(runner, target, branch)? > 0 || commit_count(runner, branch, target)? > 0)
+pub(super) fn has_diff_from(runner: &dyn Runner, cwd: &Path, branch: &str, target: &str) -> Result<bool> {
+    Ok(commit_count(runner, cwd, target, branch)? > 0 || commit_count(runner, cwd, branch, target)? > 0)
 }
 
 /// Number of commits in `to` that aren't reachable from `from`.
@@ -107,16 +115,15 @@ pub(super) fn has_diff_from(runner: &dyn Runner, branch: &str, target: &str) -> 
 /// Uses the revset `to ~ ancestors(from)` — symmetric with git's
 /// `from..to` range. Returns 0 on revset-resolution errors (mirrors git's
 /// "outside repo / bad ref" tolerance).
-pub(super) fn commit_count(runner: &dyn Runner, from: &str, to: &str) -> Result<usize> {
+pub(super) fn commit_count(runner: &dyn Runner, cwd: &Path, from: &str, to: &str) -> Result<usize> {
     let revset = format!("{to} ~ ancestors({from})");
-    commit_count_via_revset(runner, &revset)
+    commit_count_via_revset(runner, cwd, &revset)
 }
 
 /// Lower-level helper that counts commits matching an arbitrary revset.
-pub(super) fn commit_count_via_revset(runner: &dyn Runner, revset: &str) -> Result<usize> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn commit_count_via_revset(runner: &dyn Runner, cwd: &Path, revset: &str) -> Result<usize> {
     match runner.run(
-        Cmd::new("jj").in_dir(&cwd).args([
+        Cmd::new("jj").in_dir(cwd).args([
             "log",
             "-r",
             revset,
@@ -133,10 +140,9 @@ pub(super) fn commit_count_via_revset(runner: &dyn Runner, revset: &str) -> Resu
 
 /// Short log of commits in `to` that aren't reachable from `from`.
 /// Template matches git's `--oneline`: `<short-id> <description-first-line>`.
-pub(super) fn log_oneline(runner: &dyn Runner, from: &str, to: &str) -> Result<String> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn log_oneline(runner: &dyn Runner, cwd: &Path, from: &str, to: &str) -> Result<String> {
     let revset = format!("{to} ~ ancestors({from})");
-    match runner.run(Cmd::new("jj").in_dir(&cwd).args([
+    match runner.run(Cmd::new("jj").in_dir(cwd).args([
         "log",
         "-r",
         &revset,
@@ -161,10 +167,9 @@ pub(super) fn log_oneline(runner: &dyn Runner, from: &str, to: &str) -> Result<S
 /// `" 3 files changed, 120 insertions(+), 30 deletions(-)"`. We pluck the
 /// last non-empty line and reuse a parser that's structurally identical
 /// to the git one (insertion/deletion keyword match).
-pub(super) fn diff_shortstat(runner: &dyn Runner, from: &str, to: &str) -> Result<DiffStat> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn diff_shortstat(runner: &dyn Runner, cwd: &Path, from: &str, to: &str) -> Result<DiffStat> {
     let range = format!("{from}..{to}");
-    match runner.run(Cmd::new("jj").in_dir(&cwd).args(["diff", "-r", &range, "--stat"])) {
+    match runner.run(Cmd::new("jj").in_dir(cwd).args(["diff", "-r", &range, "--stat"])) {
         Ok(out) => Ok(parse_jj_stat_footer(&out.stdout_lossy())),
         Err(RunError::NonZeroExit { .. }) => Ok(DiffStat::default()),
         Err(e) => Err(map_run_err(e)),

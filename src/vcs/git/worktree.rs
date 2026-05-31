@@ -26,14 +26,15 @@ use crate::vcs::error::{Error, Result};
 /// possible we silently fall back to plain — no warnings, no errors.
 pub(super) fn create_worktree(
     runner: &dyn Runner,
+    cwd: &Path,
     path: &Path,
     branch: &str,
     base: &str,
 ) -> Result<CreateOutcome> {
     // Pre-flight `WorktreeExists` check applies to BOTH paths.
-    let branch_already_exists = super::repo::branch_exists(runner, branch)?;
+    let branch_already_exists = super::repo::branch_exists(runner, cwd, branch)?;
     if branch_already_exists {
-        let worktrees = list_worktrees(runner)?;
+        let worktrees = list_worktrees(runner, cwd)?;
         if worktrees.iter().any(|wt| wt.branch.as_deref() == Some(branch)) {
             return Err(Error::WorktreeExists(branch.to_string()));
         }
@@ -45,14 +46,14 @@ pub(super) fn create_worktree(
     // dispatching here).
     let parent = path.parent().unwrap_or(path);
     if std::env::var(crate::cow::DISABLE_COW_ENV).is_err()
-        && let Ok(repo_root) = super::repo::repo_root(runner)
+        && let Ok(repo_root) = super::repo::repo_root(runner, cwd)
         && parent.exists()
         && crate::cow::can_clone(&repo_root, parent)
     {
-        return create_worktree_cow(runner, &repo_root, path, branch, base, branch_already_exists);
+        return create_worktree_cow(runner, cwd, &repo_root, path, branch, base, branch_already_exists);
     }
 
-    create_worktree_plain(runner, path, branch, base, branch_already_exists)
+    create_worktree_plain(runner, cwd, path, branch, base, branch_already_exists)
 }
 
 /// Create a worktree from a branch that exists only on `origin`: fetch
@@ -63,17 +64,19 @@ pub(super) fn create_worktree(
 /// local `<branch>` tracking the remote.
 pub(super) fn create_worktree_from_remote(
     runner: &dyn Runner,
+    cwd: &Path,
     path: &Path,
     branch: &str,
 ) -> Result<CreateOutcome> {
     eprintln!("  Fetching '{branch}' from origin...");
-    super::ops::fetch_remote_branch(runner, branch)?;
-    create_worktree(runner, path, branch, &format!("origin/{branch}"))
+    super::ops::fetch_remote_branch(runner, cwd, branch)?;
+    create_worktree(runner, cwd, path, branch, &format!("origin/{branch}"))
 }
 
 /// Standard `git worktree add` — git materialises the working copy.
 fn create_worktree_plain(
     runner: &dyn Runner,
+    cwd: &Path,
     path: &Path,
     branch: &str,
     base: &str,
@@ -82,9 +85,9 @@ fn create_worktree_plain(
     let path_arg = path_str(path)?;
     eprintln!("  Running git worktree add...");
     if branch_already_exists {
-        super::exec(runner, &["worktree", "add", path_arg, branch])?;
+        super::exec(runner, cwd, &["worktree", "add", path_arg, branch])?;
     } else {
-        super::exec(runner, &["worktree", "add", "-b", branch, path_arg, base])?;
+        super::exec(runner, cwd, &["worktree", "add", "-b", branch, path_arg, base])?;
     }
     Ok(CreateOutcome::Plain)
 }
@@ -97,6 +100,7 @@ fn create_worktree_plain(
 /// (if any) is deleted and `git worktree prune` clears git's registry.
 fn create_worktree_cow(
     runner: &dyn Runner,
+    cwd: &Path,
     repo_root: &Path,
     path: &Path,
     branch: &str,
@@ -145,10 +149,10 @@ fn create_worktree_cow(
     // `git checkout HEAD` is a no-op (does not restore the original
     // commit after we move HEAD to `base`). Restore via the captured
     // commit hash in that case.
-    let orig_branch = super::repo::current_branch(runner)?;
-    let orig_commit = super::repo::current_commit(runner)?;
+    let orig_branch = super::repo::current_branch(runner, cwd)?;
+    let orig_commit = super::repo::current_commit(runner, cwd)?;
     let is_detached = orig_branch == "HEAD";
-    let needs_stash = super::branch::has_uncommitted_changes(runner)?;
+    let needs_stash = super::branch::has_uncommitted_changes(runner, cwd)?;
 
     // Windows uses CopyFileExW via robocopy which transparently
     // block-clones on ReFS. Linux/macOS use the explicit reflink IOCTLs
@@ -175,7 +179,7 @@ fn create_worktree_cow(
     );
     if needs_stash {
         let t = std::time::Instant::now();
-        super::exec(runner, &["stash", "push", "-u", "-m", &stash_message])?;
+        super::exec(runner, cwd, &["stash", "push", "-u", "-m", &stash_message])?;
         eprintln!(
             "  Stashed uncommitted changes ({}).",
             crate::util::format_step(t.elapsed())
@@ -205,10 +209,10 @@ fn create_worktree_cow(
             // `worktree add <path> <branch>` checks out the branch — yielding
             // a reflink-source tree that mismatches the worktree's HEAD.
             let branch_commit =
-                super::repo::resolve_commit(runner, &format!("refs/heads/{branch}"))?;
+                super::repo::resolve_commit(runner, cwd, &format!("refs/heads/{branch}"))?;
             if orig_commit != branch_commit {
                 let t = std::time::Instant::now();
-                super::exec(runner, &["checkout", "--detach", &branch_commit])?;
+                super::exec(runner, cwd, &["checkout", "--detach", &branch_commit])?;
                 moved_source = true;
                 eprintln!(
                     "  Switched to '{branch}' ({}).",
@@ -217,7 +221,7 @@ fn create_worktree_cow(
             }
         } else if orig_branch != base {
             let t = std::time::Instant::now();
-            super::exec(runner, &["checkout", base])?;
+            super::exec(runner, cwd, &["checkout", base])?;
             moved_source = true;
             eprintln!(
                 "  Switched to '{base}' ({}).",
@@ -230,10 +234,11 @@ fn create_worktree_cow(
         // write any working-tree files.
         let t = std::time::Instant::now();
         let add_result = if branch_already_exists {
-            super::exec(runner, &["worktree", "add", "--no-checkout", path_arg, branch])
+            super::exec(runner, cwd, &["worktree", "add", "--no-checkout", path_arg, branch])
         } else {
             super::exec(
                 runner,
+                cwd,
                 &["worktree", "add", "--no-checkout", "-b", branch, path_arg, base],
             )
         };
@@ -255,7 +260,7 @@ fn create_worktree_cow(
                 // Preserve the structured `cow::Error` via `Error::Cow` so
                 // callers/tests can match the underlying cause.
                 let _ = std::fs::remove_dir_all(path);
-                let _ = super::exec(runner, &["worktree", "prune"]);
+                let _ = super::exec(runner, cwd, &["worktree", "prune"]);
                 return Err(Error::Cow(e));
             }
         };
@@ -312,7 +317,7 @@ fn create_worktree_cow(
     let restore_source = |report: bool| {
         let t = std::time::Instant::now();
         let restored = if needs_restore {
-            match super::exec(runner, &["checkout", restore_target]) {
+            match super::exec(runner, cwd, &["checkout", restore_target]) {
                 Ok(_) => true,
                 Err(e) => {
                     eprintln!("Warning: failed to restore '{restore_target}': {e}");
@@ -324,7 +329,7 @@ fn create_worktree_cow(
         };
         if needs_stash {
             if restored {
-                if let Err(e) = super::exec(runner, &["stash", "pop"]) {
+                if let Err(e) = super::exec(runner, cwd, &["stash", "pop"]) {
                     // Stash pop conflict: user's changes are safe in
                     // `git stash list` but require manual resolution.
                     eprintln!(
@@ -592,28 +597,28 @@ fn refresh_index_batched(path: &Path, started: std::time::Instant) -> Result<()>
 }
 
 /// Remove a worktree.
-pub(super) fn remove_worktree(runner: &dyn Runner, path: &Path, force: bool) -> Result<()> {
+pub(super) fn remove_worktree(runner: &dyn Runner, cwd: &Path, path: &Path, force: bool) -> Result<()> {
     let path_arg = path_str(path)?;
     if force {
-        super::exec(runner, &["worktree", "remove", "--force", path_arg])
+        super::exec(runner, cwd, &["worktree", "remove", "--force", path_arg])
     } else {
-        super::exec(runner, &["worktree", "remove", path_arg])
+        super::exec(runner, cwd, &["worktree", "remove", path_arg])
     }
 }
 
 /// Move a worktree to a new path.
-pub(super) fn move_worktree(runner: &dyn Runner, old_path: &Path, new_path: &Path) -> Result<()> {
+pub(super) fn move_worktree(runner: &dyn Runner, cwd: &Path, old_path: &Path, new_path: &Path) -> Result<()> {
     super::exec(
         runner,
+        cwd,
         &["worktree", "move", path_str(old_path)?, path_str(new_path)?],
     )
 }
 
 /// List all worktrees attached to the repo.
-pub(super) fn list_worktrees(runner: &dyn Runner) -> Result<Vec<WorktreeInfo>> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn list_worktrees(runner: &dyn Runner, cwd: &Path) -> Result<Vec<WorktreeInfo>> {
     let out = runner
-        .run(Cmd::new("git").in_dir(&cwd).args(["worktree", "list", "--porcelain"]))
+        .run(Cmd::new("git").in_dir(cwd).args(["worktree", "list", "--porcelain"]))
         .map_err(|e| match e {
             RunError::NonZeroExit { .. } => Error::NotInRepo,
             other => map_run_err(other),

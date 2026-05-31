@@ -38,15 +38,43 @@ use super::error::{Error, Result};
 /// swap in a `MockRunner` (parser-heavy tests) or `DefaultRunner` (e2e).
 pub struct JjBackend {
     runner: Arc<dyn Runner>,
+    /// Explicit working directory for every jj invocation. `None` means
+    /// "read the live process cwd" — preserving the historical behaviour
+    /// where helpers called `std::env::current_dir()` directly. Mirrors
+    /// `GitBackend::cwd`; see that field for the Stage-1 rationale.
+    cwd: Option<PathBuf>,
 }
 
 impl JjBackend {
     pub fn new() -> Self {
-        Self { runner: Arc::new(DefaultRunner) }
+        Self { runner: Arc::new(DefaultRunner), cwd: None }
     }
 
     pub fn with_runner(runner: Arc<dyn Runner>) -> Self {
-        Self { runner }
+        Self { runner, cwd: None }
+    }
+
+    /// Construct pinned to an explicit working directory. Unused in Stage 1
+    /// but exposed for the follow-up stage; mirrors `GitBackend::at`.
+    #[allow(dead_code)]
+    pub fn at(cwd: PathBuf) -> Self {
+        Self { runner: Arc::new(DefaultRunner), cwd: Some(cwd) }
+    }
+
+    /// As [`with_runner`](Self::with_runner) but pinned to an explicit cwd.
+    #[allow(dead_code)]
+    pub fn with_runner_at(runner: Arc<dyn Runner>, cwd: PathBuf) -> Self {
+        Self { runner, cwd: Some(cwd) }
+    }
+
+    /// Resolve the working directory for a jj invocation. `Some` returns the
+    /// pinned path; `None` falls back to the live process cwd, exactly as the
+    /// helpers used to do via `std::env::current_dir()`.
+    fn dir(&self) -> std::io::Result<PathBuf> {
+        match &self.cwd {
+            Some(d) => Ok(d.clone()),
+            None => std::env::current_dir(),
+        }
     }
 }
 
@@ -58,10 +86,9 @@ impl Default for JjBackend {
 
 /// Run a void jj command (no output parsing). Mirrors `git::exec` from the
 /// git backend. Used by simple mutating ops that only need exit status.
-pub(super) fn exec(runner: &dyn Runner, args: &[&str]) -> Result<()> {
-    let cwd = std::env::current_dir()?;
+pub(super) fn exec(runner: &dyn Runner, cwd: &Path, args: &[&str]) -> Result<()> {
     runner
-        .run(Cmd::new("jj").in_dir(&cwd).args(args))
+        .run(Cmd::new("jj").in_dir(cwd).args(args))
         .map(|_| ())
         .map_err(errmap::map_run_err)
 }
@@ -78,32 +105,32 @@ impl VcsBackend for JjBackend {
     // ===================================================================
     // F-1: Identity + bookmarks — IMPLEMENTED
     // ===================================================================
-    fn repo_root(&self) -> Result<PathBuf> { repo::repo_root(self.runner.as_ref()) }
-    fn repo_name(&self) -> Result<String> { repo::repo_name(self.runner.as_ref()) }
-    fn workspace_id(&self) -> Result<String> { repo::workspace_id(self.runner.as_ref()) }
-    fn current_branch(&self) -> Result<String> { repo::current_branch(self.runner.as_ref()) }
-    fn current_commit(&self) -> Result<String> { repo::current_commit(self.runner.as_ref()) }
-    fn detect_trunk(&self) -> Result<String> { repo::detect_trunk(self.runner.as_ref()) }
+    fn repo_root(&self) -> Result<PathBuf> { repo::repo_root(self.runner.as_ref(), &self.dir()?) }
+    fn repo_name(&self) -> Result<String> { repo::repo_name(self.runner.as_ref(), &self.dir()?) }
+    fn workspace_id(&self) -> Result<String> { repo::workspace_id(self.runner.as_ref(), &self.dir()?) }
+    fn current_branch(&self) -> Result<String> { repo::current_branch(self.runner.as_ref(), &self.dir()?) }
+    fn current_commit(&self) -> Result<String> { repo::current_commit(self.runner.as_ref(), &self.dir()?) }
+    fn detect_trunk(&self) -> Result<String> { repo::detect_trunk(self.runner.as_ref(), &self.dir()?) }
 
-    fn local_branches(&self) -> Result<Vec<String>> { repo::local_branches(self.runner.as_ref()) }
+    fn local_branches(&self) -> Result<Vec<String>> { repo::local_branches(self.runner.as_ref(), &self.dir()?) }
     fn branch_exists(&self, name: &str) -> Result<bool> {
-        repo::branch_exists(self.runner.as_ref(), name)
+        repo::branch_exists(self.runner.as_ref(), &self.dir()?, name)
     }
     fn remote_branch_exists(&self, name: &str) -> Result<bool> {
-        repo::remote_branch_exists(self.runner.as_ref(), name)
+        repo::remote_branch_exists(self.runner.as_ref(), &self.dir()?, name)
     }
     fn rename_branch(&self, old: &str, new: &str) -> Result<()> {
-        repo::rename_branch(self.runner.as_ref(), old, new)
+        repo::rename_branch(self.runner.as_ref(), &self.dir()?, old, new)
     }
     fn delete_branch(&self, name: &str, force: bool) -> Result<()> {
-        repo::delete_branch(self.runner.as_ref(), name, force)
+        repo::delete_branch(self.runner.as_ref(), &self.dir()?, name, force)
     }
 
     // ===================================================================
     // F-2: Workspaces — IMPLEMENTED
     // ===================================================================
     fn list_worktrees(&self) -> Result<Vec<WorktreeInfo>> {
-        worktree::list_worktrees(self.runner.as_ref())
+        worktree::list_worktrees(self.runner.as_ref(), &self.dir()?)
     }
     fn create_worktree(
         &self,
@@ -111,17 +138,17 @@ impl VcsBackend for JjBackend {
         branch: &str,
         base: &str,
     ) -> Result<crate::vcs::common::CreateOutcome> {
-        worktree::create_worktree(self.runner.as_ref(), path, branch, base)
+        worktree::create_worktree(self.runner.as_ref(), &self.dir()?, path, branch, base)
     }
     fn create_worktree_from_remote(
         &self,
         path: &Path,
         branch: &str,
     ) -> Result<crate::vcs::common::CreateOutcome> {
-        worktree::create_worktree_from_remote(self.runner.as_ref(), path, branch)
+        worktree::create_worktree_from_remote(self.runner.as_ref(), &self.dir()?, path, branch)
     }
     fn remove_worktree(&self, path: &Path, force: bool) -> Result<()> {
-        worktree::remove_worktree(self.runner.as_ref(), path, force)
+        worktree::remove_worktree(self.runner.as_ref(), &self.dir()?, path, force)
     }
     /// **Per locked decision**: `ws mv` on jj workspaces is not supported.
     /// jj has no `workspace move` primitive; the manual recipe is "remove
@@ -136,31 +163,31 @@ impl VcsBackend for JjBackend {
     // F-3: Working-copy state + diff — IMPLEMENTED
     // ===================================================================
     fn is_merged(&self, branch: &str, target: &str) -> Result<bool> {
-        branch::is_merged(self.runner.as_ref(), branch, target)
+        branch::is_merged(self.runner.as_ref(), &self.dir()?, branch, target)
     }
     fn has_diff_from(&self, branch: &str, target: &str) -> Result<bool> {
-        branch::has_diff_from(self.runner.as_ref(), branch, target)
+        branch::has_diff_from(self.runner.as_ref(), &self.dir()?, branch, target)
     }
     fn log_oneline(&self, from: &str, to: &str) -> Result<String> {
-        branch::log_oneline(self.runner.as_ref(), from, to)
+        branch::log_oneline(self.runner.as_ref(), &self.dir()?, from, to)
     }
     fn commit_count(&self, from: &str, to: &str) -> Result<usize> {
-        branch::commit_count(self.runner.as_ref(), from, to)
+        branch::commit_count(self.runner.as_ref(), &self.dir()?, from, to)
     }
     fn diff_shortstat(&self, from: &str, to: &str) -> Result<DiffStat> {
-        branch::diff_shortstat(self.runner.as_ref(), from, to)
+        branch::diff_shortstat(self.runner.as_ref(), &self.dir()?, from, to)
     }
     fn diff_shortstat_in(&self, path: &Path) -> Result<DiffStat> {
         branch::diff_shortstat_in(self.runner.as_ref(), path)
     }
     fn has_uncommitted_changes(&self) -> Result<bool> {
-        branch::has_uncommitted_changes(self.runner.as_ref())
+        branch::has_uncommitted_changes(self.runner.as_ref(), &self.dir()?)
     }
     fn uncommitted_count_in(&self, path: &Path) -> Result<usize> {
         branch::uncommitted_count_in(self.runner.as_ref(), path)
     }
     fn has_changes_from_trunk(&self, trunk: &str) -> Result<bool> {
-        branch::has_changes_from_trunk(self.runner.as_ref(), trunk)
+        branch::has_changes_from_trunk(self.runner.as_ref(), &self.dir()?, trunk)
     }
     /// **Per locked decision**: jj operations are atomic; there is no
     /// "rebase in progress" state. Always false.
@@ -168,7 +195,7 @@ impl VcsBackend for JjBackend {
     /// **Per locked decision**: jj treats conflicts as committed state.
     /// Implemented by scanning `jj st` for the unresolved-conflicts marker.
     fn is_merge_in_progress(&self) -> bool {
-        branch::is_merge_in_progress(self.runner.as_ref())
+        branch::is_merge_in_progress(self.runner.as_ref(), self.cwd.as_deref())
     }
 
     // ===================================================================
@@ -182,19 +209,19 @@ impl VcsBackend for JjBackend {
         no_ff: bool,
         message: Option<&str>,
     ) -> Result<()> {
-        ops::merge(self.runner.as_ref(), branch, dest_bookmark, squash, no_ff, message)
+        ops::merge(self.runner.as_ref(), &self.dir()?, branch, dest_bookmark, squash, no_ff, message)
     }
     fn dry_run_merge(&self, branch: &str, squash: bool) -> Result<bool> {
-        ops::dry_run_merge(self.runner.as_ref(), branch, squash)
+        ops::dry_run_merge(self.runner.as_ref(), &self.dir()?, branch, squash)
     }
-    fn rebase(&self, onto: &str) -> Result<()> { ops::rebase(self.runner.as_ref(), onto) }
+    fn rebase(&self, onto: &str) -> Result<()> { ops::rebase(self.runner.as_ref(), &self.dir()?, onto) }
     fn checkout(&self, branch: &str) -> Result<()> {
-        ops::checkout(self.runner.as_ref(), branch)
+        ops::checkout(self.runner.as_ref(), &self.dir()?, branch)
     }
     fn commit(&self, message: &str) -> Result<()> {
-        ops::commit(self.runner.as_ref(), message)
+        ops::commit(self.runner.as_ref(), &self.dir()?, message)
     }
-    fn fetch(&self) -> Result<()> { ops::fetch(self.runner.as_ref()) }
+    fn fetch(&self) -> Result<()> { ops::fetch(self.runner.as_ref(), &self.dir()?) }
 
     /// **Per locked decision**: jj has no in-progress state. Return
     /// `Unsupported` with a guidance message; `ws sync` will surface this
@@ -219,7 +246,7 @@ impl VcsBackend for JjBackend {
             "jj: merge_continue — jj records conflicts in commits; resolve files and re-run".into(),
         ))
     }
-    fn reset_merge(&self) -> Result<()> { ops::reset_merge(self.runner.as_ref()) }
+    fn reset_merge(&self) -> Result<()> { ops::reset_merge(self.runner.as_ref(), &self.dir()?) }
 }
 
 #[cfg(test)]
