@@ -61,6 +61,15 @@ impl GitBackend {
         Self { runner, cwd: None }
     }
 
+    /// Construct a backend anchored at an explicit `cwd` using the real
+    /// runner. Test-only: lets each unit test point a `GitBackend` at its own
+    /// `TempDir` without mutating the process current-directory, so the suites
+    /// run in parallel.
+    #[cfg(test)]
+    pub(crate) fn at(cwd: PathBuf) -> Self {
+        Self { runner: Arc::new(DefaultRunner), cwd: Some(cwd) }
+    }
+
     /// Resolve the working directory for a git invocation. `Some` returns the
     /// pinned path; `None` falls back to the live process cwd, exactly as the
     /// helpers used to do via `std::env::current_dir()`.

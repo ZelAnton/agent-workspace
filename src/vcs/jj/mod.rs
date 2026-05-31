@@ -54,6 +54,15 @@ impl JjBackend {
         Self { runner, cwd: None }
     }
 
+    /// Construct a backend anchored at an explicit `cwd` using the real
+    /// runner. Test-only: lets each e2e test point a `JjBackend` at its own
+    /// `TempDir` without mutating the process current-directory, so the suites
+    /// run in parallel.
+    #[cfg(test)]
+    pub(crate) fn at(cwd: PathBuf) -> Self {
+        Self { runner: Arc::new(DefaultRunner), cwd: Some(cwd) }
+    }
+
     /// Resolve the working directory for a jj invocation. `Some` returns the
     /// pinned path; `None` falls back to the live process cwd, exactly as the
     /// helpers used to do via `std::env::current_dir()`.

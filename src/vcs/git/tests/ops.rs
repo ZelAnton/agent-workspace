@@ -1,6 +1,6 @@
 use std::process::Command as StdCommand;
 
-use super::{backend, setup_test_repo, with_cwd};
+use super::{backend_at, setup_test_repo};
 use crate::vcs::backend::VcsBackend;
 use crate::vcs::error::Error;
 
@@ -10,90 +10,72 @@ use crate::vcs::error::Error;
 #[test]
 fn test_has_uncommitted_changes_clean() {
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        let has_changes = backend().has_uncommitted_changes();
-        assert!(has_changes.is_ok());
-        assert!(!has_changes.unwrap());
-    });
+    let has_changes = backend_at(dir.path()).has_uncommitted_changes();
+    assert!(has_changes.is_ok());
+    assert!(!has_changes.unwrap());
 }
 
 #[test]
 fn test_has_uncommitted_changes_dirty() {
     let dir = setup_test_repo();
     std::fs::write(dir.path().join("new_file.txt"), "content").unwrap();
-    with_cwd(dir.path(), || {
-        let has_changes = backend().has_uncommitted_changes();
-        assert!(has_changes.is_ok());
-        assert!(has_changes.unwrap());
-    });
+    let has_changes = backend_at(dir.path()).has_uncommitted_changes();
+    assert!(has_changes.is_ok());
+    assert!(has_changes.unwrap());
 }
 
 #[test]
 fn test_list_worktrees() {
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        let worktrees = backend().list_worktrees();
-        assert!(worktrees.is_ok());
-        let list = worktrees.unwrap();
-        assert!(!list.is_empty());
-        assert_eq!(list[0].branch, Some("main".to_string()));
-    });
+    let worktrees = backend_at(dir.path()).list_worktrees();
+    assert!(worktrees.is_ok());
+    let list = worktrees.unwrap();
+    assert!(!list.is_empty());
+    assert_eq!(list[0].branch, Some("main".to_string()));
 }
 
 #[test]
 fn test_is_rebase_in_progress() {
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        assert!(!backend().is_rebase_in_progress());
-    });
+    assert!(!backend_at(dir.path()).is_rebase_in_progress());
 }
 
 #[test]
 fn test_is_merge_in_progress() {
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        assert!(!backend().is_merge_in_progress());
-    });
+    assert!(!backend_at(dir.path()).is_merge_in_progress());
 }
 
 #[test]
 fn test_log_oneline() {
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        let log = backend().log_oneline("HEAD", "HEAD");
-        assert!(log.is_ok());
-        assert!(log.unwrap().is_empty());
-    });
+    let log = backend_at(dir.path()).log_oneline("HEAD", "HEAD");
+    assert!(log.is_ok());
+    assert!(log.unwrap().is_empty());
 }
 
 #[test]
 fn test_commit_count() {
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        let count = backend().commit_count("HEAD", "HEAD");
-        assert!(count.is_ok());
-        assert_eq!(count.unwrap(), 0);
-    });
+    let count = backend_at(dir.path()).commit_count("HEAD", "HEAD");
+    assert!(count.is_ok());
+    assert_eq!(count.unwrap(), 0);
 }
 
 #[test]
 fn test_fetch() {
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        // No remote, but fetch silently swallows non-zero exit by design.
-        let result = backend().fetch();
-        assert!(result.is_ok());
-    });
+    // No remote, but fetch silently swallows non-zero exit by design.
+    let result = backend_at(dir.path()).fetch();
+    assert!(result.is_ok());
 }
 
 #[test]
 fn test_is_merged() {
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        let result = backend().is_merged("main", "main");
-        assert!(result.is_ok());
-        assert!(result.unwrap());
-    });
+    let result = backend_at(dir.path()).is_merged("main", "main");
+    assert!(result.is_ok());
+    assert!(result.unwrap());
 }
 
 // ---------------------------------------------------------------------------
@@ -105,16 +87,14 @@ fn test_create_and_remove_worktree() {
     let wt_path = dir.path().join("worktrees").join("feature");
     std::fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
 
-    with_cwd(dir.path(), || {
-        let b = backend();
-        let result = b.create_worktree(&wt_path, "feature-branch", "main");
-        assert!(result.is_ok());
-        assert!(wt_path.exists());
-        assert!(b.branch_exists("feature-branch").unwrap());
+    let b = backend_at(dir.path());
+    let result = b.create_worktree(&wt_path, "feature-branch", "main");
+    assert!(result.is_ok());
+    assert!(wt_path.exists());
+    assert!(b.branch_exists("feature-branch").unwrap());
 
-        let result = b.remove_worktree(&wt_path, false);
-        assert!(result.is_ok());
-    });
+    let result = b.remove_worktree(&wt_path, false);
+    assert!(result.is_ok());
 }
 
 #[test]
@@ -124,13 +104,11 @@ fn test_create_worktree_duplicate() {
     let wt_path2 = dir.path().join("worktrees").join("dup2");
     std::fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
 
-    with_cwd(dir.path(), || {
-        let b = backend();
-        b.create_worktree(&wt_path, "dup-branch", "main").unwrap();
-        let result = b.create_worktree(&wt_path2, "dup-branch", "main");
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), Error::WorktreeExists(_)));
-    });
+    let b = backend_at(dir.path());
+    b.create_worktree(&wt_path, "dup-branch", "main").unwrap();
+    let result = b.create_worktree(&wt_path2, "dup-branch", "main");
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), Error::WorktreeExists(_)));
 }
 
 // ---------------------------------------------------------------------------
@@ -145,13 +123,11 @@ fn test_rename_branch() {
         .output()
         .unwrap();
 
-    with_cwd(dir.path(), || {
-        let b = backend();
-        let result = b.rename_branch("old-name", "new-name");
-        assert!(result.is_ok());
-        assert!(!b.branch_exists("old-name").unwrap());
-        assert!(b.branch_exists("new-name").unwrap());
-    });
+    let b = backend_at(dir.path());
+    let result = b.rename_branch("old-name", "new-name");
+    assert!(result.is_ok());
+    assert!(!b.branch_exists("old-name").unwrap());
+    assert!(b.branch_exists("new-name").unwrap());
 }
 
 #[test]
@@ -163,13 +139,11 @@ fn test_delete_branch() {
         .output()
         .unwrap();
 
-    with_cwd(dir.path(), || {
-        let b = backend();
-        assert!(b.branch_exists("to-delete").unwrap());
-        let result = b.delete_branch("to-delete", false);
-        assert!(result.is_ok());
-        assert!(!b.branch_exists("to-delete").unwrap());
-    });
+    let b = backend_at(dir.path());
+    assert!(b.branch_exists("to-delete").unwrap());
+    let result = b.delete_branch("to-delete", false);
+    assert!(result.is_ok());
+    assert!(!b.branch_exists("to-delete").unwrap());
 }
 
 #[test]
@@ -181,12 +155,10 @@ fn test_checkout() {
         .output()
         .unwrap();
 
-    with_cwd(dir.path(), || {
-        let b = backend();
-        let result = b.checkout("other-branch");
-        assert!(result.is_ok());
-        assert_eq!(b.current_branch().unwrap(), "other-branch");
-    });
+    let b = backend_at(dir.path());
+    let result = b.checkout("other-branch");
+    assert!(result.is_ok());
+    assert_eq!(b.current_branch().unwrap(), "other-branch");
 }
 
 // ---------------------------------------------------------------------------
@@ -195,46 +167,36 @@ fn test_checkout() {
 #[test]
 fn test_rebase_abort_no_rebase() {
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        let result = backend().rebase_abort();
-        assert!(result.is_err());
-    });
+    let result = backend_at(dir.path()).rebase_abort();
+    assert!(result.is_err());
 }
 
 #[test]
 fn test_merge_abort_no_merge() {
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        let result = backend().merge_abort();
-        assert!(result.is_err());
-    });
+    let result = backend_at(dir.path()).merge_abort();
+    assert!(result.is_err());
 }
 
 #[test]
 fn test_reset_merge_clean_repo() {
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        let result = backend().reset_merge();
-        assert!(result.is_ok());
-    });
+    let result = backend_at(dir.path()).reset_merge();
+    assert!(result.is_ok());
 }
 
 #[test]
 fn test_rebase_continue_no_rebase() {
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        let result = backend().rebase_continue();
-        assert!(result.is_err());
-    });
+    let result = backend_at(dir.path()).rebase_continue();
+    assert!(result.is_err());
 }
 
 #[test]
 fn test_merge_continue_no_merge() {
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        let result = backend().merge_continue();
-        assert!(result.is_err());
-    });
+    let result = backend_at(dir.path()).merge_continue();
+    assert!(result.is_err());
 }
 
 // ---------------------------------------------------------------------------
@@ -249,19 +211,15 @@ fn test_merge_fast_forward() {
         .output()
         .unwrap();
 
-    with_cwd(dir.path(), || {
-        let result = backend().merge("already-merged", "main", false, false, None);
-        let _ = result; // may succeed or be no-op
-    });
+    let result = backend_at(dir.path()).merge("already-merged", "main", false, false, None);
+    let _ = result; // may succeed or be no-op
 }
 
 #[test]
 fn test_rebase_same_branch() {
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        let result = backend().rebase("main");
-        assert!(result.is_ok());
-    });
+    let result = backend_at(dir.path()).rebase("main");
+    assert!(result.is_ok());
 }
 
 // ---------------------------------------------------------------------------
@@ -273,13 +231,11 @@ fn test_remove_worktree_force() {
     let wt_path = dir.path().join("worktrees").join("force-test");
     std::fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
 
-    with_cwd(dir.path(), || {
-        let b = backend();
-        b.create_worktree(&wt_path, "force-branch", "main").unwrap();
-        std::fs::write(wt_path.join("uncommitted.txt"), "changes").unwrap();
-        let result = b.remove_worktree(&wt_path, true);
-        assert!(result.is_ok());
-    });
+    let b = backend_at(dir.path());
+    b.create_worktree(&wt_path, "force-branch", "main").unwrap();
+    std::fs::write(wt_path.join("uncommitted.txt"), "changes").unwrap();
+    let result = b.remove_worktree(&wt_path, true);
+    assert!(result.is_ok());
 }
 
 #[test]
@@ -291,10 +247,8 @@ fn test_delete_branch_force() {
         .output()
         .unwrap();
 
-    with_cwd(dir.path(), || {
-        let result = backend().delete_branch("unmerged-branch", true);
-        assert!(result.is_ok());
-    });
+    let result = backend_at(dir.path()).delete_branch("unmerged-branch", true);
+    assert!(result.is_ok());
 }
 
 // ---------------------------------------------------------------------------
@@ -303,11 +257,9 @@ fn test_delete_branch_force() {
 #[test]
 fn test_has_changes_from_trunk_no_changes() {
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        let has = backend().has_changes_from_trunk("main");
-        assert!(has.is_ok());
-        assert!(!has.unwrap());
-    });
+    let has = backend_at(dir.path()).has_changes_from_trunk("main");
+    assert!(has.is_ok());
+    assert!(!has.unwrap());
 }
 
 #[test]
@@ -334,11 +286,9 @@ fn test_has_changes_from_trunk_with_committed_changes() {
         .output()
         .unwrap();
 
-    with_cwd(dir.path(), || {
-        let has = backend().has_changes_from_trunk("main");
-        assert!(has.is_ok());
-        assert!(has.unwrap(), "Should detect committed changes ahead of trunk");
-    });
+    let has = backend_at(dir.path()).has_changes_from_trunk("main");
+    assert!(has.is_ok());
+    assert!(has.unwrap(), "Should detect committed changes ahead of trunk");
 }
 
 #[test]
@@ -353,9 +303,7 @@ fn test_has_changes_from_trunk_with_uncommitted_changes() {
 
     std::fs::write(dir.path().join("dirty.txt"), "uncommitted").unwrap();
 
-    with_cwd(dir.path(), || {
-        let has = backend().has_changes_from_trunk("main");
-        assert!(has.is_ok());
-        assert!(has.unwrap(), "Should detect uncommitted changes");
-    });
+    let has = backend_at(dir.path()).has_changes_from_trunk("main");
+    assert!(has.is_ok());
+    assert!(has.unwrap(), "Should detect uncommitted changes");
 }

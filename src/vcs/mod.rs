@@ -143,15 +143,6 @@ pub fn step_out_of(doomed: &Path, escape_to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Shared cwd-serialization mutex for backend test suites.
-///
-/// `std::env::current_dir()` is process-global; any test that calls
-/// `set_current_dir` must hold this mutex for the duration. Both
-/// `src/vcs/git/tests` and `src/vcs/jj/tests` lock the **same** mutex so
-/// concurrent jj + git tests don't trample each other.
-#[cfg(test)]
-pub(crate) static CWD_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 #[cfg(test)]
 mod resolve_tests {
     //! Precedence tests for `resolve_backend`. These check the priority

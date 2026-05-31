@@ -10,10 +10,6 @@ use super::*;
 use crate::vcs::backend::VcsBackend;
 use crate::vcs::error::Error;
 
-// CWD_MUTEX moved to `crate::vcs::CWD_MUTEX` so both git and jj test
-// suites lock the same mutex — `std::env::current_dir()` is process-global.
-use crate::vcs::CWD_MUTEX;
-
 // ---------------------------------------------------------------------------
 // Helper: Setup a minimal git repo for testing
 // ---------------------------------------------------------------------------
@@ -62,24 +58,11 @@ pub(super) fn setup_test_repo() -> tempfile::TempDir {
     dir
 }
 
-/// Run a test that mutates cwd, with proper locking.
-pub(super) fn with_cwd<F, T>(path: &Path, f: F) -> T
-where
-    F: FnOnce() -> T,
-{
-    let _guard = CWD_MUTEX.lock().unwrap();
-    let original = std::env::current_dir().unwrap();
-    std::env::set_current_dir(path).unwrap();
-    let result = f();
-    std::env::set_current_dir(original).unwrap();
-    result
-}
-
-/// Construct a fresh `GitBackend` for tests. Uses `DefaultRunner` so the
-/// test exercises real git, matching the project's "validate against the
-/// real binary" testing philosophy.
-fn backend() -> GitBackend {
-    GitBackend::new()
+/// Construct a `GitBackend` anchored at `path` for tests. Uses `DefaultRunner`
+/// (via `GitBackend::at`) so the test exercises real git against an explicit
+/// directory — no process-cwd mutation, so the suite is parallel-safe.
+fn backend_at(path: &Path) -> GitBackend {
+    GitBackend::at(path.to_path_buf())
 }
 
 // ---------------------------------------------------------------------------
@@ -240,56 +223,46 @@ fn test_is_cwd_inside_nonexistent() {
 #[test]
 fn test_repo_root() {
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        let root = backend().repo_root();
-        assert!(root.is_ok());
-        let root_path = root.unwrap();
-        assert!(root_path.exists());
-        assert!(root_path.join(".git").exists());
-    });
+    let root = backend_at(dir.path()).repo_root();
+    assert!(root.is_ok());
+    let root_path = root.unwrap();
+    assert!(root_path.exists());
+    assert!(root_path.join(".git").exists());
 }
 
 #[test]
 fn test_repo_root_not_in_repo() {
     let dir = tempdir().unwrap();
-    with_cwd(dir.path(), || {
-        let root = backend().repo_root();
-        assert!(root.is_err());
-        assert!(matches!(root.unwrap_err(), Error::NotInRepo));
-    });
+    let root = backend_at(dir.path()).repo_root();
+    assert!(root.is_err());
+    assert!(matches!(root.unwrap_err(), Error::NotInRepo));
 }
 
 #[test]
 fn test_repo_name() {
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        let name = backend().repo_name();
-        assert!(name.is_ok());
-        assert!(!name.unwrap().is_empty());
-    });
+    let name = backend_at(dir.path()).repo_name();
+    assert!(name.is_ok());
+    assert!(!name.unwrap().is_empty());
 }
 
 #[test]
 fn test_workspace_id_format() {
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        let id = backend().workspace_id().unwrap();
-        let parts: Vec<&str> = id.rsplitn(2, '-').collect();
-        assert_eq!(parts.len(), 2);
-        assert_eq!(parts[0].len(), 6);
-        assert!(parts[0].chars().all(|c: char| c.is_ascii_hexdigit()));
-    });
+    let id = backend_at(dir.path()).workspace_id().unwrap();
+    let parts: Vec<&str> = id.rsplitn(2, '-').collect();
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0].len(), 6);
+    assert!(parts[0].chars().all(|c: char| c.is_ascii_hexdigit()));
 }
 
 #[test]
 fn test_workspace_id_deterministic() {
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        let b = backend();
-        let id1 = b.workspace_id().unwrap();
-        let id2 = b.workspace_id().unwrap();
-        assert_eq!(id1, id2);
-    });
+    let b = backend_at(dir.path());
+    let id1 = b.workspace_id().unwrap();
+    let id2 = b.workspace_id().unwrap();
+    assert_eq!(id1, id2);
 }
 
 #[test]
@@ -297,8 +270,8 @@ fn test_workspace_id_unique_for_different_paths() {
     let dir1 = setup_test_repo();
     let dir2 = setup_test_repo();
 
-    let id1 = with_cwd(dir1.path(), || backend().workspace_id().unwrap());
-    let id2 = with_cwd(dir2.path(), || backend().workspace_id().unwrap());
+    let id1 = backend_at(dir1.path()).workspace_id().unwrap();
+    let id2 = backend_at(dir2.path()).workspace_id().unwrap();
 
     assert_ne!(id1, id2);
 }
@@ -306,41 +279,33 @@ fn test_workspace_id_unique_for_different_paths() {
 #[test]
 fn test_current_branch() {
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        let branch = backend().current_branch();
-        assert!(branch.is_ok());
-        assert_eq!(branch.unwrap(), "main");
-    });
+    let branch = backend_at(dir.path()).current_branch();
+    assert!(branch.is_ok());
+    assert_eq!(branch.unwrap(), "main");
 }
 
 #[test]
 fn test_detect_trunk() {
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        let trunk = backend().detect_trunk();
-        assert!(trunk.is_ok());
-        assert_eq!(trunk.unwrap(), "main");
-    });
+    let trunk = backend_at(dir.path()).detect_trunk();
+    assert!(trunk.is_ok());
+    assert_eq!(trunk.unwrap(), "main");
 }
 
 #[test]
 fn test_branch_exists_true() {
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        let exists = backend().branch_exists("main");
-        assert!(exists.is_ok());
-        assert!(exists.unwrap());
-    });
+    let exists = backend_at(dir.path()).branch_exists("main");
+    assert!(exists.is_ok());
+    assert!(exists.unwrap());
 }
 
 #[test]
 fn test_branch_exists_false() {
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        let exists = backend().branch_exists("nonexistent-branch-12345");
-        assert!(exists.is_ok());
-        assert!(!exists.unwrap());
-    });
+    let exists = backend_at(dir.path()).branch_exists("nonexistent-branch-12345");
+    assert!(exists.is_ok());
+    assert!(!exists.unwrap());
 }
 
 // ---------------------------------------------------------------------------
@@ -382,25 +347,21 @@ fn setup_repo_with_remote_only_branch() -> (tempfile::TempDir, tempfile::TempDir
 #[test]
 fn test_remote_branch_exists_true_and_false() {
     let (work, _remote) = setup_repo_with_remote_only_branch();
-    with_cwd(work.path(), || {
-        let b = backend();
-        // Not local…
-        assert!(!b.branch_exists("remote-only").unwrap());
-        // …but present on origin (cheap ls-remote, no fetch).
-        assert!(b.remote_branch_exists("remote-only").unwrap());
-        // Exact match only — no prefix false positives, and bogus → false.
-        assert!(!b.remote_branch_exists("remote").unwrap());
-        assert!(!b.remote_branch_exists("bogus-xyz").unwrap());
-    });
+    let b = backend_at(work.path());
+    // Not local…
+    assert!(!b.branch_exists("remote-only").unwrap());
+    // …but present on origin (cheap ls-remote, no fetch).
+    assert!(b.remote_branch_exists("remote-only").unwrap());
+    // Exact match only — no prefix false positives, and bogus → false.
+    assert!(!b.remote_branch_exists("remote").unwrap());
+    assert!(!b.remote_branch_exists("bogus-xyz").unwrap());
 }
 
 #[test]
 fn test_remote_branch_exists_false_without_remote() {
     // No `origin` configured → best-effort Ok(false), never an error.
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        assert!(!backend().remote_branch_exists("anything").unwrap());
-    });
+    assert!(!backend_at(dir.path()).remote_branch_exists("anything").unwrap());
 }
 
 #[test]
@@ -430,21 +391,17 @@ fn test_create_worktree_resume_existing_branch_checks_out_branch_tree() {
     let wt_path = dir.path().join("workspaces").join("feature");
     std::fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
 
-    with_cwd(dir.path(), || {
-        let b = backend();
-        assert!(b.branch_exists("feature").unwrap());
-        // base = "main" (the merge target); the worktree must hold FEATURE's tree.
-        b.create_worktree(&wt_path, "feature", "main").unwrap();
-        assert!(
-            wt_path.join("feature.txt").exists(),
-            "resumed worktree must contain the branch's own file, not base's tree"
-        );
-        assert!(wt_path.join("README.md").exists());
-    });
+    let b = backend_at(dir.path());
+    assert!(b.branch_exists("feature").unwrap());
+    // base = "main" (the merge target); the worktree must hold FEATURE's tree.
+    b.create_worktree(&wt_path, "feature", "main").unwrap();
+    assert!(
+        wt_path.join("feature.txt").exists(),
+        "resumed worktree must contain the branch's own file, not base's tree"
+    );
+    assert!(wt_path.join("README.md").exists());
 
-    with_cwd(&wt_path, || {
-        assert_eq!(backend().current_branch().unwrap(), "feature");
-    });
+    assert_eq!(backend_at(&wt_path).current_branch().unwrap(), "feature");
 }
 
 #[test]
@@ -452,28 +409,24 @@ fn test_create_worktree_from_remote_materializes_branch() {
     let (work, _remote) = setup_repo_with_remote_only_branch();
     let wt_path = work.path().join("workspaces").join("remote-only");
     std::fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
-    with_cwd(work.path(), || {
-        let b = backend();
-        b.create_worktree_from_remote(&wt_path, "remote-only").unwrap();
-        assert!(wt_path.exists(), "worktree dir should exist");
-        assert!(
-            wt_path.join("README.md").exists(),
-            "committed file should be checked out"
-        );
-        // The targeted fetch + create minted a local branch tracking origin.
-        assert!(b.branch_exists("remote-only").unwrap());
-    });
+    let b = backend_at(work.path());
+    b.create_worktree_from_remote(&wt_path, "remote-only").unwrap();
+    assert!(wt_path.exists(), "worktree dir should exist");
+    assert!(
+        wt_path.join("README.md").exists(),
+        "committed file should be checked out"
+    );
+    // The targeted fetch + create minted a local branch tracking origin.
+    assert!(b.branch_exists("remote-only").unwrap());
 }
 
 #[test]
 fn test_current_commit() {
     let dir = setup_test_repo();
-    with_cwd(dir.path(), || {
-        let commit = backend().current_commit();
-        assert!(commit.is_ok());
-        let hash = commit.unwrap();
-        assert_eq!(hash.len(), 40);
-    });
+    let commit = backend_at(dir.path()).current_commit();
+    assert!(commit.is_ok());
+    let hash = commit.unwrap();
+    assert_eq!(hash.len(), 40);
 }
 
 // ---------------------------------------------------------------------------

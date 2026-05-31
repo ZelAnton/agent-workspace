@@ -3,8 +3,9 @@
 // ===========================================================================
 //
 // Existing GitBackend tests run against the real `git` binary via
-// `setup_test_repo` + `with_cwd` — that's the project's primary testing
-// philosophy ("validate against the real tool"). The MockRunner pattern
+// `setup_test_repo` + a backend anchored at the temp dir (`backend_at`) —
+// that's the project's primary testing philosophy ("validate against the
+// real tool"). The MockRunner pattern
 // here is opt-in for cases where:
 //   - The logic under test is mostly argument-construction + output-parsing
 //     and doesn't need real-git side effects to validate.
@@ -26,9 +27,9 @@ use crate::vcs::error::Error;
 
 #[test]
 fn current_branch_parses_mock_stdout() {
-    // The CWD_MUTEX in this thread is NOT needed for MockRunner-based tests
-    // — they don't shell out to a real git, so std::env::current_dir() is
-    // only read to populate Cmd::in_dir (the value is otherwise unused).
+    // MockRunner-based tests don't shell out to a real git, so
+    // std::env::current_dir() is only read to populate Cmd::in_dir (the
+    // value is otherwise unused) — no anchoring or cwd serialization needed.
     let mock = MockRunner::new().expect("git rev-parse --abbrev-ref HEAD", ok_str("main\n"));
     let backend = GitBackend::with_runner(Arc::new(mock));
     assert_eq!(backend.current_branch().unwrap(), "main");
