@@ -34,12 +34,12 @@ pub struct RepoInfoArgs {
     refresh: bool,
 }
 
-pub fn run(args: RepoInfoArgs, config: &Config, format: OutputFormat) -> Result<()> {
+pub fn run(args: RepoInfoArgs, config: &Config, format: OutputFormat, repo: &vcs::Repo) -> Result<()> {
     // Resolve which repo we're in. Same lookup as every other `ws`
     // subcommand: the active VCS backend's `repo_root()` follows
     // git/jj worktree gitlinks back to the main repo.
-    let repo_root = vcs::repo_root().map_err(|e| Error::Other(e.to_string()))?;
-    let workspace_id = vcs::workspace_id().map_err(|e| Error::Other(e.to_string()))?;
+    let repo_root = repo.repo_root().map_err(|e| Error::Other(e.to_string()))?;
+    let workspace_id = repo.workspace_id().map_err(|e| Error::Other(e.to_string()))?;
     let project_dir = config.project_dir_for(&workspace_id);
 
     // The cache walks the *same* set of files that the cow-copy step

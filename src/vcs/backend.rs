@@ -31,6 +31,11 @@ pub trait VcsBackend: Send + Sync {
     /// Short backend identifier — `"git"` or `"jj"`.
     fn name(&self) -> &'static str;
 
+    /// Return a boxed clone of this backend pinned to `cwd` (sharing the same
+    /// runner). Lets callers operate in a specific directory without mutating
+    /// the process cwd.
+    fn at_cwd(&self, cwd: std::path::PathBuf) -> Box<dyn VcsBackend>;
+
     // -------------------------------------------------------------------
     // Identity
     // -------------------------------------------------------------------

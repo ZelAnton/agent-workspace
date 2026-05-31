@@ -22,15 +22,15 @@ pub struct LsArgs {
     pub long: bool,
 }
 
-pub fn run(args: LsArgs, config: &Config, format: OutputFormat) -> Result<()> {
-    let workspace_id = vcs::workspace_id()?;
+pub fn run(args: LsArgs, config: &Config, format: OutputFormat, repo: &vcs::Repo) -> Result<()> {
+    let workspace_id = repo.workspace_id()?;
     let wt_dir = config.project_dir_for(&workspace_id);
 
     if !wt_dir.exists() {
         return emit_no_worktrees(format);
     }
 
-    let worktrees = vcs::list_worktrees()?;
+    let worktrees = repo.list_worktrees()?;
 
     let managed: Vec<_> = worktrees
         .iter()
@@ -43,12 +43,12 @@ pub fn run(args: LsArgs, config: &Config, format: OutputFormat) -> Result<()> {
 
     let trunk = config.resolve_trunk();
     // Fetch all local branches once instead of N subprocess calls.
-    let known_branches: HashSet<String> = vcs::local_branches()
+    let known_branches: HashSet<String> = repo.local_branches()
         .unwrap_or_default()
         .into_iter()
         .collect();
 
-    let current = vcs::current_branch().ok();
+    let current = repo.current_branch().ok();
     let home = dirs::home_dir();
 
     let mut rows: Vec<LsItem> = Vec::new();
@@ -69,14 +69,14 @@ pub fn run(args: LsArgs, config: &Config, format: OutputFormat) -> Result<()> {
             &trunk,
         );
 
-        let uncommitted = vcs::uncommitted_count_in(&wt.path).unwrap_or(0);
-        let commits = vcs::commit_count(&effective_target, branch).unwrap_or(0);
+        let uncommitted = repo.uncommitted_count_in(&wt.path).unwrap_or(0);
+        let commits = repo.commit_count(&effective_target, branch).unwrap_or(0);
 
-        let c = vcs::diff_shortstat(&effective_target, branch).unwrap_or(vcs::DiffStat {
+        let c = repo.diff_shortstat(&effective_target, branch).unwrap_or(vcs::DiffStat {
             insertions: 0,
             deletions: 0,
         });
-        let u = vcs::diff_shortstat_in(&wt.path).unwrap_or(vcs::DiffStat {
+        let u = repo.diff_shortstat_in(&wt.path).unwrap_or(vcs::DiffStat {
             insertions: 0,
             deletions: 0,
         });

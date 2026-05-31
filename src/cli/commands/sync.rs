@@ -30,20 +30,20 @@ pub struct SyncArgs {
     abort: bool,
 }
 
-pub fn run(args: SyncArgs, config: &Config) -> Result<()> {
+pub fn run(args: SyncArgs, config: &Config, repo: &vcs::Repo) -> Result<()> {
     // jj has no "in progress" state — conflicts are recorded into commits
     // and resolved by editing files directly. --abort / --continue have no
     // direct analog. We detect "conflicts present" via is_merge_in_progress
     // (which jj implements as "jj st shows unresolved conflicts") and
     // surface a clear hint instead of silently failing.
-    let is_jj = vcs::backend_name() == "jj";
+    let is_jj = repo.backend_name() == "jj";
 
     if args.abort {
-        if vcs::is_rebase_in_progress() {
+        if repo.is_rebase_in_progress() {
             eprintln!("Aborting rebase...");
-            vcs::rebase_abort()?;
+            repo.rebase_abort()?;
             eprintln!("Rebase aborted.");
-        } else if vcs::is_merge_in_progress() {
+        } else if repo.is_merge_in_progress() {
             if is_jj {
                 return Err(Error::Other(
                     "jj records conflicts in commits — there's no in-progress merge to abort.\n\
@@ -53,7 +53,7 @@ pub fn run(args: SyncArgs, config: &Config) -> Result<()> {
                 ));
             }
             eprintln!("Aborting merge...");
-            vcs::merge_abort()?;
+            repo.merge_abort()?;
             eprintln!("Merge aborted.");
         } else if is_jj {
             return Err(Error::Other(
@@ -69,11 +69,11 @@ pub fn run(args: SyncArgs, config: &Config) -> Result<()> {
     }
 
     if args.r#continue {
-        if vcs::is_rebase_in_progress() {
+        if repo.is_rebase_in_progress() {
             eprintln!("Continuing rebase...");
-            vcs::rebase_continue()?;
+            repo.rebase_continue()?;
             eprintln!("Rebase continued.");
-        } else if vcs::is_merge_in_progress() {
+        } else if repo.is_merge_in_progress() {
             if is_jj {
                 return Err(Error::Other(
                     "jj records conflicts in commits — there's no in-progress merge to continue.\n\
@@ -82,7 +82,7 @@ pub fn run(args: SyncArgs, config: &Config) -> Result<()> {
                 ));
             }
             eprintln!("Continuing merge...");
-            vcs::merge_continue()?;
+            repo.merge_continue()?;
             eprintln!("Merge continued.");
         } else if is_jj {
             return Err(Error::Other(
@@ -96,10 +96,10 @@ pub fn run(args: SyncArgs, config: &Config) -> Result<()> {
         return Ok(());
     }
 
-    let current = vcs::current_branch()?;
+    let current = repo.current_branch()?;
 
     if let Some(ref branch) = args.from {
-        if !vcs::branch_exists(branch)? {
+        if !repo.branch_exists(branch)? {
             return Err(Error::Other(format!("Branch '{branch}' does not exist")));
         }
         eprintln!(
@@ -109,13 +109,13 @@ pub fn run(args: SyncArgs, config: &Config) -> Result<()> {
     }
 
     let target = {
-        let workspace_id = vcs::workspace_id()?;
+        let workspace_id = repo.workspace_id()?;
         let wt_dir = config.project_dir_for(&workspace_id);
         meta::resolve_effective_target(
             &wt_dir,
             &current,
             args.from.as_deref(),
-            |b| vcs::branch_exists(b).unwrap_or(false),
+            |b| repo.branch_exists(b).unwrap_or(false),
             &config.resolve_trunk(),
         )
     };
@@ -130,14 +130,14 @@ pub fn run(args: SyncArgs, config: &Config) -> Result<()> {
 
     match strategy {
         SyncStrategy::Rebase => {
-            vcs::rebase(&target)?;
+            repo.rebase(&target)?;
             eprintln!("Rebased onto {target}");
         }
         SyncStrategy::Merge => {
             // Sync merges `target` (trunk) INTO the worktree, so the
             // destination bookmark to advance is the worktree's own branch
             // (`current`), not `target`.
-            vcs::merge(&target, &current, false, false, None)?;
+            repo.merge(&target, &current, false, false, None)?;
             eprintln!("Merged {target} into {current}");
         }
     }

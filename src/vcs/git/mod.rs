@@ -108,6 +108,10 @@ impl VcsBackend for GitBackend {
         "git"
     }
 
+    fn at_cwd(&self, cwd: PathBuf) -> Box<dyn VcsBackend> {
+        Box::new(Self { runner: self.runner.clone(), cwd: Some(cwd) })
+    }
+
     // ----- Identity -------------------------------------------------------
     fn repo_root(&self) -> Result<PathBuf> { repo::repo_root(self.runner.as_ref(), &self.dir()?) }
     fn repo_name(&self) -> Result<String> { repo::repo_name(self.runner.as_ref(), &self.dir()?) }

@@ -11,9 +11,9 @@ use crate::config::Config;
 use crate::meta::{self, WorktreeMeta};
 use crate::vcs;
 
-pub fn run(config: &Config, format: OutputFormat) -> Result<()> {
-    let current = vcs::current_branch()?;
-    let workspace_id = vcs::workspace_id()?;
+pub fn run(config: &Config, format: OutputFormat, repo: &vcs::Repo) -> Result<()> {
+    let current = repo.current_branch()?;
+    let workspace_id = repo.workspace_id()?;
     let wt_dir = config.project_dir_for(&workspace_id);
     let wt_path = wt_dir.join(&current);
 
@@ -32,18 +32,18 @@ pub fn run(config: &Config, format: OutputFormat) -> Result<()> {
     let effective_target = meta::resolve_target_branch(
         None,
         base_branch.as_deref(),
-        |b| vcs::branch_exists(b).unwrap_or(false),
+        |b| repo.branch_exists(b).unwrap_or(false),
         &trunk,
     );
 
-    let uncommitted = vcs::uncommitted_count_in(&wt_path).unwrap_or(0);
-    let commits = vcs::commit_count(&effective_target, &current).unwrap_or(0);
+    let uncommitted = repo.uncommitted_count_in(&wt_path).unwrap_or(0);
+    let commits = repo.commit_count(&effective_target, &current).unwrap_or(0);
 
-    let diff = vcs::diff_shortstat(&effective_target, &current).unwrap_or(vcs::DiffStat {
+    let diff = repo.diff_shortstat(&effective_target, &current).unwrap_or(vcs::DiffStat {
         insertions: 0,
         deletions: 0,
     });
-    let unstaged = vcs::diff_shortstat_in(&wt_path).unwrap_or(vcs::DiffStat {
+    let unstaged = repo.diff_shortstat_in(&wt_path).unwrap_or(vcs::DiffStat {
         insertions: 0,
         deletions: 0,
     });
@@ -59,7 +59,7 @@ pub fn run(config: &Config, format: OutputFormat) -> Result<()> {
         insertions: diff.insertions + unstaged.insertions,
         deletions: diff.deletions + unstaged.deletions,
         path: wt_path.display().to_string(),
-        in_progress: detect_in_progress_state(),
+        in_progress: detect_in_progress_state(repo),
     };
 
     output::emit(&view, format);
@@ -95,12 +95,12 @@ enum InProgressState {
 }
 
 /// Detect the in-progress sync state (git-native; jj records conflicts in `@`).
-fn detect_in_progress_state() -> Option<InProgressState> {
-    if vcs::is_rebase_in_progress() {
+fn detect_in_progress_state(repo: &vcs::Repo) -> Option<InProgressState> {
+    if repo.is_rebase_in_progress() {
         // Only reachable on git — jj always returns false here.
         Some(InProgressState::RebaseSync)
-    } else if vcs::is_merge_in_progress() {
-        if vcs::backend_name() == "jj" {
+    } else if repo.is_merge_in_progress() {
+        if repo.backend_name() == "jj" {
             Some(InProgressState::JjConflicts)
         } else {
             Some(InProgressState::MergeSync)

@@ -24,11 +24,13 @@ pub mod common;
 pub mod error;
 pub mod git;
 pub mod jj;
+pub mod repo;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 pub use backend::VcsBackend;
+pub use repo::Repo;
 pub use common::{path_str, CreateOutcome, DiffStat, WorktreeInfo};
 pub use error::{Error, Result};
 // Pure git helpers re-exported at this level so call sites can write

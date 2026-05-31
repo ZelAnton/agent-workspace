@@ -102,6 +102,10 @@ pub(super) fn exec(runner: &dyn Runner, cwd: &Path, args: &[&str]) -> Result<()>
 impl VcsBackend for JjBackend {
     fn name(&self) -> &'static str { "jj" }
 
+    fn at_cwd(&self, cwd: PathBuf) -> Box<dyn VcsBackend> {
+        Box::new(Self { runner: self.runner.clone(), cwd: Some(cwd) })
+    }
+
     // ===================================================================
     // F-1: Identity + bookmarks — IMPLEMENTED
     // ===================================================================
