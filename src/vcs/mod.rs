@@ -23,12 +23,14 @@ pub mod backend;
 pub mod common;
 pub mod error;
 pub mod git;
+pub mod guard;
 pub mod jj;
 pub mod repo;
 
 use std::path::Path;
 
 pub use backend::VcsBackend;
+pub use guard::WorktreeGuard;
 pub use repo::Repo;
 pub use common::{path_str, CreateOutcome, DiffStat, WorktreeInfo};
 pub use error::{Error, Result};

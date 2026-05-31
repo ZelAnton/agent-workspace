@@ -466,3 +466,38 @@ fn test_parse_shortstat_single_change() {
     assert_eq!(stat.insertions, 1);
     assert_eq!(stat.deletions, 1);
 }
+
+// ---------------------------------------------------------------------------
+// WorktreeGuard — RAII cleanup of a freshly-created worktree (real git repo)
+// ---------------------------------------------------------------------------
+#[test]
+fn worktree_guard_removes_on_drop_but_keep_defuses() {
+    let repo_dir = setup_test_repo();
+    let repo = crate::vcs::Repo::discover(repo_dir.path(), Box::new(GitBackend::new()));
+    // Hold worktrees in a sibling temp dir so they don't nest inside the repo's
+    // own working tree.
+    let wt_root = tempdir().unwrap();
+
+    // Armed guard: dropping it removes the worktree.
+    let armed = wt_root.path().join("armed");
+    repo.create_worktree(&armed, "guard-armed", "main")
+        .expect("create armed worktree");
+    assert!(armed.exists(), "worktree should exist right after creation");
+    {
+        let _guard = repo.guard_worktree(&armed);
+    } // drop here → force-remove
+    assert!(
+        !armed.exists(),
+        "armed guard should remove the worktree on drop"
+    );
+
+    // keep() defuses: the worktree survives the guard going out of scope.
+    let kept = wt_root.path().join("kept");
+    repo.create_worktree(&kept, "guard-kept", "main")
+        .expect("create kept worktree");
+    {
+        let guard = repo.guard_worktree(&kept);
+        guard.keep();
+    }
+    assert!(kept.exists(), "kept guard should leave the worktree in place");
+}

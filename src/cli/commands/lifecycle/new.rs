@@ -246,6 +246,14 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>, format: Out
         }
     };
 
+    // Arm a cleanup guard over the partial-setup window: the worktree exists
+    // now, but the steps below (meta write, copy_files) are fallible. If any of
+    // them returns early — or the process panics — the guard force-removes the
+    // half-created worktree instead of leaking it. Defused (`keep()`) just
+    // before the post_create hook, which deliberately leaves the worktree in
+    // place on failure so the user can fix the hook and resume.
+    let guard = repo.guard_worktree(&wt_path);
+
     let meta = WorktreeMeta::new(base_branch);
     let meta_path = meta::meta_path(wt_dir, &branch);
     meta.save(&meta_path)
@@ -265,6 +273,10 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>, format: Out
         }
         copy_files(&repo_root, &wt_path, config)?;
     }
+
+    // The worktree is now a usable, recorded worktree — keep it from here on,
+    // even if a later step fails.
+    guard.keep();
 
     // Run post_create hooks. On failure, leave the worktree in place — the
     // user usually wants to fix the hook (e.g. install missing tool) and

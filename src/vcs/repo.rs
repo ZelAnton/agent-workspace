@@ -172,6 +172,13 @@ impl Repo {
     pub fn remove_worktree(&self, path: &Path, force: bool) -> Result<()> {
         self.backend.remove_worktree(path, force)
     }
+    /// Arm a [`WorktreeGuard`](super::guard::WorktreeGuard) over `path`: it
+    /// force-removes the worktree on drop until `keep()` is called. Use it to
+    /// make the partial-failure window of worktree creation panic- and
+    /// early-return-safe.
+    pub fn guard_worktree(&self, path: impl Into<PathBuf>) -> super::guard::WorktreeGuard<'_> {
+        super::guard::WorktreeGuard::new(self, path)
+    }
     pub fn move_worktree(&self, old: &Path, new: &Path) -> Result<()> {
         self.backend.move_worktree(old, new)
     }
