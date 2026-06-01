@@ -47,7 +47,23 @@ self-replace = "1"
 tar = "0.4"
 flate2 = "1"
 tempfile = "3"
-vcs-runner = "0.13"
+# VCS layer is built on our published, consolidated crates: `processkit`
+# (async job-backed process runner — kill-on-dispose process trees) and the
+# typed `vcs-git`/`vcs-jj`/`vcs-github` clients that drive the matching CLI on
+# top of it. These replace the former in-house `vcs-runner`/`procpilot` pair.
+processkit = "0.4"
+vcs-git = "0.2"
+vcs-jj = "0.2"
+vcs-github = "0.2"
+# `processkit` (and the vcs-* clients) are async; `ws` therefore runs on a tokio
+# runtime. A `current_thread` runtime suffices (the CLI awaits subprocesses
+# sequentially, no concurrency to exploit) — `rt` gives the runtime +
+# `spawn_blocking`'s blocking pool (used by the CoW reflink copy); `macros`
+# provides `#[tokio::main]`.
+tokio = { version = "1", features = ["rt", "macros"] }
+# The `VcsBackend` trait is object-safe (`Box<dyn VcsBackend>`) AND async, so it
+# needs `#[async_trait]` — matching how `vcs-git` itself defines `GitApi`.
+async-trait = "0.1"
 reflink-copy = "0.1"
 
 # Progress bars for the CoW reflink clone in `ws new`. On 20+ GB monorepos
@@ -79,7 +95,13 @@ ureq = { version = "3", features = ["win-system-proxy"] }
 
 [dev-dependencies]
 filetime = "0.2"
-# vcs-runner re-exports procpilot, but the `testing` feature (MockRunner) is
-# off by default. Pull procpilot directly with `testing` enabled so unit tests
-# in src/vcs/git/ can mock subprocess calls without spawning real git.
-procpilot = { version = "0.8", features = ["testing"] }
+# `tokio`'s test macro for the async unit tests in src/vcs/. (The non-test
+# features are already pulled in by the main `tokio` dependency above.)
+tokio = { version = "1", features = ["rt", "macros"] }
+# processkit ships its `ScriptedRunner`/`RecordingRunner` test doubles in the
+# main crate (always available); the `mock` feature adds the mockall-generated
+# `MockProcessRunner`. vcs-git/vcs-jj re-expose `MockGitApi`/`MockJjApi` behind
+# their own `mock` feature, used to drive the backend unit tests without
+# spawning a real git/jj binary.
+vcs-git = { version = "0.2", features = ["mock"] }
+vcs-jj = { version = "0.2", features = ["mock"] }

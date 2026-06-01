@@ -2,15 +2,20 @@
 // vcs/git - Git backend (the only real implementation today)
 // ===========================================================================
 //
-// `GitBackend` wraps an `Arc<dyn procpilot::Runner>`. Production code uses
-// `DefaultRunner` (spawns real subprocesses); tests can inject `MockRunner`
-// to drive parser logic without a real git binary.
+// `GitBackend` wraps an `Arc<vcs_git::Git<JobRunner>>` — the typed async Git
+// client from the `vcs-git` crate, itself built on `processkit`'s job-backed
+// process runner so a `git` subprocess is never orphaned. Operations the
+// typed client models are delegated straight to it; the handful it doesn't
+// (CoW worktree creation, `log --oneline`, `checkout --detach`, the index
+// plumbing) drop to a raw `processkit::Command` via the `exec`/`capture`
+// helpers below — both honour an explicit working directory, so nothing here
+// mutates the process cwd.
 //
 // The actual per-method implementations live in the submodules (`repo`,
 // `branch`, `worktree`, `ops`). This file is the assembly — it builds the
-// trait impl by delegating each method to a submodule function that takes
-// `&dyn Runner` explicitly. That keeps the bodies testable in isolation
-// and lets us swap runners without touching call sites.
+// trait impl by delegating each method to a submodule function that takes the
+// client + cwd explicitly. That keeps the bodies testable in isolation and
+// lets us swap in a `ScriptedRunner`-backed client without touching call sites.
 
 mod errmap;
 mod repo;
@@ -21,53 +26,55 @@ mod ops;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use vcs_runner::{Cmd, DefaultRunner, Runner};
+use async_trait::async_trait;
+use processkit::{Command, JobRunner, ProcessResult};
+use vcs_git::Git;
 
 use super::backend::VcsBackend;
 use super::common::{DiffStat, WorktreeInfo};
-use super::error::Result;
+use super::error::{Error, Result};
 
-// Re-export pure-function helpers used by tests and (post-Phase B) by any
-// code path that wants to parse fixture text without a backend instance.
+// Re-export pure-function helpers used by tests and by any code path that wants
+// to parse fixture text without a backend instance.
 pub use branch::parse_shortstat;
 pub use errmap::clean_git_error;
 pub use repo::is_cwd_inside;
 pub use worktree::parse_worktree_list;
 
-/// Git-backed [`VcsBackend`]. Stores the subprocess runner so tests can
-/// swap in a `MockRunner`.
+/// The concrete vcs-git client type used in production (real job-backed runner).
+pub(super) type GitClient = Git<JobRunner>;
+
+/// Git-backed [`VcsBackend`]. Holds the shared typed client plus an explicit
+/// working directory for every invocation.
 pub struct GitBackend {
-    runner: Arc<dyn Runner>,
+    git: Arc<GitClient>,
     /// Explicit working directory for every git invocation. `None` means
     /// "read the live process cwd" — preserving the historical behaviour
-    /// where helpers called `std::env::current_dir()` directly (including
-    /// following any `set_current_dir` a command performs). Stage 1 wires
-    /// this through every helper but keeps the constructors producing
-    /// `None`, so nothing changes until a later stage sets it explicitly.
+    /// where helpers called `std::env::current_dir()` directly.
     cwd: Option<PathBuf>,
 }
 
 impl GitBackend {
-    /// Default constructor — uses the real subprocess runner.
+    /// Default constructor — uses the real job-backed runner.
     pub fn new() -> Self {
-        Self { runner: Arc::new(DefaultRunner), cwd: None }
+        Self { git: Arc::new(Git::new()), cwd: None }
     }
 
-    /// Construct with a caller-supplied runner. Exposed (not gated on `cfg(test)`)
-    /// because integration tests under `tests/` and downstream callers may
-    /// want to substitute their own runner — e.g. to record subprocess args
-    /// for debugging.
-    pub fn with_runner(runner: Arc<dyn Runner>) -> Self {
-        Self { runner, cwd: None }
+    /// Construct with a caller-supplied client (e.g. a `ScriptedRunner`-backed
+    /// one in tests). Exposed (not gated on `cfg(test)`) because integration
+    /// tests under `tests/` and downstream callers may want to substitute their
+    /// own runner.
+    pub fn with_client(git: Arc<GitClient>) -> Self {
+        Self { git, cwd: None }
     }
 
-    /// Construct a backend anchored at an explicit `cwd` using the real
-    /// runner. Test-only: lets each unit test point a `GitBackend` at its own
-    /// `TempDir` without mutating the process current-directory, so the suites
-    /// run in parallel.
+    /// Construct a backend anchored at an explicit `cwd` using the real runner.
+    /// Test-only: lets each unit test point a `GitBackend` at its own `TempDir`
+    /// without mutating the process current-directory, so the suites run in
+    /// parallel.
     #[cfg(test)]
     pub(crate) fn at(cwd: PathBuf) -> Self {
-        Self { runner: Arc::new(DefaultRunner), cwd: Some(cwd) }
+        Self { git: Arc::new(Git::new()), cwd: Some(cwd) }
     }
 
     /// Resolve the working directory for a git invocation. `Some` returns the
@@ -79,6 +86,11 @@ impl GitBackend {
             None => std::env::current_dir(),
         }
     }
+
+    /// The shared typed client.
+    fn git(&self) -> &GitClient {
+        &self.git
+    }
 }
 
 impl Default for GitBackend {
@@ -87,86 +99,121 @@ impl Default for GitBackend {
     }
 }
 
-/// Run a void git command (no output parsing). Used by simple mutating ops
-/// that just need to bubble up the exit status. Kept `pub(super)` so the
-/// submodule files can call it without re-implementing the `Cmd` builder
-/// boilerplate in every function.
-pub(super) fn exec(runner: &dyn Runner, cwd: &Path, args: &[&str]) -> Result<()> {
-    runner
-        .run(Cmd::new("git").in_dir(cwd).args(args))
-        .map(|_| ())
-        .map_err(errmap::map_run_err)
+// ---------------------------------------------------------------------------
+// Raw-command helpers (used by ops the vcs-git client doesn't model)
+// ---------------------------------------------------------------------------
+
+/// Build a `git <args>` command pinned to `cwd`.
+pub(super) fn git_cmd<'a>(cwd: &Path, args: impl IntoIterator<Item = &'a str>) -> Command {
+    Command::new("git").current_dir(cwd).args(args)
 }
 
+/// Run a void git command, erroring on a non-zero exit. We capture the full
+/// `ProcessResult` (rather than using `Command::run`) so a failure can build
+/// its message from BOTH streams — git writes `CONFLICT (content): …` to
+/// stdout, which `processkit::Error::Exit` would otherwise drop.
+pub(super) async fn exec<'a>(cwd: &Path, args: impl IntoIterator<Item = &'a str>) -> Result<()> {
+    let out = git_cmd(cwd, args).output_string().await.map_err(errmap::map_pk_err)?;
+    if out.is_success() {
+        Ok(())
+    } else {
+        Err(Error::Command(errmap::extract_message(out.stderr(), out.stdout().as_bytes())))
+    }
+}
+
+/// Capture a git command's result without erroring on a non-zero exit — for
+/// exit-code-as-answer probes (`diff --quiet`, `show-ref --verify`).
+pub(super) async fn capture<'a>(
+    cwd: &Path,
+    args: impl IntoIterator<Item = &'a str>,
+) -> Result<ProcessResult<String>> {
+    git_cmd(cwd, args).output_string().await.map_err(errmap::map_pk_err)
+}
+
+#[async_trait]
 impl VcsBackend for GitBackend {
     fn name(&self) -> &'static str {
         "git"
     }
 
     fn at_cwd(&self, cwd: PathBuf) -> Box<dyn VcsBackend> {
-        Box::new(Self { runner: self.runner.clone(), cwd: Some(cwd) })
+        Box::new(Self { git: self.git.clone(), cwd: Some(cwd) })
     }
 
     // ----- Identity -------------------------------------------------------
-    fn repo_root(&self) -> Result<PathBuf> { repo::repo_root(self.runner.as_ref(), &self.dir()?) }
-    fn repo_name(&self) -> Result<String> { repo::repo_name(self.runner.as_ref(), &self.dir()?) }
-    fn workspace_id(&self) -> Result<String> { repo::workspace_id(self.runner.as_ref(), &self.dir()?) }
-    fn current_branch(&self) -> Result<String> { repo::current_branch(self.runner.as_ref(), &self.dir()?) }
-    fn current_commit(&self) -> Result<String> { repo::current_commit(self.runner.as_ref(), &self.dir()?) }
-    fn detect_trunk(&self) -> Result<String> { repo::detect_trunk(self.runner.as_ref(), &self.dir()?) }
+    async fn repo_root(&self) -> Result<PathBuf> {
+        repo::repo_root(self.git(), &self.dir()?).await
+    }
+    async fn repo_name(&self) -> Result<String> {
+        repo::repo_name(self.git(), &self.dir()?).await
+    }
+    async fn workspace_id(&self) -> Result<String> {
+        repo::workspace_id(self.git(), &self.dir()?).await
+    }
+    async fn current_branch(&self) -> Result<String> {
+        repo::current_branch(self.git(), &self.dir()?).await
+    }
+    async fn current_commit(&self) -> Result<String> {
+        repo::current_commit(self.git(), &self.dir()?).await
+    }
+    async fn detect_trunk(&self) -> Result<String> {
+        repo::detect_trunk(self.git(), &self.dir()?).await
+    }
 
     // ----- Branches -------------------------------------------------------
-    fn local_branches(&self) -> Result<Vec<String>> { repo::local_branches(self.runner.as_ref(), &self.dir()?) }
-    fn branch_exists(&self, name: &str) -> Result<bool> {
-        repo::branch_exists(self.runner.as_ref(), &self.dir()?, name)
+    async fn local_branches(&self) -> Result<Vec<String>> {
+        repo::local_branches(self.git(), &self.dir()?).await
     }
-    fn remote_branch_exists(&self, name: &str) -> Result<bool> {
-        repo::remote_branch_exists(self.runner.as_ref(), &self.dir()?, name)
+    async fn branch_exists(&self, name: &str) -> Result<bool> {
+        repo::branch_exists(self.git(), &self.dir()?, name).await
     }
-    fn is_merged(&self, branch: &str, target: &str) -> Result<bool> {
-        branch::is_merged(self.runner.as_ref(), &self.dir()?, branch, target)
+    async fn remote_branch_exists(&self, name: &str) -> Result<bool> {
+        repo::remote_branch_exists(self.git(), &self.dir()?, name).await
     }
-    fn has_diff_from(&self, branch: &str, target: &str) -> Result<bool> {
-        branch::has_diff_from(self.runner.as_ref(), &self.dir()?, branch, target)
+    async fn is_merged(&self, branch: &str, target: &str) -> Result<bool> {
+        branch::is_merged(self.git(), &self.dir()?, branch, target).await
     }
-    fn delete_branch(&self, name: &str, force: bool) -> Result<()> {
-        branch::delete_branch(self.runner.as_ref(), &self.dir()?, name, force)
+    async fn has_diff_from(&self, branch: &str, target: &str) -> Result<bool> {
+        branch::has_diff_from(self.git(), &self.dir()?, branch, target).await
     }
-    fn rename_branch(&self, old: &str, new: &str) -> Result<()> {
-        branch::rename_branch(self.runner.as_ref(), &self.dir()?, old, new)
+    async fn delete_branch(&self, name: &str, force: bool) -> Result<()> {
+        branch::delete_branch(self.git(), &self.dir()?, name, force).await
     }
-    fn log_oneline(&self, from: &str, to: &str) -> Result<String> {
-        branch::log_oneline(self.runner.as_ref(), &self.dir()?, from, to)
+    async fn rename_branch(&self, old: &str, new: &str) -> Result<()> {
+        branch::rename_branch(self.git(), &self.dir()?, old, new).await
     }
-    fn commit_count(&self, from: &str, to: &str) -> Result<usize> {
-        branch::commit_count(self.runner.as_ref(), &self.dir()?, from, to)
+    async fn log_oneline(&self, from: &str, to: &str) -> Result<String> {
+        branch::log_oneline(&self.dir()?, from, to).await
     }
-    fn diff_shortstat(&self, from: &str, to: &str) -> Result<DiffStat> {
-        branch::diff_shortstat(self.runner.as_ref(), &self.dir()?, from, to)
+    async fn commit_count(&self, from: &str, to: &str) -> Result<usize> {
+        branch::commit_count(self.git(), &self.dir()?, from, to).await
     }
-    fn diff_shortstat_in(&self, path: &Path) -> Result<DiffStat> {
-        branch::diff_shortstat_in(self.runner.as_ref(), path)
+    async fn diff_shortstat(&self, from: &str, to: &str) -> Result<DiffStat> {
+        branch::diff_shortstat(self.git(), &self.dir()?, from, to).await
+    }
+    async fn diff_shortstat_in(&self, path: &Path) -> Result<DiffStat> {
+        branch::diff_shortstat_in(self.git(), path).await
     }
 
     // ----- Working-copy state --------------------------------------------
-    fn has_uncommitted_changes(&self) -> Result<bool> {
-        branch::has_uncommitted_changes(self.runner.as_ref(), &self.dir()?)
+    async fn has_uncommitted_changes(&self) -> Result<bool> {
+        branch::has_uncommitted_changes(self.git(), &self.dir()?).await
     }
-    fn uncommitted_count_in(&self, path: &Path) -> Result<usize> {
-        branch::uncommitted_count_in(self.runner.as_ref(), path)
+    async fn uncommitted_count_in(&self, path: &Path) -> Result<usize> {
+        branch::uncommitted_count_in(self.git(), path).await
     }
-    fn has_changes_from_trunk(&self, trunk: &str) -> Result<bool> {
-        branch::has_changes_from_trunk(self.runner.as_ref(), &self.dir()?, trunk)
+    async fn has_changes_from_trunk(&self, trunk: &str) -> Result<bool> {
+        branch::has_changes_from_trunk(self.git(), &self.dir()?, trunk).await
     }
-    fn is_rebase_in_progress(&self) -> bool {
-        ops::is_rebase_in_progress(self.runner.as_ref(), self.cwd.as_deref())
+    async fn is_rebase_in_progress(&self) -> bool {
+        ops::is_rebase_in_progress(self.git(), &self.dir().unwrap_or_default()).await
     }
-    fn is_merge_in_progress(&self) -> bool {
-        ops::is_merge_in_progress(self.runner.as_ref(), self.cwd.as_deref())
+    async fn is_merge_in_progress(&self) -> bool {
+        ops::is_merge_in_progress(self.git(), &self.dir().unwrap_or_default()).await
     }
 
     // ----- Mutations ------------------------------------------------------
-    fn merge(
+    async fn merge(
         &self,
         branch: &str,
         _dest_bookmark: &str, // git merges into the checked-out HEAD; no bookmark to advance
@@ -174,45 +221,86 @@ impl VcsBackend for GitBackend {
         no_ff: bool,
         message: Option<&str>,
     ) -> Result<()> {
-        ops::merge(self.runner.as_ref(), &self.dir()?, branch, squash, no_ff, message)
+        ops::merge(&self.dir()?, branch, squash, no_ff, message).await
     }
-    fn dry_run_merge(&self, branch: &str, squash: bool) -> Result<bool> {
-        ops::dry_run_merge(self.runner.as_ref(), &self.dir()?, branch, squash)
+    async fn dry_run_merge(&self, branch: &str, squash: bool) -> Result<bool> {
+        ops::dry_run_merge(&self.dir()?, branch, squash).await
     }
-    fn rebase(&self, onto: &str) -> Result<()> { ops::rebase(self.runner.as_ref(), &self.dir()?, onto) }
-    fn checkout(&self, branch: &str) -> Result<()> { ops::checkout(self.runner.as_ref(), &self.dir()?, branch) }
-    fn commit(&self, message: &str) -> Result<()> { ops::commit(self.runner.as_ref(), &self.dir()?, message) }
-    fn fetch(&self) -> Result<()> { ops::fetch(self.runner.as_ref(), &self.dir()?) }
-    fn rebase_abort(&self) -> Result<()> { ops::rebase_abort(self.runner.as_ref(), &self.dir()?) }
-    fn rebase_continue(&self) -> Result<()> { ops::rebase_continue(self.runner.as_ref(), &self.dir()?) }
-    fn merge_abort(&self) -> Result<()> { ops::merge_abort(self.runner.as_ref(), &self.dir()?) }
-    fn merge_continue(&self) -> Result<()> { ops::merge_continue(self.runner.as_ref(), &self.dir()?) }
-    fn reset_merge(&self) -> Result<()> { ops::reset_merge(self.runner.as_ref(), &self.dir()?) }
+    async fn rebase(&self, onto: &str) -> Result<()> {
+        ops::rebase(&self.dir()?, onto).await
+    }
+    async fn checkout(&self, branch: &str) -> Result<()> {
+        ops::checkout(&self.dir()?, branch).await
+    }
+    async fn commit(&self, message: &str) -> Result<()> {
+        ops::commit(&self.dir()?, message).await
+    }
+    async fn fetch(&self) -> Result<()> {
+        ops::fetch(&self.dir()?).await
+    }
+    async fn rebase_abort(&self) -> Result<()> {
+        ops::rebase_abort(&self.dir()?).await
+    }
+    async fn rebase_continue(&self) -> Result<()> {
+        ops::rebase_continue(&self.dir()?).await
+    }
+    async fn merge_abort(&self) -> Result<()> {
+        ops::merge_abort(&self.dir()?).await
+    }
+    async fn merge_continue(&self) -> Result<()> {
+        ops::merge_continue(&self.dir()?).await
+    }
+    async fn reset_merge(&self) -> Result<()> {
+        ops::reset_merge(&self.dir()?).await
+    }
 
     // ----- Worktrees ------------------------------------------------------
-    fn list_worktrees(&self) -> Result<Vec<WorktreeInfo>> {
-        worktree::list_worktrees(self.runner.as_ref(), &self.dir()?)
+    async fn list_worktrees(&self) -> Result<Vec<WorktreeInfo>> {
+        worktree::list_worktrees(self.git(), &self.dir()?).await
     }
-    fn create_worktree(
+    async fn create_worktree(
         &self,
         path: &Path,
         branch: &str,
         base: &str,
     ) -> Result<crate::vcs::common::CreateOutcome> {
-        worktree::create_worktree(self.runner.as_ref(), &self.dir()?, path, branch, base)
+        worktree::create_worktree(self.git(), &self.dir()?, path, branch, base).await
     }
-    fn create_worktree_from_remote(
+    async fn create_worktree_from_remote(
         &self,
         path: &Path,
         branch: &str,
     ) -> Result<crate::vcs::common::CreateOutcome> {
-        worktree::create_worktree_from_remote(self.runner.as_ref(), &self.dir()?, path, branch)
+        worktree::create_worktree_from_remote(self.git(), &self.dir()?, path, branch).await
     }
-    fn remove_worktree(&self, path: &Path, force: bool) -> Result<()> {
-        worktree::remove_worktree(self.runner.as_ref(), &self.dir()?, path, force)
+    async fn remove_worktree(&self, path: &Path, force: bool) -> Result<()> {
+        worktree::remove_worktree(&self.dir()?, path, force).await
     }
-    fn move_worktree(&self, old: &Path, new: &Path) -> Result<()> {
-        worktree::move_worktree(self.runner.as_ref(), &self.dir()?, old, new)
+    async fn move_worktree(&self, old: &Path, new: &Path) -> Result<()> {
+        worktree::move_worktree(&self.dir()?, old, new).await
+    }
+
+    // ----- Synchronous cleanup (for WorktreeGuard::drop) ------------------
+    fn cleanup_worktree_blocking(&self, path: &Path) -> Result<()> {
+        // `Drop` can't await; run a plain blocking `git worktree remove
+        // --force` via std::process here. Force is required: a half-set-up
+        // worktree has its freshly-created branch checked out, which a
+        // non-forced removal refuses.
+        let cwd = self.dir().map_err(|e| Error::Command(e.to_string()))?;
+        let path_arg = crate::vcs::common::path_str(path)?;
+        let status = std::process::Command::new("git")
+            .current_dir(&cwd)
+            .args(["worktree", "remove", "--force", path_arg])
+            .status()
+            .map_err(|e| Error::Command(format!("spawn git worktree remove: {e}")))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(Error::Command(format!(
+                "git worktree remove exited with {}",
+                status.code().unwrap_or(-1)
+            )))
+        }
     }
 }
 

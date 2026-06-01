@@ -21,6 +21,7 @@
 
 pub mod backend;
 pub mod common;
+mod detect;
 pub mod error;
 pub mod git;
 pub mod guard;
@@ -60,14 +61,6 @@ impl Backend {
             Backend::Jj => "jj",
         }
     }
-
-    /// Map a vcs-runner detection result to our `Backend`. **Colocated maps
-    /// to `Jj`** by policy decision — the user installed jj for a reason,
-    /// and the jj impl will eventually drive the colocated git layer where
-    /// needed. Override via `--vcs=git` or `[general] vcs = "git"`.
-    fn from_detected(detected: vcs_runner::VcsBackend) -> Self {
-        if detected.is_jj() { Backend::Jj } else { Backend::Git }
-    }
 }
 
 /// User-facing VCS selection — `--vcs <choice>` CLI flag + `[general] vcs`
@@ -104,10 +97,10 @@ impl VcsChoice {
 ///   2. `project_choice` — `[general] vcs` in `.workspace.toml` (legacy
 ///      `.agent-workspace.toml` as a fallback).
 ///   3. `global_choice` — `[general] vcs` in `~/.agent-workspace/config.toml`.
-///   4. `vcs_runner::detect_vcs(cwd)` — colocated → `Jj`, jj-only → `Jj`,
-///      git-only → `Git`.
+///   4. [`detect::detect_backend`] — a `.jj`/`.git` filesystem probe:
+///      colocated → `Jj`, jj-only → `Jj`, git-only → `Git`.
 ///   5. Hard fallback: `Git`. Preserves behaviour for repos that
-///      `detect_vcs` can't classify (e.g. running `ws setup` outside any
+///      detection can't classify (e.g. running `ws setup` outside any
 ///      repo) — the resulting `GitBackend` will surface `NotInRepo` when
 ///      it tries to actually do anything.
 pub fn resolve_backend(
@@ -121,7 +114,7 @@ pub fn resolve_backend(
         .or_else(|| global_choice.and_then(|c| c.resolve()))
         .or_else(|| {
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            vcs_runner::detect_vcs(&cwd).ok().map(|(b, _)| Backend::from_detected(b))
+            detect::detect_backend(&cwd)
         })
         .unwrap_or(Backend::Git);
 

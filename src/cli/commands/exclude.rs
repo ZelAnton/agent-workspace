@@ -56,8 +56,8 @@ pub struct ExcludeArgs {
     clear: bool,
 }
 
-pub fn run(args: ExcludeArgs, repo: &crate::vcs::Repo) -> Result<()> {
-    let repo_root = repo.repo_root().map_err(|e| Error::Other(e.to_string()))?;
+pub async fn run(args: ExcludeArgs, repo: &crate::vcs::Repo) -> Result<()> {
+    let repo_root = repo.repo_root().await.map_err(|e| Error::Other(e.to_string()))?;
     // Prefer `.workspace.toml`; edit a legacy `.agent-workspace.toml` in
     // place when only it exists. New repos get `.workspace.toml`.
     let config_path = crate::config::project_config_path_with_fallback(&repo_root);

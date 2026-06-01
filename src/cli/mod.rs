@@ -165,7 +165,7 @@ impl Cli {
         self.format
     }
 
-    pub fn run(self) -> Result<()> {
+    pub async fn run(self) -> Result<()> {
         let config = Config::load()?;
         let path_file = self.path_file.as_deref();
         let format = self.format;
@@ -182,24 +182,28 @@ impl Cli {
 
         match self.command {
             Command::New(args) => {
-                commands::lifecycle::new::run(args, &config, path_file, format, &repo)
+                commands::lifecycle::new::run(args, &config, path_file, format, &repo).await
             }
-            Command::Ls(args) => commands::ls::run(args, &config, format, &repo),
-            Command::Cd(args) => commands::nav::cd::run(args, &config, path_file, &repo),
-            Command::Rm(args) => commands::lifecycle::rm::run(args, &config, path_file, &repo),
-            Command::Clean(args) => commands::lifecycle::clean::run(args, &config, path_file, &repo),
-            Command::Merge(args) => commands::merge::run(args, &config, path_file, format, &repo),
-            Command::Status => commands::status::run(&config, format, &repo),
-            Command::RepoInfo(args) => commands::repo_info::run(args, &config, format, &repo),
-            Command::Config(args) => commands::config::run(args, &repo),
-            Command::Exclude(args) => commands::exclude::run(args, &repo),
-            Command::Sync(args) => commands::sync::run(args, &config, &repo),
-            Command::Mv(args) => commands::r#move::run(args, &config, path_file, &repo),
+            Command::Ls(args) => commands::ls::run(args, &config, format, &repo).await,
+            Command::Cd(args) => commands::nav::cd::run(args, &config, path_file, &repo).await,
+            Command::Rm(args) => commands::lifecycle::rm::run(args, &config, path_file, &repo).await,
+            Command::Clean(args) => {
+                commands::lifecycle::clean::run(args, &config, path_file, &repo).await
+            }
+            Command::Merge(args) => {
+                commands::merge::run(args, &config, path_file, format, &repo).await
+            }
+            Command::Status => commands::status::run(&config, format, &repo).await,
+            Command::RepoInfo(args) => commands::repo_info::run(args, &config, format, &repo).await,
+            Command::Config(args) => commands::config::run(args, &repo).await,
+            Command::Exclude(args) => commands::exclude::run(args, &repo).await,
+            Command::Sync(args) => commands::sync::run(args, &config, &repo).await,
+            Command::Mv(args) => commands::r#move::run(args, &config, path_file, &repo).await,
             Command::Setup(args) => commands::sys::setup::run(args),
             Command::Uninstall(args) => commands::sys::uninstall::run(args),
-            Command::Init(args) => commands::sys::init::run(args, &repo),
+            Command::Init(args) => commands::sys::init::run(args, &repo).await,
             Command::Update => commands::sys::update::run(),
-            Command::SnapContinue => commands::snap::resume::run(&config, path_file, &repo),
+            Command::SnapContinue => commands::snap::resume::run(&config, path_file, &repo).await,
         }
     }
 }

@@ -51,23 +51,19 @@ pub enum CreateOutcome {
     CowCloned,
 }
 
-/// True iff `git ls-remote --heads origin <name>` output advertises a
-/// branch named EXACTLY `<name>`.
+/// True iff `git ls-remote --heads origin <name>` output advertises a branch
+/// named EXACTLY `<name>`.
 ///
-/// `ls-remote` prints one `"<sha>\t<refname>"` line per matching ref. We
-/// require `refname == "refs/heads/<name>"` — an exact match, never a
-/// substring/suffix test, so probing `foo` does not falsely match
-/// `refs/heads/foobar` (`ls-remote --heads <pattern>` can return such
-/// neighbours). Pure + backend-agnostic so both `GitBackend` and the
-/// colocated `JjBackend` (which also shells out to `git ls-remote`) share
-/// it; unit-tested without a subprocess.
+/// `ls-remote` prints one `"<sha>\t<refname>"` line per matching ref. We require
+/// `refname == "refs/heads/<name>"` — an exact match, never a substring/suffix
+/// test: `git ls-remote --heads origin foo` matches refs by trailing path
+/// component, so probing `foo` would otherwise falsely succeed on a remote
+/// `refs/heads/x/foo`. Pure + backend-agnostic so both `GitBackend` and the
+/// colocated `JjBackend` (which also shells out to `git ls-remote`) share it.
 pub(crate) fn ls_remote_has_branch(stdout: &str, name: &str) -> bool {
     let target = format!("refs/heads/{name}");
     stdout.lines().any(|line| {
-        line.split('\t')
-            .nth(1)
-            .map(|refname| refname.trim() == target)
-            .unwrap_or(false)
+        line.split('\t').nth(1).map(|refname| refname.trim() == target).unwrap_or(false)
     })
 }
 
@@ -92,28 +88,20 @@ mod tests {
 
     #[test]
     fn exact_match_is_true() {
-        let out = line("abc123", "refs/heads/feature");
-        assert!(ls_remote_has_branch(&out, "feature"));
+        assert!(ls_remote_has_branch(&line("abc", "refs/heads/feature"), "feature"));
     }
 
     #[test]
-    fn prefix_neighbour_is_false() {
-        // `--heads feature` can advertise `feature-2` / `featureful`; a
-        // substring/suffix test would wrongly match. We must not.
-        let out = format!(
-            "{}{}",
-            line("a", "refs/heads/feature-2"),
-            line("b", "refs/heads/featureful"),
-        );
-        assert!(!ls_remote_has_branch(&out, "feature"));
+    fn suffix_neighbour_is_false() {
+        // `--heads foo` can advertise `x/foo`; an exact-refname test must not match.
+        assert!(!ls_remote_has_branch(&line("a", "refs/heads/x/foo"), "foo"));
+        assert!(!ls_remote_has_branch(&line("a", "refs/heads/feat/foo"), "foo"));
+        assert!(!ls_remote_has_branch(&line("a", "refs/heads/feat/foo"), "feat"));
     }
 
     #[test]
     fn slash_name_matches_exactly() {
-        let out = line("a", "refs/heads/feat/foo");
-        assert!(ls_remote_has_branch(&out, "feat/foo"));
-        assert!(!ls_remote_has_branch(&out, "foo"));
-        assert!(!ls_remote_has_branch(&out, "feat"));
+        assert!(ls_remote_has_branch(&line("a", "refs/heads/feat/foo"), "feat/foo"));
     }
 
     #[test]
@@ -125,14 +113,13 @@ mod tests {
             line("c", "refs/heads/dev"),
         );
         assert!(ls_remote_has_branch(&out, "feature"));
-        assert!(ls_remote_has_branch(&out, "main"));
         assert!(!ls_remote_has_branch(&out, "nope"));
     }
 
     #[test]
     fn empty_or_malformed_is_false() {
         assert!(!ls_remote_has_branch("", "feature"));
-        // A line with no tab (shouldn't happen, but be defensive).
-        assert!(!ls_remote_has_branch("refs/heads/feature\n", "feature"));
+        assert!(!ls_remote_has_branch("refs/heads/feature\n", "feature")); // no tab
     }
 }
+

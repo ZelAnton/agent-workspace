@@ -2,6 +2,7 @@
 // ws new - Create a new worktree
 // ===========================================================================
 
+use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::path::Path;
 
@@ -76,7 +77,7 @@ enum CreateMode {
     NewFromBase,
 }
 
-pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>, format: OutputFormat, repo: &vcs::Repo) -> Result<()> {
+pub async fn run(args: NewArgs, config: &Config, path_file: Option<&Path>, format: OutputFormat, repo: &vcs::Repo) -> Result<()> {
     // Wall-clock measurement of the full `ws new` body. Printed at the
     // end as `Elapsed: HH:MM:SS` so the user knows how long a clone of
     // their repo actually takes (useful when comparing CoW vs plain
@@ -110,8 +111,8 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>, format: Out
     }
 
     // Ensure we're in a git repo
-    let repo_root = repo.repo_root()?;
-    let workspace_id = repo.workspace_id()?;
+    let repo_root = repo.repo_root().await?;
+    let workspace_id = repo.workspace_id().await?;
     let workspace_dir = config.project_dir_for(&workspace_id);
 
     // Nested snap stacks two loops in the parent shell and breaks cwd tracking
@@ -125,19 +126,26 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>, format: Out
     }
 
     // Determine trunk branch
-    let trunk = config.resolve_trunk(repo);
+    let trunk = config.resolve_trunk(repo).await;
+
+    // Fetch the local branch list once: it backs both the unique-name generator
+    // and the local-existence check below, replacing per-name `branch_exists`
+    // subprocess calls (whose async form can't live in a sync predicate).
+    let known: HashSet<String> =
+        repo.local_branches().await.unwrap_or_default().into_iter().collect();
 
     // Default base branch: --base flag > current branch > trunk. This is the
     // creation start point for a NEW branch and the recorded merge/sync
     // target in either case.
     let default_base = if let Some(ref b) = args.base {
-        if !repo.branch_exists(b)? {
+        if !repo.branch_exists(b).await? {
             return Err(Error::Other(format!("Branch '{b}' does not exist")));
         }
         b.clone()
     } else {
         // Detached HEAD falls back to trunk.
         repo.current_branch()
+            .await
             .ok()
             .filter(|b| b != "HEAD")
             .unwrap_or_else(|| trunk.clone())
@@ -148,13 +156,12 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>, format: Out
     // the "branch already exists" path and the base-picker menu only apply
     // to explicit names.
     let explicit_name = args.branch.clone();
-    let branch = explicit_name.clone().unwrap_or_else(|| {
-        util::generate_unique_branch_name(|n| repo.branch_exists(n).unwrap_or(false))
-    });
+    let branch = explicit_name
+        .clone()
+        .unwrap_or_else(|| util::generate_unique_branch_name(|n| known.contains(n)));
 
     // Does a branch/bookmark with this name already exist LOCALLY?
-    let local_exists =
-        explicit_name.is_some() && repo.branch_exists(&branch).unwrap_or(false);
+    let local_exists = explicit_name.is_some() && known.contains(&branch);
 
     // Not local, but named explicitly without a pinned `--base`? Probe the
     // remote WITHOUT fetching (cheap `git ls-remote`): a branch that lives
@@ -163,7 +170,7 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>, format: Out
     let remote_exists = !local_exists
         && explicit_name.is_some()
         && args.base.is_none()
-        && repo.remote_branch_exists(&branch).unwrap_or(false);
+        && repo.remote_branch_exists(&branch).await.unwrap_or(false);
 
     // How the worktree gets created:
     //   - Resume:      exists locally → create FROM it.
@@ -188,7 +195,7 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>, format: Out
                 && args.base.is_none()
                 && std::io::stdin().is_terminal() =>
         {
-            resolve_base_via_menu(&branch, &default_base, repo)?
+            resolve_base_via_menu(&branch, &default_base, repo).await?
         }
         _ => default_base,
     };
@@ -232,17 +239,17 @@ pub fn run(args: NewArgs, config: &Config, path_file: Option<&Path>, format: Out
     let create_outcome = match mode {
         CreateMode::Resume => {
             eprintln!("Branch '{branch}' already exists — creating worktree from it...");
-            repo.create_worktree(&wt_path, &branch, &base_branch)?
+            repo.create_worktree(&wt_path, &branch, &base_branch).await?
         }
         CreateMode::RemoteClone => {
             eprintln!(
                 "Branch '{branch}' found on origin — fetching and creating worktree from it..."
             );
-            repo.create_worktree_from_remote(&wt_path, &branch)?
+            repo.create_worktree_from_remote(&wt_path, &branch).await?
         }
         CreateMode::NewFromBase => {
             eprintln!("Creating worktree '{branch}' from '{base_branch}'...");
-            repo.create_worktree(&wt_path, &branch, &base_branch)?
+            repo.create_worktree(&wt_path, &branch, &base_branch).await?
         }
     };
 
@@ -476,7 +483,7 @@ fn should_use_cow(args: &NewArgs, config: &Config) -> bool {
 /// `stdin().is_terminal()`); a cancelled selection (Esc / closed stdin)
 /// propagates as an error so `ws new` aborts cleanly rather than silently
 /// picking a base the user didn't intend.
-fn resolve_base_via_menu(branch: &str, current_base: &str, repo: &vcs::Repo) -> Result<String> {
+async fn resolve_base_via_menu(branch: &str, current_base: &str, repo: &vcs::Repo) -> Result<String> {
     use dialoguer::Select;
 
     let items = [
@@ -497,7 +504,7 @@ fn resolve_base_via_menu(branch: &str, current_base: &str, repo: &vcs::Repo) -> 
     }
 
     // Item 2: pick a base branch, defaulting the cursor to the current base.
-    let branches = repo.local_branches().unwrap_or_default();
+    let branches = repo.local_branches().await.unwrap_or_default();
     if branches.is_empty() {
         return Ok(current_base.to_string());
     }

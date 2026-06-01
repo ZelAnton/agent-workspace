@@ -1,40 +1,41 @@
 // ===========================================================================
-// vcs/jj/errmap - vcs_runner::RunError → vcs::Error mapping for jj
+// vcs/jj/errmap - processkit::Error → vcs::Error mapping for jj
 // ===========================================================================
 //
-// jj's error output is more structured than git's (no "fatal:"/"error:"
-// prefixes to strip) but we still want to surface a clean single-line
-// message to the user. Inner stderr trimmed; stdout fallback preserved
-// for symmetry with git (some jj commands print informational text to
-// stdout even on error — e.g. `jj edit` on a missing revset).
+// jj's error output is more structured than git's (it prefixes fatal messages
+// with `Error: ` rather than git's `fatal:`/`error:`). As with the git backend,
+// `processkit::Error::Exit` carries only stderr, so the stderr/stdout fallback
+// extraction can only be applied where WE capture the raw `ProcessResult`
+// (the `exec` helper in `mod.rs`); `map_pk_err` is the fallback for typed
+// `vcs-jj` calls.
 
-use vcs_runner::RunError;
+use processkit::Error as PkError;
 
 use crate::vcs::error::Error;
 
-/// Map a vcs-runner subprocess error to our domain [`Error`].
-pub(super) fn map_run_err(err: RunError) -> Error {
+/// Map any `processkit` subprocess error to our domain [`Error`].
+pub(super) fn map_pk_err(err: PkError) -> Error {
     match err {
-        RunError::NonZeroExit { stderr, stdout, .. } => {
-            Error::Command(extract_message(&stderr, &stdout))
-        }
-        // Spawn / Timeout / Cancelled — pass through the Display message.
+        PkError::Exit { stderr, .. } => Error::Command(clean_jj_error(&stderr)),
         other => Error::Command(other.to_string()),
     }
 }
 
-/// Build a user-friendly message from jj's stderr/stdout streams.
-/// Prefers stderr; falls back to stdout when stderr is empty.
+/// Build a user-friendly message from jj's stderr/stdout streams. Prefers
+/// stderr; falls back to stdout when stderr is empty (some jj commands print
+/// informational text to stdout even on error).
 pub(super) fn extract_message(stderr: &str, stdout: &[u8]) -> String {
     let trimmed = stderr.trim();
     if trimmed.is_empty() {
         String::from_utf8_lossy(stdout).trim().to_string()
     } else {
-        // jj sometimes prefixes with "Error: " — strip for cleaner UX.
-        // Don't strip "Warning:" — those are non-fatal and worth keeping.
-        trimmed
-            .strip_prefix("Error: ")
-            .unwrap_or(trimmed)
-            .to_string()
+        clean_jj_error(trimmed)
     }
+}
+
+/// Strip jj's `Error: ` prefix for cleaner UX. Keeps `Warning:` (non-fatal,
+/// worth surfacing).
+fn clean_jj_error(stderr: &str) -> String {
+    let trimmed = stderr.trim();
+    trimmed.strip_prefix("Error: ").unwrap_or(trimmed).to_string()
 }

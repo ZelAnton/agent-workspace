@@ -48,74 +48,83 @@ impl Repo {
         self.backend.name()
     }
 
+    /// A GitHub CLI (`gh`) client, built on the same `processkit` job-backed
+    /// runner as the git/jj backends. Wired and ready for future `gh`-backed
+    /// features (PR creation, release management, …) — `vcs-github` is a
+    /// dependency now, but no `ws` command drives it yet. Its methods take a
+    /// `dir: &Path`; pass [`Repo::cwd`] for repo-scoped calls.
+    pub fn github(&self) -> vcs_github::GitHub {
+        vcs_github::GitHub::new()
+    }
+
     // ----- Identity -------------------------------------------------------
-    pub fn repo_root(&self) -> Result<PathBuf> {
-        self.backend.repo_root()
+    pub async fn repo_root(&self) -> Result<PathBuf> {
+        self.backend.repo_root().await
     }
-    pub fn repo_name(&self) -> Result<String> {
-        self.backend.repo_name()
+    pub async fn repo_name(&self) -> Result<String> {
+        self.backend.repo_name().await
     }
-    pub fn workspace_id(&self) -> Result<String> {
-        self.backend.workspace_id()
+    pub async fn workspace_id(&self) -> Result<String> {
+        self.backend.workspace_id().await
     }
-    pub fn current_branch(&self) -> Result<String> {
-        self.backend.current_branch()
+    pub async fn current_branch(&self) -> Result<String> {
+        self.backend.current_branch().await
     }
-    pub fn current_commit(&self) -> Result<String> {
-        self.backend.current_commit()
+    pub async fn current_commit(&self) -> Result<String> {
+        self.backend.current_commit().await
     }
-    pub fn detect_trunk(&self) -> Result<String> {
-        self.backend.detect_trunk()
+    pub async fn detect_trunk(&self) -> Result<String> {
+        self.backend.detect_trunk().await
     }
 
     // ----- Branches -------------------------------------------------------
-    pub fn local_branches(&self) -> Result<Vec<String>> {
-        self.backend.local_branches()
+    pub async fn local_branches(&self) -> Result<Vec<String>> {
+        self.backend.local_branches().await
     }
-    pub fn branch_exists(&self, name: &str) -> Result<bool> {
-        self.backend.branch_exists(name)
+    pub async fn branch_exists(&self, name: &str) -> Result<bool> {
+        self.backend.branch_exists(name).await
     }
-    pub fn remote_branch_exists(&self, name: &str) -> Result<bool> {
-        self.backend.remote_branch_exists(name)
+    pub async fn remote_branch_exists(&self, name: &str) -> Result<bool> {
+        self.backend.remote_branch_exists(name).await
     }
-    pub fn has_diff_from(&self, branch: &str, target: &str) -> Result<bool> {
-        self.backend.has_diff_from(branch, target)
+    pub async fn has_diff_from(&self, branch: &str, target: &str) -> Result<bool> {
+        self.backend.has_diff_from(branch, target).await
     }
-    pub fn delete_branch(&self, name: &str, force: bool) -> Result<()> {
-        self.backend.delete_branch(name, force)
+    pub async fn delete_branch(&self, name: &str, force: bool) -> Result<()> {
+        self.backend.delete_branch(name, force).await
     }
-    pub fn rename_branch(&self, old: &str, new: &str) -> Result<()> {
-        self.backend.rename_branch(old, new)
+    pub async fn rename_branch(&self, old: &str, new: &str) -> Result<()> {
+        self.backend.rename_branch(old, new).await
     }
-    pub fn log_oneline(&self, from: &str, to: &str) -> Result<String> {
-        self.backend.log_oneline(from, to)
+    pub async fn log_oneline(&self, from: &str, to: &str) -> Result<String> {
+        self.backend.log_oneline(from, to).await
     }
-    pub fn commit_count(&self, from: &str, to: &str) -> Result<usize> {
-        self.backend.commit_count(from, to)
+    pub async fn commit_count(&self, from: &str, to: &str) -> Result<usize> {
+        self.backend.commit_count(from, to).await
     }
-    pub fn diff_shortstat(&self, from: &str, to: &str) -> Result<DiffStat> {
-        self.backend.diff_shortstat(from, to)
+    pub async fn diff_shortstat(&self, from: &str, to: &str) -> Result<DiffStat> {
+        self.backend.diff_shortstat(from, to).await
     }
-    pub fn diff_shortstat_in(&self, path: &Path) -> Result<DiffStat> {
-        self.backend.diff_shortstat_in(path)
+    pub async fn diff_shortstat_in(&self, path: &Path) -> Result<DiffStat> {
+        self.backend.diff_shortstat_in(path).await
     }
 
     // ----- Working-copy state --------------------------------------------
-    pub fn has_uncommitted_changes(&self) -> Result<bool> {
-        self.backend.has_uncommitted_changes()
+    pub async fn has_uncommitted_changes(&self) -> Result<bool> {
+        self.backend.has_uncommitted_changes().await
     }
-    pub fn uncommitted_count_in(&self, path: &Path) -> Result<usize> {
-        self.backend.uncommitted_count_in(path)
+    pub async fn uncommitted_count_in(&self, path: &Path) -> Result<usize> {
+        self.backend.uncommitted_count_in(path).await
     }
-    pub fn is_rebase_in_progress(&self) -> bool {
-        self.backend.is_rebase_in_progress()
+    pub async fn is_rebase_in_progress(&self) -> bool {
+        self.backend.is_rebase_in_progress().await
     }
-    pub fn is_merge_in_progress(&self) -> bool {
-        self.backend.is_merge_in_progress()
+    pub async fn is_merge_in_progress(&self) -> bool {
+        self.backend.is_merge_in_progress().await
     }
 
     // ----- Mutations ------------------------------------------------------
-    pub fn merge(
+    pub async fn merge(
         &self,
         branch: &str,
         dest_bookmark: &str,
@@ -123,54 +132,60 @@ impl Repo {
         no_ff: bool,
         message: Option<&str>,
     ) -> Result<()> {
-        self.backend.merge(branch, dest_bookmark, squash, no_ff, message)
+        self.backend.merge(branch, dest_bookmark, squash, no_ff, message).await
     }
-    pub fn dry_run_merge(&self, branch: &str, squash: bool) -> Result<bool> {
-        self.backend.dry_run_merge(branch, squash)
+    pub async fn dry_run_merge(&self, branch: &str, squash: bool) -> Result<bool> {
+        self.backend.dry_run_merge(branch, squash).await
     }
-    pub fn checkout(&self, branch: &str) -> Result<()> {
-        self.backend.checkout(branch)
+    pub async fn checkout(&self, branch: &str) -> Result<()> {
+        self.backend.checkout(branch).await
     }
-    pub fn reset_merge(&self) -> Result<()> {
-        self.backend.reset_merge()
+    pub async fn reset_merge(&self) -> Result<()> {
+        self.backend.reset_merge().await
     }
-    pub fn rebase(&self, onto: &str) -> Result<()> {
-        self.backend.rebase(onto)
+    pub async fn rebase(&self, onto: &str) -> Result<()> {
+        self.backend.rebase(onto).await
     }
-    pub fn rebase_abort(&self) -> Result<()> {
-        self.backend.rebase_abort()
+    pub async fn rebase_abort(&self) -> Result<()> {
+        self.backend.rebase_abort().await
     }
-    pub fn rebase_continue(&self) -> Result<()> {
-        self.backend.rebase_continue()
+    pub async fn rebase_continue(&self) -> Result<()> {
+        self.backend.rebase_continue().await
     }
-    pub fn merge_abort(&self) -> Result<()> {
-        self.backend.merge_abort()
+    pub async fn merge_abort(&self) -> Result<()> {
+        self.backend.merge_abort().await
     }
-    pub fn merge_continue(&self) -> Result<()> {
-        self.backend.merge_continue()
+    pub async fn merge_continue(&self) -> Result<()> {
+        self.backend.merge_continue().await
     }
 
     // ----- Worktrees ------------------------------------------------------
-    pub fn list_worktrees(&self) -> Result<Vec<WorktreeInfo>> {
-        self.backend.list_worktrees()
+    pub async fn list_worktrees(&self) -> Result<Vec<WorktreeInfo>> {
+        self.backend.list_worktrees().await
     }
-    pub fn create_worktree(
+    pub async fn create_worktree(
         &self,
         path: &Path,
         branch: &str,
         base: &str,
     ) -> Result<CreateOutcome> {
-        self.backend.create_worktree(path, branch, base)
+        self.backend.create_worktree(path, branch, base).await
     }
-    pub fn create_worktree_from_remote(
+    pub async fn create_worktree_from_remote(
         &self,
         path: &Path,
         branch: &str,
     ) -> Result<CreateOutcome> {
-        self.backend.create_worktree_from_remote(path, branch)
+        self.backend.create_worktree_from_remote(path, branch).await
     }
-    pub fn remove_worktree(&self, path: &Path, force: bool) -> Result<()> {
-        self.backend.remove_worktree(path, force)
+    pub async fn remove_worktree(&self, path: &Path, force: bool) -> Result<()> {
+        self.backend.remove_worktree(path, force).await
+    }
+    /// Synchronously force-remove a partial worktree — used by
+    /// [`WorktreeGuard`](super::guard::WorktreeGuard)'s `Drop`, which can't
+    /// `.await`. Delegates to the backend's blocking cleanup.
+    pub fn cleanup_worktree_blocking(&self, path: &Path) -> Result<()> {
+        self.backend.cleanup_worktree_blocking(path)
     }
     /// Arm a [`WorktreeGuard`](super::guard::WorktreeGuard) over `path`: it
     /// force-removes the worktree on drop until `keep()` is called. Use it to
@@ -179,7 +194,7 @@ impl Repo {
     pub fn guard_worktree(&self, path: impl Into<PathBuf>) -> super::guard::WorktreeGuard<'_> {
         super::guard::WorktreeGuard::new(self, path)
     }
-    pub fn move_worktree(&self, old: &Path, new: &Path) -> Result<()> {
-        self.backend.move_worktree(old, new)
+    pub async fn move_worktree(&self, old: &Path, new: &Path) -> Result<()> {
+        self.backend.move_worktree(old, new).await
     }
 }

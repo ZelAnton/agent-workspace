@@ -11,9 +11,9 @@ use crate::config::Config;
 use crate::meta::{self, WorktreeMeta};
 use crate::vcs;
 
-pub fn run(config: &Config, format: OutputFormat, repo: &vcs::Repo) -> Result<()> {
-    let current = repo.current_branch()?;
-    let workspace_id = repo.workspace_id()?;
+pub async fn run(config: &Config, format: OutputFormat, repo: &vcs::Repo) -> Result<()> {
+    let current = repo.current_branch().await?;
+    let workspace_id = repo.workspace_id().await?;
     let wt_dir = config.project_dir_for(&workspace_id);
     let wt_path = wt_dir.join(&current);
 
@@ -23,27 +23,35 @@ pub fn run(config: &Config, format: OutputFormat, repo: &vcs::Repo) -> Result<()
         )));
     }
 
-    let trunk = config.resolve_trunk(repo);
+    let trunk = config.resolve_trunk(repo).await;
 
     let meta_path = meta::meta_path_with_fallback(&wt_dir, &current);
     let loaded = WorktreeMeta::load(&meta_path).ok();
 
     let base_branch = loaded.as_ref().map(|m| m.base_branch.clone());
+    // The resolver consults the predicate only for `base_branch`, so pre-resolve
+    // that single existence check (the async `branch_exists` can't live inside a
+    // sync `Fn` predicate).
+    let base_exists = match base_branch.as_deref() {
+        Some(bb) => repo.branch_exists(bb).await.unwrap_or(false),
+        None => false,
+    };
     let effective_target = meta::resolve_target_branch(
         None,
         base_branch.as_deref(),
-        |b| repo.branch_exists(b).unwrap_or(false),
+        |_| base_exists,
         &trunk,
     );
 
-    let uncommitted = repo.uncommitted_count_in(&wt_path).unwrap_or(0);
-    let commits = repo.commit_count(&effective_target, &current).unwrap_or(0);
+    let uncommitted = repo.uncommitted_count_in(&wt_path).await.unwrap_or(0);
+    let commits = repo.commit_count(&effective_target, &current).await.unwrap_or(0);
 
-    let diff = repo.diff_shortstat(&effective_target, &current).unwrap_or(vcs::DiffStat {
-        insertions: 0,
-        deletions: 0,
-    });
-    let unstaged = repo.diff_shortstat_in(&wt_path).unwrap_or(vcs::DiffStat {
+    let diff =
+        repo.diff_shortstat(&effective_target, &current).await.unwrap_or(vcs::DiffStat {
+            insertions: 0,
+            deletions: 0,
+        });
+    let unstaged = repo.diff_shortstat_in(&wt_path).await.unwrap_or(vcs::DiffStat {
         insertions: 0,
         deletions: 0,
     });
@@ -59,7 +67,7 @@ pub fn run(config: &Config, format: OutputFormat, repo: &vcs::Repo) -> Result<()
         insertions: diff.insertions + unstaged.insertions,
         deletions: diff.deletions + unstaged.deletions,
         path: wt_path.display().to_string(),
-        in_progress: detect_in_progress_state(repo),
+        in_progress: detect_in_progress_state(repo).await,
     };
 
     output::emit(&view, format);
@@ -95,11 +103,11 @@ enum InProgressState {
 }
 
 /// Detect the in-progress sync state (git-native; jj records conflicts in `@`).
-fn detect_in_progress_state(repo: &vcs::Repo) -> Option<InProgressState> {
-    if repo.is_rebase_in_progress() {
+async fn detect_in_progress_state(repo: &vcs::Repo) -> Option<InProgressState> {
+    if repo.is_rebase_in_progress().await {
         // Only reachable on git — jj always returns false here.
         Some(InProgressState::RebaseSync)
-    } else if repo.is_merge_in_progress() {
+    } else if repo.is_merge_in_progress().await {
         if repo.backend_name() == "jj" {
             Some(InProgressState::JjConflicts)
         } else {

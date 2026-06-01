@@ -9,15 +9,21 @@ use std::ffi::OsStr;
 
 use clap_complete::engine::CompletionCandidate;
 
-/// Build a `Repo` anchored at the live process cwd for completion queries.
+/// Run `git <args>` synchronously in the process cwd, returning UTF-8 stdout on
+/// success.
 ///
-/// Completers run at tab time via CompleteEnv — *before* `Cli::run`, so they
-/// never see the backend the user might force with `--vcs`. We construct a
-/// git-backed `Repo` at the process cwd, matching the historical behaviour
-/// (the thread-local facade's lazy default was always `GitBackend::new()`).
-fn completion_repo() -> crate::vcs::Repo {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    crate::vcs::Repo::discover(cwd, Box::new(crate::vcs::git::GitBackend::new()))
+/// Completers must be **synchronous** (clap invokes them at tab time, and the
+/// async VCS layer can't be `block_on`'d from inside the tokio runtime that
+/// `main` runs on). They're also git-only and best-effort by design — matching
+/// the historical behaviour where the completion path always used the git
+/// backend — so a plain `std::process` git call is the right tool here.
+fn git_completion_output(args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new("git").args(args).output().ok()?;
+    if out.status.success() {
+        Some(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        None
+    }
 }
 
 /// Complete worktree branch names (for cd/rm/mv)
@@ -26,9 +32,10 @@ pub fn complete_worktrees(current: &OsStr) -> Vec<CompletionCandidate> {
         return vec![];
     };
 
-    let Ok(worktrees) = completion_repo().list_worktrees() else {
+    let Some(out) = git_completion_output(&["worktree", "list", "--porcelain"]) else {
         return vec![];
     };
+    let worktrees = crate::vcs::parse_worktree_list(&out);
 
     // Main worktree is not a valid cd/rm/mv target
     worktrees
@@ -46,14 +53,16 @@ pub fn complete_branches(current: &OsStr) -> Vec<CompletionCandidate> {
         return vec![];
     };
 
-    let Ok(branches) = completion_repo().local_branches() else {
+    let Some(out) =
+        git_completion_output(&["for-each-ref", "--format=%(refname:short)", "refs/heads/"])
+    else {
         return vec![];
     };
 
-    branches
-        .iter()
+    out.lines()
+        .filter(|b| !b.is_empty())
         .filter(|b| b.starts_with(prefix))
-        .map(|b| CompletionCandidate::new(b.as_str()))
+        .map(CompletionCandidate::new)
         .collect()
 }
 

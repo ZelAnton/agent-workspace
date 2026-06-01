@@ -2,6 +2,8 @@
 // ws sync - Sync current worktree with trunk
 // ===========================================================================
 
+use std::collections::HashSet;
+
 use clap::Args;
 use clap_complete::engine::ArgValueCompleter;
 
@@ -30,7 +32,7 @@ pub struct SyncArgs {
     abort: bool,
 }
 
-pub fn run(args: SyncArgs, config: &Config, repo: &vcs::Repo) -> Result<()> {
+pub async fn run(args: SyncArgs, config: &Config, repo: &vcs::Repo) -> Result<()> {
     // jj has no "in progress" state — conflicts are recorded into commits
     // and resolved by editing files directly. --abort / --continue have no
     // direct analog. We detect "conflicts present" via is_merge_in_progress
@@ -39,11 +41,11 @@ pub fn run(args: SyncArgs, config: &Config, repo: &vcs::Repo) -> Result<()> {
     let is_jj = repo.backend_name() == "jj";
 
     if args.abort {
-        if repo.is_rebase_in_progress() {
+        if repo.is_rebase_in_progress().await {
             eprintln!("Aborting rebase...");
-            repo.rebase_abort()?;
+            repo.rebase_abort().await?;
             eprintln!("Rebase aborted.");
-        } else if repo.is_merge_in_progress() {
+        } else if repo.is_merge_in_progress().await {
             if is_jj {
                 return Err(Error::Other(
                     "jj records conflicts in commits — there's no in-progress merge to abort.\n\
@@ -53,7 +55,7 @@ pub fn run(args: SyncArgs, config: &Config, repo: &vcs::Repo) -> Result<()> {
                 ));
             }
             eprintln!("Aborting merge...");
-            repo.merge_abort()?;
+            repo.merge_abort().await?;
             eprintln!("Merge aborted.");
         } else if is_jj {
             return Err(Error::Other(
@@ -69,11 +71,11 @@ pub fn run(args: SyncArgs, config: &Config, repo: &vcs::Repo) -> Result<()> {
     }
 
     if args.r#continue {
-        if repo.is_rebase_in_progress() {
+        if repo.is_rebase_in_progress().await {
             eprintln!("Continuing rebase...");
-            repo.rebase_continue()?;
+            repo.rebase_continue().await?;
             eprintln!("Rebase continued.");
-        } else if repo.is_merge_in_progress() {
+        } else if repo.is_merge_in_progress().await {
             if is_jj {
                 return Err(Error::Other(
                     "jj records conflicts in commits — there's no in-progress merge to continue.\n\
@@ -82,7 +84,7 @@ pub fn run(args: SyncArgs, config: &Config, repo: &vcs::Repo) -> Result<()> {
                 ));
             }
             eprintln!("Continuing merge...");
-            repo.merge_continue()?;
+            repo.merge_continue().await?;
             eprintln!("Merge continued.");
         } else if is_jj {
             return Err(Error::Other(
@@ -96,10 +98,10 @@ pub fn run(args: SyncArgs, config: &Config, repo: &vcs::Repo) -> Result<()> {
         return Ok(());
     }
 
-    let current = repo.current_branch()?;
+    let current = repo.current_branch().await?;
 
     if let Some(ref branch) = args.from {
-        if !repo.branch_exists(branch)? {
+        if !repo.branch_exists(branch).await? {
             return Err(Error::Other(format!("Branch '{branch}' does not exist")));
         }
         eprintln!(
@@ -108,15 +110,21 @@ pub fn run(args: SyncArgs, config: &Config, repo: &vcs::Repo) -> Result<()> {
         );
     }
 
+    // Pre-resolve branch existence into a set: the resolver predicate must be
+    // synchronous, but `branch_exists` is async. Local-branch membership is the
+    // same check `branch_exists` performs.
+    let known: HashSet<String> =
+        repo.local_branches().await.unwrap_or_default().into_iter().collect();
+    let trunk = config.resolve_trunk(repo).await;
     let target = {
-        let workspace_id = repo.workspace_id()?;
+        let workspace_id = repo.workspace_id().await?;
         let wt_dir = config.project_dir_for(&workspace_id);
         meta::resolve_effective_target(
             &wt_dir,
             &current,
             args.from.as_deref(),
-            |b| repo.branch_exists(b).unwrap_or(false),
-            &config.resolve_trunk(repo),
+            |b| known.contains(b),
+            &trunk,
         )
     };
 
@@ -130,14 +138,14 @@ pub fn run(args: SyncArgs, config: &Config, repo: &vcs::Repo) -> Result<()> {
 
     match strategy {
         SyncStrategy::Rebase => {
-            repo.rebase(&target)?;
+            repo.rebase(&target).await?;
             eprintln!("Rebased onto {target}");
         }
         SyncStrategy::Merge => {
             // Sync merges `target` (trunk) INTO the worktree, so the
             // destination bookmark to advance is the worktree's own branch
             // (`current`), not `target`.
-            repo.merge(&target, &current, false, false, None)?;
+            repo.merge(&target, &current, false, false, None).await?;
             eprintln!("Merged {target} into {current}");
         }
     }

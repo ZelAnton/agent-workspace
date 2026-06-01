@@ -17,6 +17,7 @@ notes.
 
 ### Changed
 - The terminal-tab recursion guard (`WS_SPAWNED_IN_TAB`) now takes precedence over an explicit `--in-new-tab`, making it an unconditional spawn-disable (no behavior change in normal use; defense against runaway tab spawning).
+- Internal: both VCS backends now run on the published `processkit` (async, job-backed process runner) + `vcs-git`/`vcs-jj` typed clients, instead of the in-house `vcs-runner`/`procpilot` pair; `ws` runs on a tokio runtime. The `vcs-github` (`gh`) client is wired in and ready (`Repo::github()`) but not yet used by any command. No user-visible behavior change.
 
 ### Fixed
 - `ws config --help` (and related comments) now say `.workspace.toml`, matching where `ws config` / `ws exclude` actually write.

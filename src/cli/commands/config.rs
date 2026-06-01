@@ -93,11 +93,11 @@ enum ConfigCommand {
     List,
 }
 
-pub fn run(args: ConfigArgs, repo: &crate::vcs::Repo) -> Result<()> {
+pub async fn run(args: ConfigArgs, repo: &crate::vcs::Repo) -> Result<()> {
     // Anchor everything in the current repo's root, even if invoked
     // from a worktree or deeper subdirectory. Same lookup the rest
     // of the CLI uses.
-    let repo_root = repo.repo_root().map_err(|e| Error::Other(e.to_string()))?;
+    let repo_root = repo.repo_root().await.map_err(|e| Error::Other(e.to_string()))?;
     // Prefer `.workspace.toml`; edit the legacy `.agent-workspace.toml` in
     // place when only it exists (no surprise second file). New repos get
     // `.workspace.toml`.

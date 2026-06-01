@@ -22,13 +22,13 @@ pub struct MoveArgs {
     new_branch: String,
 }
 
-pub fn run(args: MoveArgs, config: &Config, path_file: Option<&Path>, repo: &vcs::Repo) -> Result<()> {
-    let workspace_id = repo.workspace_id()?;
+pub async fn run(args: MoveArgs, config: &Config, path_file: Option<&Path>, repo: &vcs::Repo) -> Result<()> {
+    let workspace_id = repo.workspace_id().await?;
     let wt_dir = config.project_dir_for(&workspace_id);
 
     // Resolve '.' to current branch
     let old_branch = if args.old_branch == "." {
-        repo.current_branch()?
+        repo.current_branch().await?
     } else {
         args.old_branch
     };
@@ -69,10 +69,10 @@ pub fn run(args: MoveArgs, config: &Config, path_file: Option<&Path>, repo: &vcs
     vcs::step_out_of(&old_path, &wt_dir).map_err(|e| Error::Other(e.to_string()))?;
 
     // Move worktree to new path (updates git's internal tracking)
-    repo.move_worktree(&old_path, &new_path)?;
+    repo.move_worktree(&old_path, &new_path).await?;
 
     // Rename branch
-    repo.rename_branch(&old_branch, &args.new_branch)?;
+    repo.rename_branch(&old_branch, &args.new_branch).await?;
 
     // Rename metadata file (find old with fallback, write new format)
     let old_meta = crate::meta::meta_path_with_fallback(&wt_dir, &old_branch);

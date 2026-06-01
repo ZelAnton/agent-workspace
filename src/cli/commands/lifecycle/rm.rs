@@ -23,10 +23,10 @@ pub struct RmArgs {
     force: bool,
 }
 
-pub fn run(args: RmArgs, config: &Config, path_file: Option<&Path>, repo: &vcs::Repo) -> Result<()> {
+pub async fn run(args: RmArgs, config: &Config, path_file: Option<&Path>, repo: &vcs::Repo) -> Result<()> {
     // Get main repo path BEFORE any destructive operations
-    let main_path = repo.repo_root()?;
-    let workspace_id = repo.workspace_id()?;
+    let main_path = repo.repo_root().await?;
+    let workspace_id = repo.workspace_id().await?;
     let wt_dir = config.project_dir_for(&workspace_id);
 
     // Re-anchor at the main repo so worktree removal + branch deletion run
@@ -35,7 +35,7 @@ pub fn run(args: RmArgs, config: &Config, path_file: Option<&Path>, repo: &vcs::
 
     // Resolve '.' to current branch
     let branch = if args.branch == "." {
-        repo.current_branch()?
+        repo.current_branch().await?
     } else {
         args.branch
     };
@@ -67,10 +67,10 @@ pub fn run(args: RmArgs, config: &Config, path_file: Option<&Path>, repo: &vcs::
     vcs::step_out_of(&wt_path, &main_path).ok();
 
     // Remove worktree (via the main-repo handle).
-    main.remove_worktree(&wt_path, args.force)?;
+    main.remove_worktree(&wt_path, args.force).await?;
 
     // Delete branch — best-effort, failure doesn't block worktree cleanup
-    let _ = main.delete_branch(&branch, args.force);
+    let _ = main.delete_branch(&branch, args.force).await;
 
     // Remove metadata
     crate::meta::remove_meta(&wt_dir, &branch);

@@ -4,23 +4,23 @@
 
 use std::path::Path;
 
-use vcs_runner::{Cmd, RunError, Runner};
+use vcs_git::GitApi;
 
-use super::errmap::map_run_err;
-use crate::vcs::error::Result;
+use super::GitClient;
+use super::errmap::{extract_message, map_pk_err};
+use crate::vcs::error::{Error, Result};
+
+/// How many times a transient `git fetch` failure is retried before giving up.
+const FETCH_MAX_ATTEMPTS: usize = 3;
 
 /// Run `git merge` with the configured strategy.
 ///
 /// **Squash + message handling**: `git merge --squash` stages but doesn't
 /// commit, and the `-m` flag is incompatible with `--squash`. When called
-/// with `squash=true` AND `message=Some(_)`, this function does both steps
-/// atomically: stage via `git merge --squash`, then `git commit -m msg`
-/// (skipped if nothing was actually staged, matching "already up to date"
-/// semantics). This lets the caller `vcs::merge(...)` produce a finished
-/// squash commit in one trait call — same shape as jj's atomic merge —
-/// instead of needing a follow-up `has_staged_changes() + commit()` dance.
-pub(super) fn merge(
-    runner: &dyn Runner,
+/// with `squash=true` AND `message=Some(_)`, this does both steps: stage via
+/// `git merge --squash`, then `git commit -m msg` (skipped if nothing was
+/// actually staged, matching "already up to date" semantics).
+pub(super) async fn merge(
     cwd: &Path,
     branch: &str,
     squash: bool,
@@ -28,21 +28,16 @@ pub(super) fn merge(
     message: Option<&str>,
 ) -> Result<()> {
     if squash {
-        super::exec(runner, cwd, &["merge", "--squash", branch])?;
+        super::exec(cwd, ["merge", "--squash", branch]).await?;
         // If a message is provided, finalise the squash with a real commit.
         // The post-squash index may be empty when the branch was already
         // merged ("already up to date") — `git commit` would error with
         // "nothing to commit" in that case, so probe the index first.
         if let Some(msg) = message {
-            let has_staged = match runner.run(
-                Cmd::new("git").in_dir(cwd).args(["diff", "--cached", "--quiet"]),
-            ) {
-                Ok(_) => false,
-                Err(RunError::NonZeroExit { status, .. }) if status.code() == Some(1) => true,
-                Err(e) => return Err(map_run_err(e)),
-            };
-            if has_staged {
-                super::exec(runner, cwd, &["commit", "-m", msg])?;
+            // `diff --cached --quiet` exits 1 when there ARE staged changes.
+            let probe = super::capture(cwd, ["diff", "--cached", "--quiet"]).await?;
+            if probe.exit_code() == 1 {
+                super::exec(cwd, ["commit", "-m", msg]).await?;
             }
         }
         return Ok(());
@@ -58,184 +53,146 @@ pub(super) fn merge(
         args.push(msg);
     }
     args.push(branch);
-    super::exec(runner, cwd, &args)
+    super::exec(cwd, args).await
 }
 
 /// Dry-run a merge to check for conflicts without leaving state.
 ///
 /// Mirrors the real merge strategy: a `--no-ff` dry-run that passes can
-/// still fail under `--squash` (different three-way ancestor), silently
-/// leaving the repo half-merged. So we dry-run with the **actual** flag.
-///
-/// Returns `Ok(true)` if the merge would be clean, `Ok(false)` on conflict.
-pub(super) fn dry_run_merge(runner: &dyn Runner, cwd: &Path, branch: &str, squash: bool) -> Result<bool> {
-    let merge_args: &[&str] = if squash {
-        &["merge", "--squash", "--no-commit", branch]
+/// still fail under `--squash` (different three-way ancestor). So we dry-run
+/// with the **actual** flag. Returns `Ok(true)` if the merge would be clean.
+pub(super) async fn dry_run_merge(cwd: &Path, branch: &str, squash: bool) -> Result<bool> {
+    let merge_args: Vec<&str> = if squash {
+        vec!["merge", "--squash", "--no-commit", branch]
     } else {
-        &["merge", "--no-commit", "--no-ff", branch]
+        vec!["merge", "--no-commit", "--no-ff", branch]
     };
 
-    let clean = match runner.run(Cmd::new("git").in_dir(cwd).args(merge_args)) {
-        Ok(_) => true,
-        Err(RunError::NonZeroExit { .. }) => false,
-        Err(e) => return Err(map_run_err(e)),
-    };
+    let clean = super::capture(cwd, merge_args).await?.is_success();
 
     // Best-effort cleanup. `git merge --squash` never sets MERGE_HEAD so
-    // `--abort` errors; reset --hard HEAD restores the index in that case.
+    // `--abort` errors; `reset --hard HEAD` restores the index in that case.
     if squash {
-        let _ = runner.run(Cmd::new("git").in_dir(cwd).args(["reset", "--hard", "HEAD"]));
+        let _ = super::capture(cwd, ["reset", "--hard", "HEAD"]).await;
     } else {
-        let _ = runner.run(Cmd::new("git").in_dir(cwd).args(["merge", "--abort"]));
+        let _ = super::capture(cwd, ["merge", "--abort"]).await;
     }
 
     Ok(clean)
 }
 
 /// Run `git rebase <onto>`.
-pub(super) fn rebase(runner: &dyn Runner, cwd: &Path, onto: &str) -> Result<()> {
-    super::exec(runner, cwd, &["rebase", onto])
+pub(super) async fn rebase(cwd: &Path, onto: &str) -> Result<()> {
+    super::exec(cwd, ["rebase", onto]).await
 }
 
 /// Run `git checkout <branch>`.
-pub(super) fn checkout(runner: &dyn Runner, cwd: &Path, branch: &str) -> Result<()> {
-    super::exec(runner, cwd, &["checkout", branch])
+pub(super) async fn checkout(cwd: &Path, branch: &str) -> Result<()> {
+    super::exec(cwd, ["checkout", branch]).await
 }
 
 /// Commit currently staged changes.
-pub(super) fn commit(runner: &dyn Runner, cwd: &Path, message: &str) -> Result<()> {
-    super::exec(runner, cwd, &["commit", "-m", message])
+pub(super) async fn commit(cwd: &Path, message: &str) -> Result<()> {
+    super::exec(cwd, ["commit", "-m", message]).await
 }
 
 /// Fetch from origin with retry on transient network errors.
 ///
-/// **Non-zero exits are still silently swallowed** — fetch failing
-/// (after all retries) is not critical for downstream commands. We retry
-/// on a custom transient predicate matching DNS / connection / EOF
-/// patterns: `vcs_runner::RetryPolicy::default()` ships a predicate that
-/// only matches `"stale"`/`".lock"` (index-lock contention), which is the
-/// wrong shape for `git fetch` failures. See [`is_transient_fetch_err`].
-pub(super) fn fetch(runner: &dyn Runner, cwd: &Path) -> Result<()> {
-    use vcs_runner::RetryPolicy;
-    let policy = RetryPolicy::default().when(is_transient_fetch_err);
-    match runner.run(
-        Cmd::new("git")
-            .in_dir(cwd)
-            .args(["fetch", "--quiet"])
-            .retry(policy),
-    ) {
-        Ok(_) | Err(RunError::NonZeroExit { .. }) => Ok(()),
-        Err(e) => Err(map_run_err(e)),
+/// **Non-zero exits are still silently swallowed** — fetch failing (after all
+/// retries) is not critical for downstream commands. Transient blips
+/// (DNS / connection / EOF) retry first; see [`is_transient_fetch_err`].
+pub(super) async fn fetch(cwd: &Path) -> Result<()> {
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let out = super::capture(cwd, ["fetch", "--quiet"]).await?;
+        if out.is_success() {
+            return Ok(());
+        }
+        if attempt < FETCH_MAX_ATTEMPTS && is_transient_fetch_err(out.stderr()) {
+            continue;
+        }
+        // Best-effort: a non-transient or retries-exhausted failure is swallowed.
+        return Ok(());
     }
 }
 
 /// Fetch a SINGLE branch from `origin` into its remote-tracking ref.
 ///
-/// Unlike [`fetch`], this is **targeted** (one branch, not the whole
-/// remote) so it stays cheap on large monorepos, and it **hard-fails** on
-/// error: callers reach it only after `remote_branch_exists` already
-/// confirmed the branch is there, so a failure here (network dropped mid
-/// way, ref deleted in the race window, auth revoked) is real and
-/// actionable rather than the "fetch is best-effort" case. Transient
-/// network blips still retry first via [`is_transient_fetch_err`].
-pub(super) fn fetch_remote_branch(runner: &dyn Runner, cwd: &Path, branch: &str) -> Result<()> {
-    use vcs_runner::RetryPolicy;
+/// Unlike [`fetch`], this is **targeted** and **hard-fails** on error: callers
+/// reach it only after `remote_branch_exists` already confirmed the branch is
+/// there, so a failure here is real and actionable. Transient network blips
+/// still retry first.
+pub(super) async fn fetch_remote_branch(cwd: &Path, branch: &str) -> Result<()> {
     let refspec = format!("refs/heads/{branch}:refs/remotes/origin/{branch}");
-    let policy = RetryPolicy::default().when(is_transient_fetch_err);
-    runner
-        .run(
-            Cmd::new("git")
-                .in_dir(cwd)
-                .args(["fetch", "--quiet", "origin", &refspec])
-                .env("GIT_TERMINAL_PROMPT", "0")
-                .retry(policy),
-        )
-        .map(|_| ())
-        .map_err(map_run_err)
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let out = super::git_cmd(cwd, ["fetch", "--quiet", "origin", refspec.as_str()])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output_string()
+            .await
+            .map_err(map_pk_err)?;
+        if out.is_success() {
+            return Ok(());
+        }
+        if attempt < FETCH_MAX_ATTEMPTS && is_transient_fetch_err(out.stderr()) {
+            continue;
+        }
+        return Err(Error::Command(extract_message(out.stderr(), out.stdout().as_bytes())));
+    }
 }
 
-/// True if `err` looks like a transient network failure that's worth
-/// retrying. Matches stderr text against patterns git emits for DNS
-/// failures, connection resets, and protocol-level early EOFs.
-///
-/// Kept `pub(crate)` so the unit test in `tests::mock_runner` can hit
-/// the predicate directly without spinning up a real failed fetch.
-pub(crate) fn is_transient_fetch_err(err: &RunError) -> bool {
-    let RunError::NonZeroExit { stderr, .. } = err else {
-        return false;
-    };
+/// True if `stderr` looks like a transient network failure worth retrying.
+/// Matches text git emits for DNS failures, connection resets, and
+/// protocol-level early EOFs.
+pub(crate) fn is_transient_fetch_err(stderr: &str) -> bool {
     const TRANSIENT_MARKERS: &[&str] = &[
-        "Could not resolve",        // DNS failure
+        "Could not resolve",          // DNS failure
         "Could not read from remote", // common pre-protocol failure
-        "Connection",                // refused / reset / timed out
+        "Connection",                 // refused / reset / timed out
         "timed out",
-        "early EOF",                // protocol cut short mid-transfer
+        "early EOF",                  // protocol cut short mid-transfer
         "the remote end hung up",
     ];
     TRANSIENT_MARKERS.iter().any(|m| stderr.contains(m))
 }
 
 /// Abort an in-progress rebase.
-pub(super) fn rebase_abort(runner: &dyn Runner, cwd: &Path) -> Result<()> {
-    super::exec(runner, cwd, &["rebase", "--abort"])
+pub(super) async fn rebase_abort(cwd: &Path) -> Result<()> {
+    super::exec(cwd, ["rebase", "--abort"]).await
 }
 
 /// Continue an in-progress rebase after conflict resolution.
-pub(super) fn rebase_continue(runner: &dyn Runner, cwd: &Path) -> Result<()> {
-    super::exec(runner, cwd, &["rebase", "--continue"])
+pub(super) async fn rebase_continue(cwd: &Path) -> Result<()> {
+    super::exec(cwd, ["rebase", "--continue"]).await
 }
 
 /// Abort an in-progress merge.
-pub(super) fn merge_abort(runner: &dyn Runner, cwd: &Path) -> Result<()> {
-    super::exec(runner, cwd, &["merge", "--abort"])
+pub(super) async fn merge_abort(cwd: &Path) -> Result<()> {
+    super::exec(cwd, ["merge", "--abort"]).await
 }
 
-/// Reset index to HEAD, clearing any merge/squash conflict state.
-///
-/// Unlike `merge --abort`, this also works for `--squash` conflicts which
-/// don't create MERGE_HEAD.
-pub(super) fn reset_merge(runner: &dyn Runner, cwd: &Path) -> Result<()> {
-    super::exec(runner, cwd, &["reset", "--merge"])
+/// Reset index to HEAD, clearing any merge/squash conflict state. Unlike
+/// `merge --abort`, this also works for `--squash` conflicts which don't
+/// create MERGE_HEAD.
+pub(super) async fn reset_merge(cwd: &Path) -> Result<()> {
+    super::exec(cwd, ["reset", "--merge"]).await
 }
 
 /// Continue an in-progress merge (after conflict resolution).
-pub(super) fn merge_continue(runner: &dyn Runner, cwd: &Path) -> Result<()> {
-    super::exec(runner, cwd, &["commit", "--no-edit"])
+pub(super) async fn merge_continue(cwd: &Path) -> Result<()> {
+    super::exec(cwd, ["commit", "--no-edit"]).await
 }
 
-/// Get the git dir (`.git` or `.git/worktrees/<branch>`) for probing
-/// in-progress state files. Returns `None` outside a repo so the
-/// `is_*_in_progress` probes silently say "no" rather than erroring.
-fn git_dir(runner: &dyn Runner, cwd: Option<&Path>) -> Option<std::path::PathBuf> {
-    // `None` means "read the live process cwd" — same as the historical
-    // `std::env::current_dir()` call. These probes are best-effort (a failure
-    // means "no in-progress state"), so a cwd-read failure collapses to `None`.
-    let cwd = match cwd {
-        Some(d) => d.to_path_buf(),
-        None => std::env::current_dir().ok()?,
-    };
-    runner
-        .run(Cmd::new("git").in_dir(&cwd).args(["rev-parse", "--git-dir"]))
-        .ok()
-        .map(|out| std::path::PathBuf::from(out.stdout_lossy().trim()))
+/// True iff a rebase is currently in progress (`.git/rebase-merge` or
+/// `.git/rebase-apply`). Best-effort: a probe failure (outside a repo) reads
+/// as "no".
+pub(super) async fn is_rebase_in_progress(git: &GitClient, cwd: &Path) -> bool {
+    git.is_rebase_in_progress(cwd).await.unwrap_or(false)
 }
 
-/// True iff a rebase is currently in progress.
-///
-/// Git stashes rebase state in `.git/rebase-merge/` (interactive / merge
-/// strategy) or `.git/rebase-apply/` (am-based rebase). jj has no
-/// equivalent concept — `JjBackend::is_rebase_in_progress` returns `false`.
-pub(super) fn is_rebase_in_progress(runner: &dyn Runner, cwd: Option<&Path>) -> bool {
-    git_dir(runner, cwd).is_some_and(|d| {
-        d.join("rebase-merge").exists() || d.join("rebase-apply").exists()
-    })
-}
-
-/// True iff a merge is currently in progress (`.git/MERGE_HEAD` exists).
-///
-/// jj treats unresolved conflicts as committed state, not a transient
-/// "merge in progress" status — the jj impl will read `jj st` for
-/// unresolved conflicts instead.
-pub(super) fn is_merge_in_progress(runner: &dyn Runner, cwd: Option<&Path>) -> bool {
-    git_dir(runner, cwd).is_some_and(|d| d.join("MERGE_HEAD").exists())
+/// True iff a merge is currently in progress (`.git/MERGE_HEAD`). Best-effort.
+pub(super) async fn is_merge_in_progress(git: &GitClient, cwd: &Path) -> bool {
+    git.is_merge_in_progress(cwd).await.unwrap_or(false)
 }

@@ -4,10 +4,10 @@
 
 use std::path::{Path, PathBuf};
 
-use vcs_runner::{Cmd, RunError, Runner};
+use vcs_git::GitApi;
 
-use super::errmap::map_run_err;
-use crate::vcs::common::{path_str, CreateOutcome, WorktreeInfo};
+use super::GitClient;
+use crate::vcs::common::{CreateOutcome, WorktreeInfo, path_str};
 use crate::vcs::error::{Error, Result};
 
 /// Create a new git worktree.
@@ -21,61 +21,55 @@ use crate::vcs::error::{Error, Result};
 ///     repo contents → restore source repo. The reflink step is near-
 ///     instant on ReFS / Btrfs / XFS / APFS.
 ///
-/// CoW eligibility is decided by [`crate::cow::can_clone`] (which does a
-/// real sentinel reflink at the destination's parent). When CoW isn't
+/// CoW eligibility is decided by [`crate::cow::can_clone`]. When CoW isn't
 /// possible we silently fall back to plain — no warnings, no errors.
-pub(super) fn create_worktree(
-    runner: &dyn Runner,
+pub(super) async fn create_worktree(
+    git: &GitClient,
     cwd: &Path,
     path: &Path,
     branch: &str,
     base: &str,
 ) -> Result<CreateOutcome> {
     // Pre-flight `WorktreeExists` check applies to BOTH paths.
-    let branch_already_exists = super::repo::branch_exists(runner, cwd, branch)?;
+    let branch_already_exists = super::repo::branch_exists(git, cwd, branch).await?;
     if branch_already_exists {
-        let worktrees = list_worktrees(runner, cwd)?;
+        let worktrees = list_worktrees(git, cwd).await?;
         if worktrees.iter().any(|wt| wt.branch.as_deref() == Some(branch)) {
             return Err(Error::WorktreeExists(branch.to_string()));
         }
     }
 
     // CoW probe — requires both the repo root and `path`'s parent to be on
-    // the same reflink-capable volume. The parent dir must already exist
-    // (caller in `new.rs` calls `create_dir_all` on `workspace_dir` before
-    // dispatching here).
+    // the same reflink-capable volume. The parent dir must already exist.
     let parent = path.parent().unwrap_or(path);
     if std::env::var(crate::cow::DISABLE_COW_ENV).is_err()
-        && let Ok(repo_root) = super::repo::repo_root(runner, cwd)
+        && let Ok(repo_root) = super::repo::repo_root(git, cwd).await
         && parent.exists()
         && crate::cow::can_clone(&repo_root, parent)
     {
-        return create_worktree_cow(runner, cwd, &repo_root, path, branch, base, branch_already_exists);
+        return create_worktree_cow(git, cwd, &repo_root, path, branch, base, branch_already_exists)
+            .await;
     }
 
-    create_worktree_plain(runner, cwd, path, branch, base, branch_already_exists)
+    create_worktree_plain(cwd, path, branch, base, branch_already_exists).await
 }
 
 /// Create a worktree from a branch that exists only on `origin`: fetch
 /// just that branch, then create the worktree from the remote-tracking
-/// ref. Reuses [`create_worktree`] with `base = "origin/<branch>"`; since
-/// `<branch>` doesn't exist locally, that takes the new-branch path
-/// (`git worktree add -b <branch> <path> origin/<branch>`), which mints a
-/// local `<branch>` tracking the remote.
-pub(super) fn create_worktree_from_remote(
-    runner: &dyn Runner,
+/// ref. Reuses [`create_worktree`] with `base = "origin/<branch>"`.
+pub(super) async fn create_worktree_from_remote(
+    git: &GitClient,
     cwd: &Path,
     path: &Path,
     branch: &str,
 ) -> Result<CreateOutcome> {
     eprintln!("  Fetching '{branch}' from origin...");
-    super::ops::fetch_remote_branch(runner, cwd, branch)?;
-    create_worktree(runner, cwd, path, branch, &format!("origin/{branch}"))
+    super::ops::fetch_remote_branch(cwd, branch).await?;
+    create_worktree(git, cwd, path, branch, &format!("origin/{branch}")).await
 }
 
 /// Standard `git worktree add` — git materialises the working copy.
-fn create_worktree_plain(
-    runner: &dyn Runner,
+async fn create_worktree_plain(
     cwd: &Path,
     path: &Path,
     branch: &str,
@@ -85,11 +79,80 @@ fn create_worktree_plain(
     let path_arg = path_str(path)?;
     eprintln!("  Running git worktree add...");
     if branch_already_exists {
-        super::exec(runner, cwd, &["worktree", "add", path_arg, branch])?;
+        super::exec(cwd, ["worktree", "add", path_arg, branch]).await?;
     } else {
-        super::exec(runner, cwd, &["worktree", "add", "-b", branch, path_arg, base])?;
+        super::exec(cwd, ["worktree", "add", "-b", branch, path_arg, base]).await?;
     }
     Ok(CreateOutcome::Plain)
+}
+
+/// Run `jj git import` in `repo_root`, best-effort: warn (don't fail) on a
+/// non-zero exit or a spawn failure. Used to bracket the raw git operations
+/// in the CoW flow so a colocated jj repo's view doesn't drift.
+async fn jj_import_best_effort(repo_root: &Path, phase: &str) {
+    // Drive jj through the typed `vcs-jj` client (job-backed runner).
+    use vcs_jj::JjApi;
+    let jj = vcs_jj::Jj::new();
+    match jj.git_import(repo_root).await {
+        Ok(()) => {}
+        Err(processkit::Error::Spawn { .. }) => {
+            eprintln!(
+                "Warning: {phase} `jj git import` failed to spawn (is jj installed?); \
+                 colocated jj state may drift from git"
+            );
+        }
+        Err(e) => {
+            eprintln!(
+                "Warning: {phase} `jj git import` failed: {e} — jj-side refs may be \
+                 stale after this operation; run `jj git import` manually if needed"
+            );
+        }
+    }
+}
+
+/// Restore the source repo after the CoW flow: checkout BEFORE stash pop so the
+/// pop applies to the right branch. `git stash pop` runs ONLY if the restoring
+/// checkout succeeded — otherwise the user's stashed work would land on the
+/// wrong branch with no signal. Returns whether the checkout restored cleanly.
+async fn restore_source_repo(
+    cwd: &Path,
+    needs_restore: bool,
+    restore_target: &str,
+    needs_stash: bool,
+    report: bool,
+) -> bool {
+    let t = std::time::Instant::now();
+    let restored = if needs_restore {
+        match super::exec(cwd, ["checkout", restore_target]).await {
+            Ok(_) => true,
+            Err(e) => {
+                eprintln!("Warning: failed to restore '{restore_target}': {e}");
+                false
+            }
+        }
+    } else {
+        true
+    };
+    if needs_stash {
+        if restored {
+            if let Err(e) = super::exec(cwd, ["stash", "pop"]).await {
+                eprintln!(
+                    "Warning: 'git stash pop' failed: {e}\n\
+                     Your changes are saved in 'git stash list'; resolve manually."
+                );
+            }
+        } else {
+            eprintln!(
+                "Warning: could not restore '{restore_target}', so your stashed \
+                 changes were left untouched in 'git stash list'.\n\
+                 Check out the right branch and run 'git stash pop' manually."
+            );
+        }
+    }
+    if report {
+        eprintln!("  Restored source branch ({}).", crate::util::format_step(t.elapsed()));
+    }
+    restored
 }
 
 /// CoW creation: stash → checkout base → `worktree add --no-checkout`
@@ -98,8 +161,9 @@ fn create_worktree_plain(
 /// On any failure between stash and pop the source repo is restored to its
 /// original state before the error propagates. The half-created worktree
 /// (if any) is deleted and `git worktree prune` clears git's registry.
-fn create_worktree_cow(
-    runner: &dyn Runner,
+#[allow(clippy::too_many_arguments)]
+async fn create_worktree_cow(
+    git: &GitClient,
     cwd: &Path,
     repo_root: &Path,
     path: &Path,
@@ -109,66 +173,32 @@ fn create_worktree_cow(
 ) -> Result<CreateOutcome> {
     let path_arg = path_str(path)?;
 
-    // 0. Colocated detection. When the repo has `.jj/` alongside `.git/`,
-    //    the raw git operations below (stash, checkout, worktree add)
-    //    mutate git's HEAD/index without going through jj — desyncing
-    //    jj's view of the repo. Bracket the whole CoW flow with `jj git
-    //    import` so jj's bookmarks/refs catch up before and after.
-    //
-    // The import calls are best-effort: jj may not be installed locally
-    // (a colocated repo can travel between machines), in which case the
-    // calls silently fail and the user's jj-side state may drift —
-    // already broken if they ran any raw git command without jj sync,
-    // so no regression.
+    // 0. Colocated detection. When the repo has `.jj/` alongside `.git/`, the
+    //    raw git operations below mutate git's HEAD/index without going through
+    //    jj — desyncing jj's view. Bracket the whole CoW flow with `jj git
+    //    import` so jj's bookmarks/refs catch up before and after. Best-effort:
+    //    jj may not be installed (a colocated repo can travel between machines).
     let is_colocated = repo_root.join(".jj").is_dir();
     if is_colocated {
-        match std::process::Command::new("jj")
-            .current_dir(repo_root)
-            .args(["git", "import"])
-            .status()
-        {
-            Ok(s) if !s.success() => {
-                eprintln!(
-                    "Warning: pre-CoW `jj git import` exited {} — jj-side refs may \
-                     be stale after this operation; run `jj git import` manually if needed",
-                    s.code().unwrap_or(-1)
-                );
-            }
-            Err(e) => {
-                eprintln!(
-                    "Warning: pre-CoW `jj git import` failed to spawn: {e} \
-                     (is jj installed?); colocated jj state may drift from git"
-                );
-            }
-            Ok(_) => {} // success; no output
-        }
+        jj_import_best_effort(repo_root, "pre-CoW").await;
     }
 
-    // 1. Capture source state. Both the branch name AND the commit hash:
-    // when the branch name is "HEAD" the repo is in detached state, and
-    // `git checkout HEAD` is a no-op (does not restore the original
-    // commit after we move HEAD to `base`). Restore via the captured
-    // commit hash in that case.
-    let orig_branch = super::repo::current_branch(runner, cwd)?;
-    let orig_commit = super::repo::current_commit(runner, cwd)?;
+    // 1. Capture source state — branch name AND commit hash. When the branch
+    //    name is "HEAD" the repo is detached, and `git checkout HEAD` is a
+    //    no-op; restore via the captured commit hash in that case.
+    let orig_branch = super::repo::current_branch(git, cwd).await?;
+    let orig_commit = super::repo::current_commit(git, cwd).await?;
     let is_detached = orig_branch == "HEAD";
-    let needs_stash = super::branch::has_uncommitted_changes(runner, cwd)?;
+    let needs_stash = super::branch::has_uncommitted_changes(git, cwd).await?;
 
-    // Windows uses CopyFileExW via robocopy which transparently
-    // block-clones on ReFS. Linux/macOS use the explicit reflink IOCTLs
-    // (ioctl_ficlone / clonefile). Same outcome, different surfacing.
     #[cfg(windows)]
     eprintln!("  Using ReFS block clone...");
     #[cfg(not(windows))]
     eprintln!("  Using CoW (reflink) clone...");
 
-    // 2. Stash if dirty. `-u` includes untracked.
-    //
-    // The stash message includes both PID and a nanosecond timestamp so
-    // multiple failed runs in the same shell session leave distinguishable
-    // entries in `git stash list` — without the timestamp, a user who
-    // hits two consecutive CoW failures would see two stashes with
-    // identical names and have to drop them by index alone.
+    // 2. Stash if dirty. `-u` includes untracked. The message embeds PID +
+    //    nanosecond timestamp so multiple failed runs leave distinguishable
+    //    `git stash list` entries.
     let stash_message = format!(
         "ws-cow-create-{}-{}",
         std::process::id(),
@@ -179,219 +209,103 @@ fn create_worktree_cow(
     );
     if needs_stash {
         let t = std::time::Instant::now();
-        super::exec(runner, cwd, &["stash", "push", "-u", "-m", &stash_message])?;
-        eprintln!(
-            "  Stashed uncommitted changes ({}).",
-            crate::util::format_step(t.elapsed())
-        );
+        super::exec(cwd, ["stash", "push", "-u", "-m", &stash_message]).await?;
+        eprintln!("  Stashed uncommitted changes ({}).", crate::util::format_step(t.elapsed()));
     }
 
-    // The inner closure handles steps 3-5 with explicit rollback on any
-    // error. We always restore the source repo (step 6) afterwards, even
-    // on success — current_branch may have differed from base.
-    // The source repo must present, for the reflink, the SAME tree the new
-    // worktree's HEAD will point at:
-    //   - new branch: `base` (the branch is created from it → identical tree).
-    //   - resume:     the existing branch's own commit, checked out DETACHED
-    //                 so the branch ref stays free for `worktree add <path>
-    //                 <branch>` (step 4). Checking out the branch *by name*
-    //                 in the source would make git refuse the worktree add
-    //                 ("branch already checked out"); reflinking `base`'s tree
-    //                 instead would leave the worktree's files mismatched
-    //                 against its HEAD (every diff showing as modified).
+    // Steps 3-5 with explicit rollback on any error. The source repo must
+    // present, for the reflink, the SAME tree the new worktree's HEAD points at.
     let mut moved_source = false;
-    let inner: Result<()> = (|| {
+    let inner: Result<()> = async {
         // 3. Put the source working tree on the right commit.
         if branch_already_exists {
-            // Resolve the BRANCH ref explicitly (`refs/heads/<branch>`), not
-            // the bare name: a tag sharing the name would otherwise win git's
-            // ref-precedence and resolve to the wrong commit, while step 4's
-            // `worktree add <path> <branch>` checks out the branch — yielding
-            // a reflink-source tree that mismatches the worktree's HEAD.
+            // Resolve the BRANCH ref explicitly (`refs/heads/<branch>`), not the
+            // bare name: a tag sharing the name would otherwise win git's
+            // ref-precedence and resolve to the wrong commit.
             let branch_commit =
-                super::repo::resolve_commit(runner, cwd, &format!("refs/heads/{branch}"))?;
+                super::repo::resolve_commit(git, cwd, &format!("refs/heads/{branch}")).await?;
             if orig_commit != branch_commit {
                 let t = std::time::Instant::now();
-                super::exec(runner, cwd, &["checkout", "--detach", &branch_commit])?;
+                super::exec(cwd, ["checkout", "--detach", &branch_commit]).await?;
                 moved_source = true;
-                eprintln!(
-                    "  Switched to '{branch}' ({}).",
-                    crate::util::format_step(t.elapsed())
-                );
+                eprintln!("  Switched to '{branch}' ({}).", crate::util::format_step(t.elapsed()));
             }
         } else if orig_branch != base {
             let t = std::time::Instant::now();
-            super::exec(runner, cwd, &["checkout", base])?;
+            super::exec(cwd, ["checkout", base]).await?;
             moved_source = true;
-            eprintln!(
-                "  Switched to '{base}' ({}).",
-                crate::util::format_step(t.elapsed())
-            );
+            eprintln!("  Switched to '{base}' ({}).", crate::util::format_step(t.elapsed()));
         }
 
-        // 4. Create worktree with --no-checkout. git creates the `.git`
-        // gitlink file at `path` and registers the worktree, but doesn't
-        // write any working-tree files.
+        // 4. Create worktree with --no-checkout. git creates the `.git` gitlink
+        //    file at `path` and registers the worktree, but writes no
+        //    working-tree files.
         let t = std::time::Instant::now();
-        let add_result = if branch_already_exists {
-            super::exec(runner, cwd, &["worktree", "add", "--no-checkout", path_arg, branch])
+        if branch_already_exists {
+            super::exec(cwd, ["worktree", "add", "--no-checkout", path_arg, branch]).await?;
         } else {
-            super::exec(
-                runner,
-                cwd,
-                &["worktree", "add", "--no-checkout", "-b", branch, path_arg, base],
-            )
-        };
-        add_result?;
-        eprintln!(
-            "  Created workspace skeleton ({}).",
-            crate::util::format_step(t.elapsed())
-        );
+            super::exec(cwd, ["worktree", "add", "--no-checkout", "-b", branch, path_arg, base])
+                .await?;
+        }
+        eprintln!("  Created workspace skeleton ({}).", crate::util::format_step(t.elapsed()));
 
         // 5. Reflink-copy every file/dir from repo root to `path`, except
-        // `.git/` (which `--no-checkout` already created as a gitlink).
-        // `try_clone_dir_except` prints its own scan-spinner + progress bar
-        // and a "Cloned N files (X GB) via reflink." summary on completion.
-        let copied_bytes = match crate::cow::try_clone_dir_except(repo_root, path, &[".git"]) {
+        //    `.git/`. The copy is synchronous (rayon + reflink IOCTLs / robocopy)
+        //    and CPU/IO heavy, so it runs on a blocking thread to keep the async
+        //    executor free.
+        let repo_root_owned = repo_root.to_path_buf();
+        let path_owned = path.to_path_buf();
+        let copied_bytes = match tokio::task::spawn_blocking(move || {
+            crate::cow::try_clone_dir_except(&repo_root_owned, &path_owned, &[".git"])
+        })
+        .await
+        .expect("reflink clone task panicked")
+        {
             Ok(bytes) => bytes,
             Err(e) => {
-                // CoW failed mid-walk. Remove the half-populated worktree dir
-                // and run `git worktree prune` so git's registry stays clean.
-                // Preserve the structured `cow::Error` via `Error::Cow` so
-                // callers/tests can match the underlying cause.
+                // CoW failed mid-walk. Remove the half-populated worktree dir and
+                // prune git's registry. Preserve the structured cause via Error::Cow.
                 let _ = std::fs::remove_dir_all(path);
-                let _ = super::exec(runner, cwd, &["worktree", "prune"]);
+                let _ = super::exec(cwd, ["worktree", "prune"]).await;
                 return Err(Error::Cow(e));
             }
         };
 
-        // 6. Reconcile the new worktree's index with the actual files on
-        //    disk. `git worktree add --no-checkout` leaves the worktree's
-        //    INDEX empty — it skips the index-population step that the
-        //    default checkout does. Then we materialise files outside of
-        //    git's view (via reflink / robocopy / fs::copy). Result:
-        //    HEAD has all files, index is empty, working tree has all
-        //    files — and `git status` reports every file as both
-        //    "staged deletion" (HEAD → index) and "untracked"
-        //    (working-tree → index).
-        //
-        //    `git read-tree HEAD` populates the index with HEAD's tree
-        //    (no I/O on file contents, just metadata). Then
-        //    `git update-index --refresh -q` walks the index, stats
-        //    every file, and records the actual mtime/size/inode so
-        //    `git status` knows the working tree is in sync. `-q`
-        //    suppresses the "needs update" lines that --refresh
-        //    normally prints for every entry it touches. The exit code
-        //    is non-zero whenever any entry needed updating, which is
-        //    expected here (every entry will), so we ignore it.
-        //
-        //    Cost: O(num_files) stat() calls, dominated by the same FS
-        //    metadata bandwidth that the copy itself uses. For small
-        //    repos this is a quick spinner; for >2 GiB repos the helper
-        //    switches to batched `--stdin` mode that drives a real
-        //    progress bar (see helper).
-        refresh_index_with_progress(runner, path, copied_bytes)?;
+        // 6. Reconcile the new worktree's index with the files on disk. After
+        //    `--no-checkout` the index is empty and files were materialised
+        //    outside git's view, so `git status` would report every file as
+        //    both staged-deletion and untracked. `read-tree HEAD` +
+        //    `update-index --refresh` fixes that. Synchronous (drives progress
+        //    bars / batches), so it runs on a blocking thread.
+        let path_for_refresh = path.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            refresh_index_with_progress(&path_for_refresh, copied_bytes)
+        })
+        .await
+        .expect("index refresh task panicked")?;
 
         Ok(())
-    })();
+    }
+    .await;
 
-    // 6. Restore source repo. Order matters: checkout BEFORE stash pop so
-    // pop applies to the right branch.
-    //
-    // Detached HEAD: `git checkout HEAD` would be a no-op (leaving us on
-    // `base`). Use the captured commit hash to restore the actual
-    // detached state. Skip when we're already on the right commit
-    // (orig_branch == base case is already filtered out below).
-    let restore_target = if is_detached { &orig_commit } else { &orig_branch };
-    // Restore iff step 3 actually moved the source (covers both the
-    // new-branch `checkout base` and the resume detached checkout, and the
-    // originally-detached case where `orig_branch == "HEAD" != base`).
+    // Restore source repo. Detached HEAD restores via the captured commit hash.
+    let restore_target = if is_detached { orig_commit.as_str() } else { orig_branch.as_str() };
     let needs_restore = moved_source;
-    // Restore order matters: checkout BEFORE stash pop so the pop applies to
-    // the original branch's tree, not `base`. Crucially, `git stash pop` must
-    // only run if the restoring checkout actually succeeded — otherwise we'd
-    // apply the user's stashed work onto the WRONG branch (`base`/`branch`)
-    // with no signal. If restore fails, leave the stash intact and tell the
-    // user loudly. This helper enforces that invariant on both the success and
-    // failure paths.
-    let restore_source = |report: bool| {
-        let t = std::time::Instant::now();
-        let restored = if needs_restore {
-            match super::exec(runner, cwd, &["checkout", restore_target]) {
-                Ok(_) => true,
-                Err(e) => {
-                    eprintln!("Warning: failed to restore '{restore_target}': {e}");
-                    false
-                }
-            }
-        } else {
-            true
-        };
-        if needs_stash {
-            if restored {
-                if let Err(e) = super::exec(runner, cwd, &["stash", "pop"]) {
-                    // Stash pop conflict: user's changes are safe in
-                    // `git stash list` but require manual resolution.
-                    eprintln!(
-                        "Warning: 'git stash pop' failed: {e}\n\
-                         Your changes are saved in 'git stash list'; resolve manually."
-                    );
-                }
-            } else {
-                // Restore checkout failed — do NOT pop onto the wrong branch.
-                eprintln!(
-                    "Warning: could not restore '{restore_target}', so your stashed \
-                     changes were left untouched in 'git stash list'.\n\
-                     Check out the right branch and run 'git stash pop' manually."
-                );
-            }
-        }
-        if report {
-            eprintln!(
-                "  Restored source branch ({}).",
-                crate::util::format_step(t.elapsed())
-            );
-        }
-        restored
-    };
 
     let mut source_restored = true;
     if inner.is_ok() && (needs_restore || needs_stash) {
-        source_restored = restore_source(true);
+        source_restored =
+            restore_source_repo(cwd, needs_restore, restore_target, needs_stash, true).await;
     } else if inner.is_err() {
-        // Failure path: still try to restore so the user's repo isn't left in
-        // a half-broken state, but don't time/report — they have bigger
-        // problems. Same wrong-branch-pop guard applies.
-        source_restored = restore_source(false);
+        // Failure path: still try to restore so the repo isn't left half-broken.
+        source_restored =
+            restore_source_repo(cwd, needs_restore, restore_target, needs_stash, false).await;
     }
 
-    // 7. Colocated post-sync: tell jj about the new worktree's ref
-    //    movement and the source repo's branch/stash state restoration.
-    //    Skip when the source restore failed — importing a known-broken
-    //    intermediate git state would record that inconsistency into jj's
-    //    view. Leave jj on its pre-op state and let the user re-import once
-    //    they've fixed git by hand.
+    // 7. Colocated post-sync. Skip when the source restore failed — importing a
+    //    known-broken intermediate git state would record that into jj's view.
     if is_colocated && source_restored {
-        match std::process::Command::new("jj")
-            .current_dir(repo_root)
-            .args(["git", "import"])
-            .status()
-        {
-            Ok(s) if !s.success() => {
-                eprintln!(
-                    "Warning: post-CoW `jj git import` exited {} — jj's bookmarks \
-                     may not reflect the new worktree's HEAD; run `jj git import` manually",
-                    s.code().unwrap_or(-1)
-                );
-            }
-            Err(e) => {
-                eprintln!(
-                    "Warning: post-CoW `jj git import` failed to spawn: {e} \
-                     (is jj installed?); colocated jj state may drift from git"
-                );
-            }
-            Ok(_) => {}
-        }
+        jj_import_best_effort(repo_root, "post-CoW").await;
     } else if is_colocated && !source_restored {
         eprintln!(
             "Warning: skipped post-CoW `jj git import` because the source repo \
@@ -403,70 +317,60 @@ fn create_worktree_cow(
     Ok(CreateOutcome::CowCloned)
 }
 
-/// Strategy threshold: above this many bytes copied, the index refresh
-/// switches to the batched-stdin mode (real progress bar, real cost in
-/// per-batch process spawns) instead of the single-process spinner. On
-/// repos smaller than this the single process finishes fast enough that
-/// the spinner-only path is the better UX — no point eating ~3 s of
-/// spawn overhead to show progress for a 5-second refresh.
+/// Strategy threshold: above this many bytes copied, the index refresh switches
+/// to batched-stdin mode (real progress bar) instead of the single-process
+/// spinner. Below it the single process finishes fast enough that the
+/// spinner-only path is the better UX.
 const INDEX_REFRESH_BATCHED_THRESHOLD: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB
 
-/// Run `git read-tree HEAD` to populate the index, then refresh stat
-/// info for every entry. Two implementations:
+/// Run `git read-tree HEAD` to populate the index, then refresh stat info for
+/// every entry. Synchronous (uses `std::process` directly) so it can run inside
+/// `spawn_blocking` with its progress bars / batches intact. Two paths:
 ///
-///   - **Small repos (< 2 GiB copied)**: single `git update-index
-///     --refresh -q` invocation, fronted by an elapsed-time spinner.
-///     Cheap, simple, finishes in 1-5 s.
-///
+///   - **Small repos (< 2 GiB copied)**: a single `git update-index --refresh
+///     -q`, fronted by an elapsed-time spinner.
 ///   - **Large repos (≥ 2 GiB copied)**: read the entry list once
-///     (`git ls-files -z`), then run `git update-index --stdin -z
-///     --refresh -q` in batches of `BATCH_SIZE` entries — feeding each
-///     batch's paths via stdin and incrementing a real progress bar
-///     after each batch returns. Spawn overhead is ~50 ms × 60 batches
-///     ≈ 3 s extra wall time on a 300k-entry CargoWise repo, which is
-///     a fair price for visible progress across what would otherwise be
-///     a silent 2-minute step.
-///
-/// **Why not parse `update-index --verbose` stdout for progress in the
-/// single-process path**: tried it in v0.13.11 and confirmed it doesn't
-/// work on Windows. When git's stdout is piped (rather than connected
-/// to a TTY) MSVCRT puts the stream into full-block buffering, so
-/// per-entry verbose lines pile up in the buffer and only flush when
-/// git exits — bar stays at 0% for the entire refresh, jumps to 100%
-/// at the end. Real per-entry progress on a single process would need
-/// a PTY allocation. The batched-stdin approach gets us progress at the
-/// granularity of batches (5 k entries each) without any extra deps —
-/// good enough.
-fn refresh_index_with_progress(runner: &dyn Runner, path: &Path, copied_bytes: u64) -> Result<()> {
+///     (`git ls-files -z`), then run `git update-index --stdin -z --refresh -q`
+///     in batches, incrementing a real progress bar per batch.
+fn refresh_index_with_progress(path: &Path, copied_bytes: u64) -> Result<()> {
+    use std::process::Command;
     use std::time::Instant;
 
-    // Step 1: populate index from HEAD. Fast (one file write, no
-    // per-entry I/O), no progress needed.
-    runner
-        .run(Cmd::new("git").in_dir(path).args(["read-tree", "HEAD"]))
-        .map(|_| ())
-        .map_err(map_run_err)?;
+    // Step 1: populate index from HEAD. Fast (one file write, no per-entry I/O).
+    let status = Command::new("git")
+        .current_dir(path)
+        .args(["read-tree", "HEAD"])
+        .status()
+        .map_err(|e| Error::Command(format!("spawn git read-tree: {e}")))?;
+    if !status.success() {
+        return Err(Error::Command(format!(
+            "git read-tree exited with {}",
+            status.code().unwrap_or(-1)
+        )));
+    }
 
     let started = Instant::now();
     if copied_bytes < INDEX_REFRESH_BATCHED_THRESHOLD {
-        refresh_index_spinner(runner, path, started)
+        refresh_index_spinner(path, started)
     } else {
         refresh_index_batched(path, started)
     }
 }
 
-/// Small-repo path: one `git update-index --refresh -q` call with a
-/// spinner ticking elapsed seconds while it runs.
-fn refresh_index_spinner(runner: &dyn Runner, path: &Path, started: std::time::Instant) -> Result<()> {
+/// Small-repo path: one `git update-index --refresh -q` with a spinner ticking
+/// elapsed seconds while it runs.
+fn refresh_index_spinner(path: &Path, started: std::time::Instant) -> Result<()> {
     use indicatif::{ProgressBar, ProgressStyle};
+    use std::process::Command;
     use std::time::Duration;
 
-    // Cheap entry count for the user-facing heading; we don't need
-    // it to drive the spinner itself.
-    let ls_out = runner
-        .run(Cmd::new("git").in_dir(path).args(["ls-files"]))
-        .map_err(map_run_err)?;
-    let total_entries = ls_out.stdout_lossy().lines().count() as u64;
+    // Cheap entry count for the user-facing heading.
+    let ls_out = Command::new("git")
+        .current_dir(path)
+        .args(["ls-files"])
+        .output()
+        .map_err(|e| Error::Command(format!("spawn git ls-files: {e}")))?;
+    let total_entries = String::from_utf8_lossy(&ls_out.stdout).lines().count() as u64;
 
     eprintln!("  Refreshing git index ({total_entries} entries)...");
 
@@ -490,11 +394,12 @@ fn refresh_index_spinner(runner: &dyn Runner, path: &Path, started: std::time::I
         }
     });
 
-    let _ = runner.run(
-        Cmd::new("git")
-            .in_dir(path)
-            .args(["update-index", "--refresh", "-q"]),
-    );
+    // Non-zero exit is expected (every entry needs updating after read-tree
+    // zero-stat'd them), so ignore the status.
+    let _ = Command::new("git")
+        .current_dir(path)
+        .args(["update-index", "--refresh", "-q"])
+        .status();
 
     stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
     let _ = ticker.join();
@@ -504,26 +409,18 @@ fn refresh_index_spinner(runner: &dyn Runner, path: &Path, started: std::time::I
     Ok(())
 }
 
-/// Large-repo path: batched `update-index --stdin --refresh` invocations
-/// with a real progress bar incrementing after each batch.
-///
-/// Bypasses `runner` because we need direct stdin access (the runner
-/// API doesn't expose it) and we want raw byte output from `ls-files`
-/// (paths can contain bytes that aren't valid UTF-8 on Unix).
+/// Large-repo path: batched `update-index --stdin --refresh` invocations with a
+/// real progress bar incrementing after each batch. Uses raw stdin piping and
+/// raw byte output from `ls-files` (paths can be non-UTF-8 on Unix).
 fn refresh_index_batched(path: &Path, started: std::time::Instant) -> Result<()> {
     use indicatif::{ProgressBar, ProgressStyle};
     use std::io::Write;
     use std::process::{Command, Stdio};
     use std::time::Duration;
 
-    // Tuning: 5000 entries per batch gives ~60 progress updates on the
-    // CargoWise 300k-entry repo (one every ~2 s during the ~2-minute
-    // run). Smaller batches = smoother progress + more spawn overhead;
-    // larger batches = chunkier progress + less overhead. 5 k is the
-    // empirical sweet spot.
+    // 5000 entries per batch ≈ 60 progress updates on a 300k-entry repo.
     const BATCH_SIZE: usize = 5000;
 
-    // Read entry list with raw bytes (paths can be non-UTF-8 on Unix).
     let ls_output = Command::new("git")
         .current_dir(path)
         .args(["ls-files", "-z"])
@@ -556,13 +453,6 @@ fn refresh_index_batched(path: &Path, started: std::time::Instant) -> Result<()>
     pb.enable_steady_tick(Duration::from_millis(80));
 
     for chunk in all_paths.chunks(BATCH_SIZE) {
-        // Spawn one `git update-index --stdin -z --refresh -q` per
-        // batch. Each invocation reads paths from stdin (NUL-separated
-        // via `-z`), refreshes their stat info, writes the index, and
-        // exits. We swallow stderr because update-index emits warnings
-        // for entries that "needed update" — every entry needs update
-        // after read-tree zero-stat'd them, so the warnings would be
-        // 5000 lines of noise per batch.
         let mut child = Command::new("git")
             .current_dir(path)
             .args(["update-index", "--stdin", "-z", "--refresh", "-q"])
@@ -575,17 +465,14 @@ fn refresh_index_batched(path: &Path, started: std::time::Instant) -> Result<()>
         {
             let mut stdin = child.stdin.take().expect("stdin piped");
             for &path_bytes in chunk {
-                // `.ok()` because if the child died early (e.g. SIGPIPE)
-                // we'd rather move on than abort the whole refresh.
                 stdin.write_all(path_bytes).ok();
                 stdin.write_all(&[0]).ok();
             }
             // stdin dropped here, closing the pipe → EOF signal to git.
         }
 
-        // update-index --refresh returns non-zero whenever any entry
-        // needed updating (i.e. always after read-tree zero-stat'd
-        // everything), so the status is uninformative for our purposes.
+        // update-index --refresh returns non-zero whenever any entry needed
+        // updating (always, after read-tree zero-stat'd everything), so ignore it.
         let _ = child.wait();
         pb.inc(chunk.len() as u64);
     }
@@ -597,57 +484,44 @@ fn refresh_index_batched(path: &Path, started: std::time::Instant) -> Result<()>
 }
 
 /// Remove a worktree.
-pub(super) fn remove_worktree(runner: &dyn Runner, cwd: &Path, path: &Path, force: bool) -> Result<()> {
+pub(super) async fn remove_worktree(cwd: &Path, path: &Path, force: bool) -> Result<()> {
     let path_arg = path_str(path)?;
     if force {
-        super::exec(runner, cwd, &["worktree", "remove", "--force", path_arg])
+        super::exec(cwd, ["worktree", "remove", "--force", path_arg]).await
     } else {
-        super::exec(runner, cwd, &["worktree", "remove", path_arg])
+        super::exec(cwd, ["worktree", "remove", path_arg]).await
     }
 }
 
 /// Move a worktree to a new path.
-pub(super) fn move_worktree(runner: &dyn Runner, cwd: &Path, old_path: &Path, new_path: &Path) -> Result<()> {
-    super::exec(
-        runner,
-        cwd,
-        &["worktree", "move", path_str(old_path)?, path_str(new_path)?],
-    )
+pub(super) async fn move_worktree(cwd: &Path, old_path: &Path, new_path: &Path) -> Result<()> {
+    super::exec(cwd, ["worktree", "move", path_str(old_path)?, path_str(new_path)?]).await
 }
 
 /// List all worktrees attached to the repo.
-pub(super) fn list_worktrees(runner: &dyn Runner, cwd: &Path) -> Result<Vec<WorktreeInfo>> {
-    let out = runner
-        .run(Cmd::new("git").in_dir(cwd).args(["worktree", "list", "--porcelain"]))
-        .map_err(|e| match e {
-            RunError::NonZeroExit { .. } => Error::NotInRepo,
-            other => map_run_err(other),
-        })?;
-    Ok(parse_worktree_list(&out.stdout_lossy()))
+pub(super) async fn list_worktrees(git: &GitClient, cwd: &Path) -> Result<Vec<WorktreeInfo>> {
+    let worktrees = git.worktree_list(cwd).await.map_err(|e| match e {
+        processkit::Error::Exit { .. } => Error::NotInRepo,
+        other => super::errmap::map_pk_err(other),
+    })?;
+    Ok(worktrees
+        .into_iter()
+        .map(|wt| WorktreeInfo {
+            path: wt.path,
+            branch: wt.branch,
+            commit: wt.head,
+            is_bare: wt.bare,
+        })
+        .collect())
 }
 
 /// Parse `git worktree list --porcelain` output.
 ///
-/// Kept `pub(crate)` so tests can hit it directly with literal fixtures.
+/// Kept as a pure helper (re-exported for tests) even though the typed client
+/// now parses worktree listings internally.
 ///
-/// Git's porcelain schema:
-/// ```text
-/// worktree /path/to/main
-/// HEAD <sha>
-/// branch refs/heads/main
-///
-/// worktree /path/to/feature
-/// HEAD <sha>
-/// branch refs/heads/feature
-///
-/// worktree /path/to/detached
-/// HEAD <sha>
-/// detached
-/// ```
-///
-/// **This parser is git-specific** — jj's `jj workspace list` uses an
-/// entirely different schema. `JjBackend` will need its own normalizer
-/// that emits `WorktreeInfo` from `jj workspace list -T <template>`.
+/// **This parser is git-specific** — jj's `jj workspace list` uses an entirely
+/// different schema.
 pub fn parse_worktree_list(content: &str) -> Vec<WorktreeInfo> {
     let mut worktrees = Vec::new();
     let mut current: Option<WorktreeInfo> = None;

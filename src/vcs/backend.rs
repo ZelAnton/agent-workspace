@@ -17,6 +17,8 @@
 
 use std::path::{Path, PathBuf};
 
+use async_trait::async_trait;
+
 use super::common::{DiffStat, WorktreeInfo};
 use super::error::Result;
 
@@ -27,6 +29,7 @@ use super::error::Result;
 /// own thread but doesn't touch VCS), but locking in the bound costs us
 /// nothing and unblocks future parallelism (e.g. concurrent worktree
 /// status queries).
+#[async_trait]
 pub trait VcsBackend: Send + Sync {
     /// Short backend identifier — `"git"` or `"jj"`.
     fn name(&self) -> &'static str;
@@ -39,18 +42,18 @@ pub trait VcsBackend: Send + Sync {
     // -------------------------------------------------------------------
     // Identity
     // -------------------------------------------------------------------
-    fn repo_root(&self) -> Result<PathBuf>;
-    fn repo_name(&self) -> Result<String>;
-    fn workspace_id(&self) -> Result<String>;
-    fn current_branch(&self) -> Result<String>;
-    fn current_commit(&self) -> Result<String>;
-    fn detect_trunk(&self) -> Result<String>;
+    async fn repo_root(&self) -> Result<PathBuf>;
+    async fn repo_name(&self) -> Result<String>;
+    async fn workspace_id(&self) -> Result<String>;
+    async fn current_branch(&self) -> Result<String>;
+    async fn current_commit(&self) -> Result<String>;
+    async fn detect_trunk(&self) -> Result<String>;
 
     // -------------------------------------------------------------------
     // Branches / bookmarks
     // -------------------------------------------------------------------
-    fn local_branches(&self) -> Result<Vec<String>>;
-    fn branch_exists(&self, name: &str) -> Result<bool>;
+    async fn local_branches(&self) -> Result<Vec<String>>;
+    async fn branch_exists(&self, name: &str) -> Result<bool>;
 
     /// Whether a branch named `name` exists on the remote (`origin`),
     /// queried WITHOUT a fetch (cheap ref listing — `git ls-remote`).
@@ -58,31 +61,31 @@ pub trait VcsBackend: Send + Sync {
     /// **Best-effort**: a probe that can't reach the remote (offline, no
     /// remote configured, auth prompt, timeout) returns `Ok(false)` rather
     /// than erroring, so callers never block `ws new` on a flaky network.
-    fn remote_branch_exists(&self, name: &str) -> Result<bool>;
-    fn is_merged(&self, branch: &str, target: &str) -> Result<bool>;
-    fn has_diff_from(&self, branch: &str, target: &str) -> Result<bool>;
-    fn delete_branch(&self, name: &str, force: bool) -> Result<()>;
-    fn rename_branch(&self, old: &str, new: &str) -> Result<()>;
-    fn log_oneline(&self, from: &str, to: &str) -> Result<String>;
-    fn commit_count(&self, from: &str, to: &str) -> Result<usize>;
-    fn diff_shortstat(&self, from: &str, to: &str) -> Result<DiffStat>;
-    fn diff_shortstat_in(&self, path: &Path) -> Result<DiffStat>;
+    async fn remote_branch_exists(&self, name: &str) -> Result<bool>;
+    async fn is_merged(&self, branch: &str, target: &str) -> Result<bool>;
+    async fn has_diff_from(&self, branch: &str, target: &str) -> Result<bool>;
+    async fn delete_branch(&self, name: &str, force: bool) -> Result<()>;
+    async fn rename_branch(&self, old: &str, new: &str) -> Result<()>;
+    async fn log_oneline(&self, from: &str, to: &str) -> Result<String>;
+    async fn commit_count(&self, from: &str, to: &str) -> Result<usize>;
+    async fn diff_shortstat(&self, from: &str, to: &str) -> Result<DiffStat>;
+    async fn diff_shortstat_in(&self, path: &Path) -> Result<DiffStat>;
 
     // -------------------------------------------------------------------
     // Working-copy state
     // -------------------------------------------------------------------
-    fn has_uncommitted_changes(&self) -> Result<bool>;
-    fn uncommitted_count_in(&self, path: &Path) -> Result<usize>;
-    fn has_changes_from_trunk(&self, trunk: &str) -> Result<bool>;
+    async fn has_uncommitted_changes(&self) -> Result<bool>;
+    async fn uncommitted_count_in(&self, path: &Path) -> Result<usize>;
+    async fn has_changes_from_trunk(&self, trunk: &str) -> Result<bool>;
 
     /// True iff a rebase is currently in progress (git: `.git/rebase-*`).
     /// jj has no equivalent state; `JjBackend` returns `false`.
-    fn is_rebase_in_progress(&self) -> bool;
+    async fn is_rebase_in_progress(&self) -> bool;
 
     /// True iff a merge is currently in progress (git: `.git/MERGE_HEAD`).
     /// jj treats unresolved conflicts as first-class committed state, so the
     /// jj impl will read `jj st` for unresolved conflicts.
-    fn is_merge_in_progress(&self) -> bool;
+    async fn is_merge_in_progress(&self) -> bool;
 
     // -------------------------------------------------------------------
     // Mutations
@@ -96,7 +99,7 @@ pub trait VcsBackend: Send + Sync {
     /// guess the destination from `@` (picking e.g. the lexicographically
     /// smallest would move the wrong bookmark, possibly backward). Callers pass
     /// the branch they checked out / are standing in.
-    fn merge(
+    async fn merge(
         &self,
         branch: &str,
         dest_bookmark: &str,
@@ -104,22 +107,22 @@ pub trait VcsBackend: Send + Sync {
         no_ff: bool,
         message: Option<&str>,
     ) -> Result<()>;
-    fn dry_run_merge(&self, branch: &str, squash: bool) -> Result<bool>;
-    fn rebase(&self, onto: &str) -> Result<()>;
-    fn checkout(&self, branch: &str) -> Result<()>;
-    fn commit(&self, message: &str) -> Result<()>;
-    fn fetch(&self) -> Result<()>;
-    fn rebase_abort(&self) -> Result<()>;
-    fn rebase_continue(&self) -> Result<()>;
-    fn merge_abort(&self) -> Result<()>;
-    fn merge_continue(&self) -> Result<()>;
-    fn reset_merge(&self) -> Result<()>;
+    async fn dry_run_merge(&self, branch: &str, squash: bool) -> Result<bool>;
+    async fn rebase(&self, onto: &str) -> Result<()>;
+    async fn checkout(&self, branch: &str) -> Result<()>;
+    async fn commit(&self, message: &str) -> Result<()>;
+    async fn fetch(&self) -> Result<()>;
+    async fn rebase_abort(&self) -> Result<()>;
+    async fn rebase_continue(&self) -> Result<()>;
+    async fn merge_abort(&self) -> Result<()>;
+    async fn merge_continue(&self) -> Result<()>;
+    async fn reset_merge(&self) -> Result<()>;
 
     // -------------------------------------------------------------------
     // Worktrees / workspaces
     // -------------------------------------------------------------------
-    fn list_worktrees(&self) -> Result<Vec<WorktreeInfo>>;
-    fn create_worktree(
+    async fn list_worktrees(&self) -> Result<Vec<WorktreeInfo>>;
+    async fn create_worktree(
         &self,
         path: &Path,
         branch: &str,
@@ -132,11 +135,20 @@ pub trait VcsBackend: Send + Sync {
     /// `ws new <name>` when `<name>` is absent locally but present on
     /// `origin`. Reuses `create_worktree` internally with the
     /// remote-tracking ref as the base.
-    fn create_worktree_from_remote(
+    async fn create_worktree_from_remote(
         &self,
         path: &Path,
         branch: &str,
     ) -> Result<crate::vcs::common::CreateOutcome>;
-    fn remove_worktree(&self, path: &Path, force: bool) -> Result<()>;
-    fn move_worktree(&self, old: &Path, new: &Path) -> Result<()>;
+    async fn remove_worktree(&self, path: &Path, force: bool) -> Result<()>;
+    async fn move_worktree(&self, old: &Path, new: &Path) -> Result<()>;
+
+    /// Synchronously force-remove a freshly-created worktree at `path`.
+    ///
+    /// This is the **one** non-async backend method: it exists for
+    /// [`WorktreeGuard`](super::guard::WorktreeGuard)'s `Drop`, which can't
+    /// `.await`. It runs a plain blocking subprocess (`git worktree remove
+    /// --force` / `jj workspace forget`) so on-drop cleanup of a partial
+    /// worktree stays reliable without entering the async runtime.
+    fn cleanup_worktree_blocking(&self, path: &Path) -> Result<()>;
 }

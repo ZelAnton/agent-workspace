@@ -67,9 +67,11 @@ impl Drop for WorktreeGuard<'_> {
         }
         // Force-remove: a half-set-up worktree has the freshly-created branch
         // checked out, which a non-forced removal would refuse. `Drop` can't
-        // return a `Result`, so a failure is surfaced as a warning rather than
-        // swallowed — the user may need to `ws rm` or `git worktree prune`.
-        if let Err(e) = self.repo.remove_worktree(&self.path, true) {
+        // `.await`, so this goes through the backend's SYNCHRONOUS blocking
+        // cleanup (a plain subprocess), not the async `remove_worktree`. A
+        // failure is surfaced as a warning rather than swallowed — the user may
+        // need to `ws rm` or `git worktree prune`.
+        if let Err(e) = self.repo.cleanup_worktree_blocking(&self.path) {
             eprintln!(
                 "warning: could not clean up partial worktree at {}: {e}",
                 self.path.display()

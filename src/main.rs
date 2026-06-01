@@ -14,7 +14,15 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// full HTTP timeout as tail latency.
 const UPDATE_NOTICE_WAIT: Duration = Duration::from_millis(300);
 
-fn main() {
+// The VCS layer (processkit + vcs-git/jj) is async, so `ws` runs on a tokio
+// runtime. A `current_thread` runtime is the right fit for this CLI: the work
+// is a sequence of awaited subprocess calls with no concurrency to exploit, so
+// a worker threadpool would only add startup cost. `spawn_blocking` (the CoW
+// reflink copy) still runs on tokio's separate blocking pool, and the
+// `WorktreeGuard`'s on-drop cleanup is a plain `std::process` syscall (no tokio
+// `block_on`/`block_in_place`), so neither needs a multi-thread runtime.
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
     // Must be first: intercepts COMPLETE env var for shell completions
     clap_complete::env::CompleteEnv::with_factory(agent_workspace::cli::build_command).complete();
 
@@ -46,7 +54,7 @@ fn main() {
         None
     };
 
-    let result = cli.run();
+    let result = cli.run().await;
 
     // Surface the "new version available" notice only if the check already
     // finished (or finishes within a short window). We do NOT block on the

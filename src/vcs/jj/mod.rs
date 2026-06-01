@@ -2,20 +2,14 @@
 // vcs/jj - Jujutsu backend
 // ===========================================================================
 //
-// Mirrors the structure of `src/vcs/git/`. Implementation lives in
-// submodules (`repo`, ...) — `mod.rs` is just struct + trait-impl assembly.
+// `JjBackend` wraps an `Arc<vcs_jj::Jj<JobRunner>>` — the typed async jj client
+// from the `vcs-jj` crate, built on `processkit`'s job-backed runner. Mirrors
+// the structure of `src/vcs/git/`: per-method implementations live in the
+// submodules (`repo`, `branch`, `ops`, `worktree`); this file is the assembly.
 //
-// **Implementation status** (track against AGENTS.md's "VCS backend
-// compatibility" section):
-//   - F-1 (identity + bookmarks): implemented
-//   - F-2 (workspaces): stubs
-//   - F-3 (state + diff): stubs
-//   - F-4 (mutations + atomic_merge): stubs
-//   - F-5 (sync hints): N/A — handled at caller level
-//
-// Methods that are intentionally `unimplemented!()` per locked semantic
-// decisions surface as `Error::Unsupported("jj: <op> — <hint>")` once F-2..F-4
-// land. Until then, the catch-all `nyi()` helper produces the same shape.
+// Operations the typed client models are delegated to it; the few it doesn't
+// (the CoW workspace dance — `workspace add --sparse-patterns empty`,
+// `sparse set`) drop to a raw `processkit::Command` via `exec`/`capture`.
 
 mod branch;
 mod errmap;
@@ -23,54 +17,50 @@ mod ops;
 mod repo;
 mod worktree;
 
-pub use branch::parse_jj_stat_footer;
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use vcs_runner::{Cmd, DefaultRunner, Runner};
+use async_trait::async_trait;
+use processkit::{Command, JobRunner};
+use vcs_jj::Jj;
 
 use super::backend::VcsBackend;
 use super::common::{DiffStat, WorktreeInfo};
 use super::error::{Error, Result};
 
-/// jj-backed [`VcsBackend`]. Stores the subprocess runner so tests can
-/// swap in a `MockRunner` (parser-heavy tests) or `DefaultRunner` (e2e).
+/// The concrete vcs-jj client type used in production (real job-backed runner).
+pub(super) type JjClient = Jj<JobRunner>;
+
+/// jj-backed [`VcsBackend`].
 pub struct JjBackend {
-    runner: Arc<dyn Runner>,
-    /// Explicit working directory for every jj invocation. `None` means
-    /// "read the live process cwd" — preserving the historical behaviour
-    /// where helpers called `std::env::current_dir()` directly. Mirrors
-    /// `GitBackend::cwd`; see that field for the Stage-1 rationale.
+    jj: Arc<JjClient>,
     cwd: Option<PathBuf>,
 }
 
 impl JjBackend {
     pub fn new() -> Self {
-        Self { runner: Arc::new(DefaultRunner), cwd: None }
+        Self { jj: Arc::new(Jj::new()), cwd: None }
     }
 
-    pub fn with_runner(runner: Arc<dyn Runner>) -> Self {
-        Self { runner, cwd: None }
+    pub fn with_client(jj: Arc<JjClient>) -> Self {
+        Self { jj, cwd: None }
     }
 
-    /// Construct a backend anchored at an explicit `cwd` using the real
-    /// runner. Test-only: lets each e2e test point a `JjBackend` at its own
-    /// `TempDir` without mutating the process current-directory, so the suites
-    /// run in parallel.
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn at(cwd: PathBuf) -> Self {
-        Self { runner: Arc::new(DefaultRunner), cwd: Some(cwd) }
+        Self { jj: Arc::new(Jj::new()), cwd: Some(cwd) }
     }
 
-    /// Resolve the working directory for a jj invocation. `Some` returns the
-    /// pinned path; `None` falls back to the live process cwd, exactly as the
-    /// helpers used to do via `std::env::current_dir()`.
     fn dir(&self) -> std::io::Result<PathBuf> {
         match &self.cwd {
             Some(d) => Ok(d.clone()),
             None => std::env::current_dir(),
         }
+    }
+
+    fn jj(&self) -> &JjClient {
+        &self.jj
     }
 }
 
@@ -80,128 +70,114 @@ impl Default for JjBackend {
     }
 }
 
-/// Run a void jj command (no output parsing). Mirrors `git::exec` from the
-/// git backend. Used by simple mutating ops that only need exit status.
-pub(super) fn exec(runner: &dyn Runner, cwd: &Path, args: &[&str]) -> Result<()> {
-    runner
-        .run(Cmd::new("jj").in_dir(cwd).args(args))
-        .map(|_| ())
-        .map_err(errmap::map_run_err)
+// ---------------------------------------------------------------------------
+// Raw-command helpers (used by ops the vcs-jj client doesn't model)
+// ---------------------------------------------------------------------------
+
+/// Build a `jj <args>` command pinned to `cwd`.
+pub(super) fn jj_cmd<'a>(cwd: &Path, args: impl IntoIterator<Item = &'a str>) -> Command {
+    Command::new("jj").current_dir(cwd).args(args)
 }
 
-// All F-1..F-5 methods are implemented. The previous `nyi(...)` helper
-// for stubs has been retired now that no `unimplemented!`-style returns
-// remain. Methods that genuinely have no jj equivalent (locked semantic
-// decisions: `move_worktree`, `*_abort/*_continue`) return inline
-// `Error::Unsupported(...)` with a hint message.
+/// Run a void jj command, erroring on a non-zero exit. Captures both streams so
+/// the message survives (jj writes some informational text to stdout).
+pub(super) async fn exec<'a>(cwd: &Path, args: impl IntoIterator<Item = &'a str>) -> Result<()> {
+    let out = jj_cmd(cwd, args).output_string().await.map_err(errmap::map_pk_err)?;
+    if out.is_success() {
+        Ok(())
+    } else {
+        Err(Error::Command(errmap::extract_message(out.stderr(), out.stdout().as_bytes())))
+    }
+}
 
+#[async_trait]
 impl VcsBackend for JjBackend {
-    fn name(&self) -> &'static str { "jj" }
+    fn name(&self) -> &'static str {
+        "jj"
+    }
 
     fn at_cwd(&self, cwd: PathBuf) -> Box<dyn VcsBackend> {
-        Box::new(Self { runner: self.runner.clone(), cwd: Some(cwd) })
+        Box::new(Self { jj: self.jj.clone(), cwd: Some(cwd) })
     }
 
-    // ===================================================================
-    // F-1: Identity + bookmarks — IMPLEMENTED
-    // ===================================================================
-    fn repo_root(&self) -> Result<PathBuf> { repo::repo_root(self.runner.as_ref(), &self.dir()?) }
-    fn repo_name(&self) -> Result<String> { repo::repo_name(self.runner.as_ref(), &self.dir()?) }
-    fn workspace_id(&self) -> Result<String> { repo::workspace_id(self.runner.as_ref(), &self.dir()?) }
-    fn current_branch(&self) -> Result<String> { repo::current_branch(self.runner.as_ref(), &self.dir()?) }
-    fn current_commit(&self) -> Result<String> { repo::current_commit(self.runner.as_ref(), &self.dir()?) }
-    fn detect_trunk(&self) -> Result<String> { repo::detect_trunk(self.runner.as_ref(), &self.dir()?) }
-
-    fn local_branches(&self) -> Result<Vec<String>> { repo::local_branches(self.runner.as_ref(), &self.dir()?) }
-    fn branch_exists(&self, name: &str) -> Result<bool> {
-        repo::branch_exists(self.runner.as_ref(), &self.dir()?, name)
+    // ----- Identity -------------------------------------------------------
+    async fn repo_root(&self) -> Result<PathBuf> {
+        repo::repo_root(self.jj(), &self.dir()?).await
     }
-    fn remote_branch_exists(&self, name: &str) -> Result<bool> {
-        repo::remote_branch_exists(self.runner.as_ref(), &self.dir()?, name)
+    async fn repo_name(&self) -> Result<String> {
+        repo::repo_name(self.jj(), &self.dir()?).await
     }
-    fn rename_branch(&self, old: &str, new: &str) -> Result<()> {
-        repo::rename_branch(self.runner.as_ref(), &self.dir()?, old, new)
+    async fn workspace_id(&self) -> Result<String> {
+        repo::workspace_id(self.jj(), &self.dir()?).await
     }
-    fn delete_branch(&self, name: &str, force: bool) -> Result<()> {
-        repo::delete_branch(self.runner.as_ref(), &self.dir()?, name, force)
+    async fn current_branch(&self) -> Result<String> {
+        repo::current_branch(self.jj(), &self.dir()?).await
+    }
+    async fn current_commit(&self) -> Result<String> {
+        repo::current_commit(self.jj(), &self.dir()?).await
+    }
+    async fn detect_trunk(&self) -> Result<String> {
+        repo::detect_trunk(self.jj(), &self.dir()?).await
     }
 
-    // ===================================================================
-    // F-2: Workspaces — IMPLEMENTED
-    // ===================================================================
-    fn list_worktrees(&self) -> Result<Vec<WorktreeInfo>> {
-        worktree::list_worktrees(self.runner.as_ref(), &self.dir()?)
+    // ----- Branches -------------------------------------------------------
+    async fn local_branches(&self) -> Result<Vec<String>> {
+        repo::local_branches(self.jj(), &self.dir()?).await
     }
-    fn create_worktree(
-        &self,
-        path: &Path,
-        branch: &str,
-        base: &str,
-    ) -> Result<crate::vcs::common::CreateOutcome> {
-        worktree::create_worktree(self.runner.as_ref(), &self.dir()?, path, branch, base)
+    async fn branch_exists(&self, name: &str) -> Result<bool> {
+        repo::branch_exists(self.jj(), &self.dir()?, name).await
     }
-    fn create_worktree_from_remote(
-        &self,
-        path: &Path,
-        branch: &str,
-    ) -> Result<crate::vcs::common::CreateOutcome> {
-        worktree::create_worktree_from_remote(self.runner.as_ref(), &self.dir()?, path, branch)
+    async fn remote_branch_exists(&self, name: &str) -> Result<bool> {
+        repo::remote_branch_exists(self.jj(), &self.dir()?, name).await
     }
-    fn remove_worktree(&self, path: &Path, force: bool) -> Result<()> {
-        worktree::remove_worktree(self.runner.as_ref(), &self.dir()?, path, force)
+    async fn is_merged(&self, branch: &str, target: &str) -> Result<bool> {
+        branch::is_merged(self.jj(), &self.dir()?, branch, target).await
     }
-    /// **Per locked decision**: `ws mv` on jj workspaces is not supported.
-    /// jj has no `workspace move` primitive; the manual recipe is "remove
-    /// and re-create the workspace" — surface that to the user as an error.
-    fn move_worktree(&self, _old: &Path, _new: &Path) -> Result<()> {
-        Err(Error::Unsupported(
-            "jj: move_worktree — remove and re-create the workspace".into(),
-        ))
+    async fn has_diff_from(&self, branch: &str, target: &str) -> Result<bool> {
+        branch::has_diff_from(self.jj(), &self.dir()?, branch, target).await
     }
-
-    // ===================================================================
-    // F-3: Working-copy state + diff — IMPLEMENTED
-    // ===================================================================
-    fn is_merged(&self, branch: &str, target: &str) -> Result<bool> {
-        branch::is_merged(self.runner.as_ref(), &self.dir()?, branch, target)
+    async fn delete_branch(&self, name: &str, force: bool) -> Result<()> {
+        repo::delete_branch(self.jj(), &self.dir()?, name, force).await
     }
-    fn has_diff_from(&self, branch: &str, target: &str) -> Result<bool> {
-        branch::has_diff_from(self.runner.as_ref(), &self.dir()?, branch, target)
+    async fn rename_branch(&self, old: &str, new: &str) -> Result<()> {
+        repo::rename_branch(self.jj(), &self.dir()?, old, new).await
     }
-    fn log_oneline(&self, from: &str, to: &str) -> Result<String> {
-        branch::log_oneline(self.runner.as_ref(), &self.dir()?, from, to)
+    async fn log_oneline(&self, from: &str, to: &str) -> Result<String> {
+        branch::log_oneline(self.jj(), &self.dir()?, from, to).await
     }
-    fn commit_count(&self, from: &str, to: &str) -> Result<usize> {
-        branch::commit_count(self.runner.as_ref(), &self.dir()?, from, to)
+    async fn commit_count(&self, from: &str, to: &str) -> Result<usize> {
+        branch::commit_count(self.jj(), &self.dir()?, from, to).await
     }
-    fn diff_shortstat(&self, from: &str, to: &str) -> Result<DiffStat> {
-        branch::diff_shortstat(self.runner.as_ref(), &self.dir()?, from, to)
+    async fn diff_shortstat(&self, from: &str, to: &str) -> Result<DiffStat> {
+        branch::diff_shortstat(self.jj(), &self.dir()?, from, to).await
     }
-    fn diff_shortstat_in(&self, path: &Path) -> Result<DiffStat> {
-        branch::diff_shortstat_in(self.runner.as_ref(), path)
-    }
-    fn has_uncommitted_changes(&self) -> Result<bool> {
-        branch::has_uncommitted_changes(self.runner.as_ref(), &self.dir()?)
-    }
-    fn uncommitted_count_in(&self, path: &Path) -> Result<usize> {
-        branch::uncommitted_count_in(self.runner.as_ref(), path)
-    }
-    fn has_changes_from_trunk(&self, trunk: &str) -> Result<bool> {
-        branch::has_changes_from_trunk(self.runner.as_ref(), &self.dir()?, trunk)
-    }
-    /// **Per locked decision**: jj operations are atomic; there is no
-    /// "rebase in progress" state. Always false.
-    fn is_rebase_in_progress(&self) -> bool { false }
-    /// **Per locked decision**: jj treats conflicts as committed state.
-    /// Implemented by scanning `jj st` for the unresolved-conflicts marker.
-    fn is_merge_in_progress(&self) -> bool {
-        branch::is_merge_in_progress(self.runner.as_ref(), self.cwd.as_deref())
+    async fn diff_shortstat_in(&self, path: &Path) -> Result<DiffStat> {
+        branch::diff_shortstat_in(self.jj(), path).await
     }
 
-    // ===================================================================
-    // F-4: Mutations — IMPLEMENTED
-    // ===================================================================
-    fn merge(
+    // ----- Working-copy state --------------------------------------------
+    async fn has_uncommitted_changes(&self) -> Result<bool> {
+        branch::has_uncommitted_changes(self.jj(), &self.dir()?).await
+    }
+    async fn uncommitted_count_in(&self, path: &Path) -> Result<usize> {
+        branch::uncommitted_count_in(self.jj(), path).await
+    }
+    async fn has_changes_from_trunk(&self, trunk: &str) -> Result<bool> {
+        branch::has_changes_from_trunk(self.jj(), &self.dir()?, trunk).await
+    }
+    /// **Locked decision**: jj operations are atomic; there is no "rebase in
+    /// progress" state. Always false.
+    async fn is_rebase_in_progress(&self) -> bool {
+        false
+    }
+    /// **Locked decision**: jj treats conflicts as committed state — implemented
+    /// by querying whether `@` is conflicted.
+    async fn is_merge_in_progress(&self) -> bool {
+        branch::is_merge_in_progress(self.jj(), &self.dir().unwrap_or_default()).await
+    }
+
+    // ----- Mutations ------------------------------------------------------
+    async fn merge(
         &self,
         branch: &str,
         dest_bookmark: &str,
@@ -209,45 +185,99 @@ impl VcsBackend for JjBackend {
         no_ff: bool,
         message: Option<&str>,
     ) -> Result<()> {
-        ops::merge(self.runner.as_ref(), &self.dir()?, branch, dest_bookmark, squash, no_ff, message)
+        ops::merge(self.jj(), &self.dir()?, branch, dest_bookmark, squash, no_ff, message).await
     }
-    fn dry_run_merge(&self, branch: &str, squash: bool) -> Result<bool> {
-        ops::dry_run_merge(self.runner.as_ref(), &self.dir()?, branch, squash)
+    async fn dry_run_merge(&self, branch: &str, squash: bool) -> Result<bool> {
+        ops::dry_run_merge(self.jj(), &self.dir()?, branch, squash).await
     }
-    fn rebase(&self, onto: &str) -> Result<()> { ops::rebase(self.runner.as_ref(), &self.dir()?, onto) }
-    fn checkout(&self, branch: &str) -> Result<()> {
-        ops::checkout(self.runner.as_ref(), &self.dir()?, branch)
+    async fn rebase(&self, onto: &str) -> Result<()> {
+        ops::rebase(&self.dir()?, onto).await
     }
-    fn commit(&self, message: &str) -> Result<()> {
-        ops::commit(self.runner.as_ref(), &self.dir()?, message)
+    async fn checkout(&self, branch: &str) -> Result<()> {
+        ops::checkout(self.jj(), &self.dir()?, branch).await
     }
-    fn fetch(&self) -> Result<()> { ops::fetch(self.runner.as_ref(), &self.dir()?) }
-
-    /// **Per locked decision**: jj has no in-progress state. Return
-    /// `Unsupported` with a guidance message; `ws sync` will surface this
-    /// directly until F-5 adds backend-aware hints at the caller layer.
-    fn rebase_abort(&self) -> Result<()> {
+    async fn commit(&self, message: &str) -> Result<()> {
+        ops::commit(&self.dir()?, message).await
+    }
+    async fn fetch(&self) -> Result<()> {
+        ops::fetch(self.jj(), &self.dir()?).await
+    }
+    /// **Locked decision**: jj has no in-progress state to abort/continue.
+    async fn rebase_abort(&self) -> Result<()> {
         Err(Error::Unsupported(
             "jj: rebase_abort — jj records conflicts in commits; resolve files and re-run".into(),
         ))
     }
-    fn rebase_continue(&self) -> Result<()> {
+    async fn rebase_continue(&self) -> Result<()> {
         Err(Error::Unsupported(
             "jj: rebase_continue — jj records conflicts in commits; resolve files and re-run".into(),
         ))
     }
-    fn merge_abort(&self) -> Result<()> {
+    async fn merge_abort(&self) -> Result<()> {
         Err(Error::Unsupported(
             "jj: merge_abort — jj records conflicts in commits; resolve files and re-run".into(),
         ))
     }
-    fn merge_continue(&self) -> Result<()> {
+    async fn merge_continue(&self) -> Result<()> {
         Err(Error::Unsupported(
             "jj: merge_continue — jj records conflicts in commits; resolve files and re-run".into(),
         ))
     }
-    fn reset_merge(&self) -> Result<()> { ops::reset_merge(self.runner.as_ref(), &self.dir()?) }
-}
+    async fn reset_merge(&self) -> Result<()> {
+        ops::reset_merge(&self.dir()?).await
+    }
 
-#[cfg(test)]
-mod tests;
+    // ----- Worktrees / workspaces ----------------------------------------
+    async fn list_worktrees(&self) -> Result<Vec<WorktreeInfo>> {
+        worktree::list_worktrees(self.jj(), &self.dir()?).await
+    }
+    async fn create_worktree(
+        &self,
+        path: &Path,
+        branch: &str,
+        base: &str,
+    ) -> Result<crate::vcs::common::CreateOutcome> {
+        worktree::create_worktree(self.jj(), &self.dir()?, path, branch, base).await
+    }
+    async fn create_worktree_from_remote(
+        &self,
+        path: &Path,
+        branch: &str,
+    ) -> Result<crate::vcs::common::CreateOutcome> {
+        worktree::create_worktree_from_remote(self.jj(), &self.dir()?, path, branch).await
+    }
+    async fn remove_worktree(&self, path: &Path, force: bool) -> Result<()> {
+        worktree::remove_worktree(self.jj(), &self.dir()?, path, force).await
+    }
+    /// **Locked decision**: `ws mv` on jj workspaces is not supported — jj has
+    /// no `workspace move` primitive.
+    async fn move_worktree(&self, _old: &Path, _new: &Path) -> Result<()> {
+        Err(Error::Unsupported(
+            "jj: move_worktree — remove and re-create the workspace".into(),
+        ))
+    }
+
+    // ----- Synchronous cleanup (for WorktreeGuard::drop) ------------------
+    fn cleanup_worktree_blocking(&self, path: &Path) -> Result<()> {
+        // `Drop` can't await; remove the on-disk workspace dir + forget it from
+        // jj synchronously. Order mirrors the async `remove_worktree`: delete
+        // the dir first (an orphan dir is worse than a still-attached ws), then
+        // best-effort `jj workspace forget`. Resolve the workspace name BEFORE
+        // removing the dir (the lookup needs the live `jj workspace root`).
+        let cwd = self.dir().map_err(|e| Error::Command(e.to_string()))?;
+        let ws_name = worktree::workspace_name_for_path_blocking(&cwd, path);
+        if path.exists() {
+            std::fs::remove_dir_all(path).map_err(|e| Error::Command(e.to_string()))?;
+        }
+        // Forget only when we positively identified the workspace — never guess
+        // a name (which could forget an unrelated workspace). Best-effort: jj
+        // happily forgets an already-deleted ws dir.
+        if let Some(ws_name) = ws_name {
+            let _ = std::process::Command::new("jj")
+                .current_dir(&cwd)
+                .args(["workspace", "forget", &ws_name])
+                .status();
+        }
+        Ok(())
+    }
+}

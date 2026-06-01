@@ -157,7 +157,7 @@ pub fn ensure_workspace_config_ignored(config_path: &Path) {
 /// `None` when git isn't available (e.g. a jj repo with no git backing) — the
 /// caller then silently skips, leaving the file un-excluded.
 fn local_exclude_file(cwd: &Path) -> Option<PathBuf> {
-    let common = vcs_runner::run_git_utf8(cwd, &["rev-parse", "--git-common-dir"]).ok()?;
+    let common = run_git_utf8(cwd, &["rev-parse", "--git-common-dir"]).ok()?;
     let common = common.trim();
     if common.is_empty() {
         return None;
@@ -552,10 +552,11 @@ impl Config {
     }
 
     /// 解析 trunk 分支：配置 > 自动检测 > 默认 "main"
-    pub fn resolve_trunk(&self, repo: &crate::vcs::Repo) -> String {
-        self.trunk
-            .clone()
-            .unwrap_or_else(|| repo.detect_trunk().unwrap_or_else(|_| "main".into()))
+    pub async fn resolve_trunk(&self, repo: &crate::vcs::Repo) -> String {
+        match &self.trunk {
+            Some(t) => t.clone(),
+            None => repo.detect_trunk().await.unwrap_or_else(|_| "main".into()),
+        }
     }
 
     pub fn base_dir() -> Result<PathBuf> {
@@ -589,8 +590,8 @@ impl Config {
     /// BEFORE `Cli::run` builds the `Repo`, so no backend is available yet.
     /// In a pure-jj repo (no `.git`), GitBackend's
     /// `git rev-parse --git-common-dir` would fail → `Error::NotInRepo` →
-    /// project config silently lost. We resolve roots with raw `vcs_runner`
-    /// calls instead — see [`resolve_main_repo_root`] /
+    /// project config silently lost. We resolve roots with a local filesystem
+    /// probe + plain `git` subprocess instead — see [`resolve_main_repo_root`] /
     /// [`resolve_current_worktree_root`].
     ///
     /// The worktree layer is `Some` only when the current worktree root
@@ -686,6 +687,44 @@ fn merge_project_layers(base: ProjectConfig, over: ProjectConfig) -> ProjectConf
     }
 }
 
+/// What [`detect_vcs_at`] found: the marker directory plus which backends it
+/// carries. Backend-independent, computed by a cheap filesystem walk (config
+/// loads before the async runtime / VCS clients are up, so it can't use them).
+struct DetectedVcs {
+    /// Nearest ancestor of `cwd` carrying `.jj` or `.git` — the repo/worktree root.
+    root: PathBuf,
+    /// Whether that directory has a `.git` entry (dir in a normal repo, gitlink
+    /// file inside a linked worktree).
+    has_git: bool,
+}
+
+/// Find the nearest ancestor of `cwd` (inclusive) carrying `.jj` or `.git`.
+/// Replaces the former `vcs_runner::detect_vcs` for config-time discovery.
+fn detect_vcs_at(cwd: &Path) -> Option<DetectedVcs> {
+    let mut current = Some(cwd);
+    while let Some(dir) = current {
+        let has_jj = dir.join(".jj").is_dir();
+        let has_git = dir.join(".git").exists();
+        if has_jj || has_git {
+            return Some(DetectedVcs { root: dir.to_path_buf(), has_git });
+        }
+        current = dir.parent();
+    }
+    None
+}
+
+/// Run `git <args>` in `cwd`, returning UTF-8 stdout on success. Sync and
+/// `std::process`-based on purpose: config resolution happens before the tokio
+/// runtime / async VCS clients exist, so it can't go through them.
+fn run_git_utf8(cwd: &Path, args: &[&str]) -> std::io::Result<String> {
+    let out = std::process::Command::new("git").current_dir(cwd).args(args).output()?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        Err(std::io::Error::other("git exited non-zero"))
+    }
+}
+
 /// Resolve the **main repo** root for project-config discovery, handling
 /// git worktrees correctly.
 ///
@@ -695,12 +734,12 @@ fn merge_project_layers(base: ProjectConfig, over: ProjectConfig) -> ProjectConf
 fn resolve_main_repo_root(cwd: &Path) -> Option<PathBuf> {
     use std::path::Component;
 
-    let (backend, detect_root) = vcs_runner::detect_vcs(cwd).ok()?;
+    let detected = detect_vcs_at(cwd)?;
 
     // For git or colocated repos, `--git-common-dir` correctly resolves
     // gitlink files (used by git worktrees) to the main repo's `.git`.
-    if backend.has_git()
-        && let Ok(common_dir) = vcs_runner::run_git_utf8(cwd, &["rev-parse", "--git-common-dir"])
+    if detected.has_git
+        && let Ok(common_dir) = run_git_utf8(cwd, &["rev-parse", "--git-common-dir"])
     {
         let common_dir = common_dir.trim();
         if !common_dir.is_empty() {
@@ -734,10 +773,10 @@ fn resolve_main_repo_root(cwd: &Path) -> Option<PathBuf> {
         }
     }
 
-    // Pure-jj or git-unavailable fallback: use detect_vcs's answer
+    // Pure-jj or git-unavailable fallback: use the detected marker dir
     // directly. For pure-jj there are no worktree gitlinks to resolve;
-    // detect_root IS the repo root.
-    Some(detect_root)
+    // it IS the repo root.
+    Some(detected.root)
 }
 
 /// Resolve the **current worktree** root (the working-copy root for `cwd`),
@@ -751,10 +790,10 @@ fn resolve_main_repo_root(cwd: &Path) -> Option<PathBuf> {
 /// root. Returns canonicalized + verbatim-stripped paths so the equality
 /// check against the main repo root in the loader is reliable.
 fn resolve_current_worktree_root(cwd: &Path) -> Option<PathBuf> {
-    let (backend, detect_root) = vcs_runner::detect_vcs(cwd).ok()?;
+    let detected = detect_vcs_at(cwd)?;
 
-    if backend.has_git()
-        && let Ok(toplevel) = vcs_runner::run_git_utf8(cwd, &["rev-parse", "--show-toplevel"])
+    if detected.has_git
+        && let Ok(toplevel) = run_git_utf8(cwd, &["rev-parse", "--show-toplevel"])
     {
         let toplevel = toplevel.trim();
         if !toplevel.is_empty()
@@ -766,7 +805,7 @@ fn resolve_current_worktree_root(cwd: &Path) -> Option<PathBuf> {
 
     // Pure-jj / git-unavailable fallback: nearest `.jj` ancestor is the
     // workspace root for `cwd`. Canonicalize for a reliable equality check.
-    let detect_root = detect_root.canonicalize().unwrap_or(detect_root);
+    let detect_root = detected.root.canonicalize().unwrap_or(detected.root);
     Some(strip_verbatim_prefix(detect_root))
 }
 

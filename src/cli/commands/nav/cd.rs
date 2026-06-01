@@ -32,7 +32,7 @@ pub struct CdArgs {
     no_tab: bool,
 }
 
-pub fn run(args: CdArgs, config: &Config, path_file: Option<&Path>, repo: &vcs::Repo) -> Result<()> {
+pub async fn run(args: CdArgs, config: &Config, path_file: Option<&Path>, repo: &vcs::Repo) -> Result<()> {
     // `ws cd` only makes sense behind the shell wrapper — a child process
     // can't change its parent shell's CWD. Without a path_file the wrapper
     // isn't installed (or the binary was invoked directly), so refuse loudly
@@ -51,7 +51,8 @@ pub fn run(args: CdArgs, config: &Config, path_file: Option<&Path>, repo: &vcs::
 
     // 1. Resolve target path. No-arg case → main repo root; explicit
     //    branch → worktree dir.
-    let (target_path, title) = resolve_target_and_title(args.branch.as_deref(), config, repo)?;
+    let (target_path, title) =
+        resolve_target_and_title(args.branch.as_deref(), config, repo).await?;
 
     // 2. Validate target exists AND is a directory. Per plan: validate
     //    BEFORE the tab-spawn decision so non-existent branches don't
@@ -116,15 +117,15 @@ pub fn run(args: CdArgs, config: &Config, path_file: Option<&Path>, repo: &vcs::
 /// No-arg case: target = main repo root, title = repo name (or `"main"`
 /// fallback). Explicit branch: target = worktree dir, title = branch
 /// name. Branch existence is NOT checked here (caller does it after).
-fn resolve_target_and_title(
+async fn resolve_target_and_title(
     branch: Option<&str>,
     config: &Config,
     repo: &vcs::Repo,
 ) -> Result<(PathBuf, String)> {
     match branch {
         None => {
-            let repo_root = repo.repo_root()?;
-            let title = repo.repo_name().unwrap_or_else(|_| "main".into());
+            let repo_root = repo.repo_root().await?;
+            let title = repo.repo_name().await.unwrap_or_else(|_| "main".into());
             Ok((repo_root, title))
         }
         Some(b) => {
@@ -136,7 +137,7 @@ fn resolve_target_and_title(
             if b.split(['/', '\\']).any(|seg| seg == "..") || b.starts_with(['/', '\\']) {
                 return Err(Error::Git(vcs::Error::WorktreeNotFound(b.to_string())));
             }
-            let workspace_id = repo.workspace_id()?;
+            let workspace_id = repo.workspace_id().await?;
             let wt_dir = config.project_dir_for(&workspace_id);
             let wt_path = wt_dir.join(b);
             Ok((wt_path, b.to_string()))
