@@ -75,25 +75,59 @@ publish_package() {
     local version=$3
     local dry_run=$4
 
+    # Idempotency: a prior (partial) run may have already published this exact
+    # version — skip so a re-run sails past it instead of erroring. This matters
+    # because a release publishes FOUR packages: if the previous run died after
+    # package 2 of 4, the re-run must skip 1-2 and finish 3-4.
     if is_published "$pkg_name" "$version"; then
         log "Skipping $pkg_name@$version (already published)"
         return 0
     fi
 
-    log "Publishing $pkg_name@$version..."
-
     cd "$pkg_dir"
 
-    # `--provenance` records GitHub-OIDC-signed attestations on npm so
-    # consumers can verify the package was built from this repo's
-    # release.yml workflow. It's a no-op outside CI (gracefully degrades)
-    # but a hard requirement once Trusted Publishing is configured for
-    # the package — npm rejects unprovenance'd publishes from CI then.
     if [[ "$dry_run" == "true" ]]; then
-        npm publish --dry-run --provenance --access public
-    else
-        npm publish --provenance --access public
+        # Packaging/metadata validation ONLY — no upload, no provenance (which
+        # needs the real registry round-trip). Run before the irreversible real
+        # publish so a malformed package fails cheaply instead of consuming the
+        # version. `set -e` aborts the script if this fails.
+        log "Validating $pkg_name@$version (dry run)..."
+        npm publish --dry-run --access public
+        return 0
     fi
+
+    # `--provenance` records GitHub-OIDC-signed attestations on npm so consumers
+    # can verify the package was built from this repo's release.yml workflow.
+    # It's a no-op outside CI (gracefully degrades) but a hard requirement once
+    # Trusted Publishing is configured — npm rejects unprovenance'd CI publishes
+    # then.
+    #
+    # Retry transient registry/network failures. Treat "this exact version is
+    # already published" as success — covers a prior run that uploaded THIS
+    # package but died before finishing the rest. The phrasing match is narrow
+    # (npm's actual wording) so an unrelated error can never masquerade as a
+    # successful publish and let a re-run tag an unpublished version.
+    log "Publishing $pkg_name@$version..."
+    local attempt=0
+    local max=3
+    local out
+    while :; do
+        attempt=$((attempt + 1))
+        if out="$(npm publish --provenance --access public 2>&1)"; then
+            printf '%s\n' "$out"
+            return 0
+        fi
+        printf '%s\n' "$out"
+        if printf '%s' "$out" | grep -qiE 'cannot publish over the previously published version|previously published versions|EPUBLISHCONFLICT'; then
+            log "$pkg_name@$version is already on the registry — treating as published."
+            return 0
+        fi
+        if [[ "$attempt" -ge "$max" ]]; then
+            error "npm publish failed for $pkg_name@$version after ${max} attempts."
+        fi
+        log "publish attempt ${attempt} for $pkg_name failed; retrying in 20s..."
+        sleep 20
+    done
 }
 
 # ============================================================

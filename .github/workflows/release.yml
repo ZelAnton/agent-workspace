@@ -3,14 +3,26 @@ name: Release
 # Manual-trigger only. Click "Run workflow" in the GitHub Actions UI and pick
 # a bump type (patch/minor/major). The workflow then:
 #   1. `prepare`: derives the next version from Cargo.toml, refuses to reuse an
-#      existing tag, auto-fills CHANGELOG.md's [Unreleased] from git-cliff if it
-#      has no manual bullets, extracts curated release notes, and promotes
-#      [Unreleased] -> [version] - date.
+#      existing tag, checks the required release files exist, auto-fills
+#      CHANGELOG.md's [Unreleased] from git-cliff if it has no manual bullets,
+#      extracts curated release notes, and promotes [Unreleased] -> [version].
 #   2. `build`: compiles release binaries for all three platforms with the new
 #      version stamped into Cargo.toml.
-#   3. `release`: commits the version bump + changelog back to main, pushes the
-#      tag atomically, and publishes a GitHub Release using the curated notes.
-#   4. `publish-npm`: publishes the npm packages (toggleable).
+#   3. `publish-npm`: dry-run-validates then publishes the npm packages
+#      (toggleable). This is the PIVOT — see the ordering note below.
+#   4. `release`: only AFTER npm has published (or was skipped) — commits the
+#      version bump + changelog back to main, pushes the tag atomically, and
+#      publishes the GitHub Release using the curated notes.
+#
+# Ordering for failure-safety (see AGENTS.md "Releasing"): npm publish is the
+# ONE irreversible step (a version can never be re-published), so it runs as the
+# pivot BEFORE anything is pushed to git. A failed npm publish strands nothing —
+# no tag, no bumped `main`, no Release — so you just re-run (npm publish is
+# idempotent: already-published packages are skipped, transient errors retried).
+# The reversible/recreatable steps after it (tag, GitHub Release) are made
+# idempotent + retried so they can never drop a completed release. The dangerous
+# state — a bumped `main`/tag with no published artifact, or a re-run that skips
+# a version — is thereby unreachable from any single-step failure.
 #
 # There is no `push:`/`tag:` auto-trigger — releasing is always a deliberate
 # manual action. The version number is NEVER typed by hand: pick the bump and
@@ -87,6 +99,25 @@ jobs:
             echo "::error::Tag ${{ steps.version.outputs.tag }} already exists"
             exit 1
           fi
+
+      # Preflight the files every downstream job depends on, BEFORE the build /
+      # irreversible npm publish — a missing install script or npm package dir
+      # should fail here (cheap, nothing released yet), not after npm has already
+      # consumed the version. (No publish *token* to check: npm uses OIDC Trusted
+      # Publishing and the GitHub Release uses the auto GITHUB_TOKEN.)
+      - name: Preflight required release files
+        run: |
+          set -euo pipefail
+          missing=0
+          for f in install.sh install.ps1 uninstall.sh uninstall.ps1 scripts/publish-npm.sh cliff.toml; do
+            [ -f "$f" ] || { echo "::error::missing required release file: $f"; missing=1; }
+          done
+          if [ "${{ inputs.publish_npm }}" = "true" ]; then
+            for d in agent-workspace agent-workspace-darwin-arm64 agent-workspace-linux-x64 agent-workspace-win32-x64; do
+              [ -f "npm/$d/package.json" ] || { echo "::error::missing npm/$d/package.json"; missing=1; }
+            done
+          fi
+          [ "$missing" -eq 0 ] || exit 1
 
       - name: Install git-cliff
         uses: taiki-e/install-action@v2
@@ -368,8 +399,17 @@ jobs:
           retention-days: 7
 
   release:
-    name: Publish release
-    needs: [prepare, build]
+    name: Publish release (tag + GitHub Release, after npm)
+    needs: [prepare, build, publish-npm]
+    # Run only AFTER the npm pivot published (or was skipped via publish_npm
+    # unchecked). `!cancelled()` is required so a SKIPPED publish-npm doesn't
+    # cascade a skip onto this job — while still HONORING an actual workflow
+    # cancellation (unlike `always()`, which would push the tag/Release even
+    # after the user cancels). The explicit result checks keep it from running
+    # when prepare/build FAILED or when npm publish FAILED. Net effect: a failed
+    # (or cancelled) npm publish leaves NO tag, NO bumped main, NO GitHub
+    # Release — re-run is clean.
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.build.result == 'success' && (needs.publish-npm.result == 'success' || needs.publish-npm.result == 'skipped') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -404,8 +444,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Only CHANGELOG.md is copied into the tree (it gets committed below).
+          # The curated notes stay in the download dir (release-meta/) and are
+          # read straight from there by the Release step — nothing untracked is
+          # written into the working tree.
           cp release-meta/CHANGELOG.md CHANGELOG.md
-          cp release-meta/release-notes.md release-notes.md
           VERSION="${{ needs.prepare.outputs.version }}"
           awk -v v="$VERSION" '
             /^version = "/ && !done { print "version = \"" v "\""; done=1; next }
@@ -431,28 +474,66 @@ jobs:
           PY
           echo "Cargo.toml: $(grep -m1 '^version = ' Cargo.toml)"
 
+      # Idempotent so a "Re-run failed jobs" (after a prior run pushed the bump
+      # but failed at the GitHub Release step) flows straight through to the
+      # idempotent Release step instead of dying here on "nothing to commit" /
+      # "tag already exists" / non-fast-forward. The re-run reuses the SAME
+      # cached prepare outputs (this version), so it never bumps — only a full
+      # workflow re-DISPATCH does, which the Release step still warns against.
       - name: Commit, tag, push
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Cargo.toml Cargo.lock CHANGELOG.md
-          git commit -m "Release ${{ needs.prepare.outputs.tag }}"
-          git tag "${{ needs.prepare.outputs.tag }}"
-          git push --atomic origin HEAD:refs/heads/main "${{ needs.prepare.outputs.tag }}"
+          # Skip the commit if the bump is already committed (re-run: checkout of
+          # main already contains it, and re-applying the same changes stages
+          # nothing).
+          if git diff --cached --quiet; then
+            echo "Bump already committed — skipping commit."
+          else
+            git commit -m "Release ${TAG}"
+          fi
+          # Create the tag only if it isn't already present locally.
+          git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1 || git tag "${TAG}"
+          # Push branch + tag atomically. If both refs are already at the remote
+          # state (prior run pushed them), this is a no-op "Everything up-to-date"
+          # and exits 0. If the push is rejected, verify the remote is exactly the
+          # expected released state and continue; otherwise fail loudly.
+          if git push --atomic origin "HEAD:refs/heads/main" "refs/tags/${TAG}"; then
+            echo "Pushed bump commit + ${TAG}."
+          else
+            git fetch --quiet origin main "refs/tags/${TAG}" || true
+            if git merge-base --is-ancestor HEAD origin/main \
+               && git ls-remote --tags origin "refs/tags/${TAG}" | grep -q "refs/tags/${TAG}$"; then
+              echo "Bump commit + ${TAG} are already on origin — continuing to Release."
+            else
+              echo "::error::push failed and origin is not in the expected released state for ${TAG}."
+              exit 1
+            fi
+          fi
 
-      # Publish GH Release via the gh CLI (pre-installed on ubuntu-latest).
-      # The tag already exists (pushed above), so `gh release create` attaches
-      # the release to it. Notes come from the curated release-notes.md rather
-      # than `--generate-notes`.
-      - name: Publish GitHub Release (gh CLI)
+      # Last, and AFTER the npm pivot + the tag push: attach the GitHub Release.
+      # It must never be the step that *loses* a completed release, so it is
+      # idempotent (edit + re-upload assets if a prior attempt created it,
+      # otherwise create) and retried. If it still fails, the error says to
+      # finish by hand and NOT re-run — a re-run reads the already-bumped version
+      # from main and would ship the NEXT version, stranding this tag's Release.
+      - name: Publish GitHub Release (gh CLI, idempotent + retry)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
           TAG="${{ needs.prepare.outputs.tag }}"
-          mapfile -t archives < <(ls dist/agent-workspace-*.tar.gz)
+          NOTES="release-meta/release-notes.md"
+          # nullglob so a no-match yields an empty array (not the literal glob),
+          # avoiding any `ls`-output parsing.
+          shopt -s nullglob
+          archives=( dist/agent-workspace-*.tar.gz )
+          shopt -u nullglob
           if [[ ${#archives[@]} -eq 0 ]]; then
             echo "::error::no archives staged in dist/"
             exit 1
@@ -463,11 +544,33 @@ jobs:
               exit 1
             fi
           done
-          gh release create "$TAG" \
-            --title "$TAG" \
-            --notes-file release-notes.md \
-            "${archives[@]}" \
-            install.sh install.ps1 uninstall.sh uninstall.ps1
+          assets=( "${archives[@]}" install.sh install.ps1 uninstall.sh uninstall.ps1 )
+          attempt=0
+          max=3
+          while :; do
+            attempt=$((attempt + 1))
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              # A prior attempt already created it — update notes/title and
+              # (re-)upload assets, clobbering any partial uploads.
+              # `--clobber` BEFORE the positionals so it's parsed as a flag even
+              # if gh ever disables flag interspersing (otherwise it could be
+              # taken as a filename and break this idempotent re-upload path).
+              if gh release edit "$TAG" --title "$TAG" --notes-file "$NOTES" \
+                && gh release upload --clobber "$TAG" "${assets[@]}"; then
+                break
+              fi
+            else
+              if gh release create "$TAG" --title "$TAG" --notes-file "$NOTES" "${assets[@]}"; then
+                break
+              fi
+            fi
+            if [[ "$attempt" -ge "$max" ]]; then
+              echo "::error::${TAG} is tagged (and npm-published, if enabled) but creating the GitHub Release failed after ${max} attempts. Recover with 'Re-run failed jobs' (reuses ${TAG}; every step is idempotent), or finish by hand: gh release create ${TAG} --notes-file <notes> <assets>. Do NOT RE-DISPATCH the whole workflow — that re-reads the already-bumped Cargo.toml and would ship the NEXT version, orphaning ${TAG}."
+              exit 1
+            fi
+            echo "::warning::GitHub Release attempt ${attempt} failed; retrying in 15s..."
+            sleep 15
+          done
 
   publish-npm:
     name: Publish to npm
@@ -534,10 +637,20 @@ jobs:
             ls -la "$target"
           done
 
+      # Cheap validation BEFORE the irreversible publish: pack each package
+      # exactly as `npm publish` would, but without uploading (`--dry-run`),
+      # catching packaging/metadata errors without consuming the version.
+      - name: Validate npm packages (dry run)
+        run: bash scripts/publish-npm.sh "${{ needs.prepare.outputs.version }}" true
+
+      # The PIVOT — the one irreversible step, run before any tag/Release exists
+      # (the `release` job depends on this job). A failure here strands nothing:
+      # re-run and the script skips already-published packages and retries
+      # transient errors (see scripts/publish-npm.sh).
+      #
+      # No NODE_AUTH_TOKEN: the npm CLI picks up the GitHub OIDC token
+      # automatically via ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN env vars (provided
+      # when `permissions: id-token: write` is set above). `--provenance` is
+      # passed inside `publish-npm.sh` for every real `npm publish`.
       - name: Publish to npm (OIDC + provenance)
-        # No NODE_AUTH_TOKEN: the npm CLI picks up the GitHub OIDC token
-        # automatically via ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN env vars
-        # (provided when `permissions: id-token: write` is set above).
-        # `--provenance` is passed inside `publish-npm.sh` for every
-        # `npm publish` invocation.
         run: bash scripts/publish-npm.sh "${{ needs.prepare.outputs.version }}"
