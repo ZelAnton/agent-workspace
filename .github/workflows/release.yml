@@ -64,6 +64,15 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
       prev_tag: ${{ steps.version.outputs.prev_tag }}
     steps:
+      # Releases always come from main. The workflow_dispatch UI always shows a
+      # branch picker (it can't be hidden); refuse any non-main dispatch so the
+      # version/changelog/tag can never be derived from a feature branch.
+      - name: Enforce dispatch from main
+        if: github.ref_name != 'main'
+        run: |
+          echo "::error::Release must be dispatched from main (got '${{ github.ref_name }}'). Re-run 'Run workflow' and select the main branch."
+          exit 1
+
       - name: Checkout main (full history + tags)
         uses: actions/checkout@v4
         with:
