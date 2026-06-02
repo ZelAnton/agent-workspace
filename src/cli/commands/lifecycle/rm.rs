@@ -6,11 +6,23 @@ use std::path::Path;
 
 use clap::Args;
 use clap_complete::engine::ArgValueCompleter;
+use serde::Serialize;
 
+use crate::cli::output::{self, OutputFormat};
 use crate::cli::{write_path_file, Error, Result};
 use crate::complete;
 use crate::config::Config;
 use crate::vcs;
+
+/// Machine-facing `ws rm` result (json mode).
+#[derive(Serialize)]
+struct RmResult {
+    action: &'static str,
+    branch: String,
+    /// Main-repo path the shell was redirected to, if we removed the worktree
+    /// we were standing in (else `null`).
+    returned_to: Option<String>,
+}
 
 #[derive(Args)]
 pub struct RmArgs {
@@ -23,7 +35,7 @@ pub struct RmArgs {
     force: bool,
 }
 
-pub async fn run(args: RmArgs, config: &Config, path_file: Option<&Path>, repo: &vcs::Repo) -> Result<()> {
+pub async fn run(args: RmArgs, config: &Config, path_file: Option<&Path>, format: OutputFormat, repo: &vcs::Repo) -> Result<()> {
     // Get main repo path BEFORE any destructive operations
     let main_path = repo.repo_root().await?;
     let workspace_id = repo.workspace_id().await?;
@@ -75,12 +87,23 @@ pub async fn run(args: RmArgs, config: &Config, path_file: Option<&Path>, repo: 
     // Remove metadata
     crate::meta::remove_meta(&wt_dir, &branch);
 
-    eprintln!("Removed worktree: {branch}");
+    output::success(format, format_args!("Removed worktree: {branch}"));
 
     // If we were inside the removed worktree, write main repo path for shell to cd
-    if path_file.is_some() && inside_target {
+    let returned_to = if path_file.is_some() && inside_target {
         write_path_file(path_file, &main_path)?;
-    }
+        Some(main_path.display().to_string())
+    } else {
+        None
+    };
 
+    output::emit_json(
+        &RmResult {
+            action: "removed",
+            branch,
+            returned_to,
+        },
+        format,
+    );
     Ok(())
 }

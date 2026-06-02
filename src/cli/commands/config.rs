@@ -27,9 +27,13 @@
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
+use clap_complete::engine::ArgValueCompleter;
+use serde::Serialize;
 use toml_edit::{value, DocumentMut};
 
+use crate::cli::output::{self, OutputFormat};
 use crate::cli::{Error, Result};
+use crate::complete;
 
 /// Allow-listed dotted keys. Anything not in this list is rejected
 /// with a hint so the user doesn't accidentally write
@@ -63,6 +67,15 @@ enum ValueKind {
     Bool,
 }
 
+impl ValueKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            ValueKind::String => "string",
+            ValueKind::Bool => "bool",
+        }
+    }
+}
+
 #[derive(Args)]
 pub struct ConfigArgs {
     #[command(subcommand)]
@@ -76,6 +89,7 @@ enum ConfigCommand {
         /// Dotted key — currently `workspace.alias` or
         /// `workspace.use_path_hash`. See `ws config list` for the
         /// authoritative roster.
+        #[arg(add = ArgValueCompleter::new(complete::complete_config_keys))]
         key: String,
         /// Value to assign. Strings stored as-is; booleans must be
         /// `true` / `false`.
@@ -83,17 +97,19 @@ enum ConfigCommand {
     },
     /// Print the current value of a key, or "<unset>" if absent.
     Get {
+        #[arg(add = ArgValueCompleter::new(complete::complete_config_keys))]
         key: String,
     },
     /// Remove a key from the project config. No-op if absent.
     Unset {
+        #[arg(add = ArgValueCompleter::new(complete::complete_config_keys))]
         key: String,
     },
     /// Show all known keys, their descriptions, and current values.
     List,
 }
 
-pub async fn run(args: ConfigArgs, repo: &crate::vcs::Repo) -> Result<()> {
+pub async fn run(args: ConfigArgs, format: OutputFormat, repo: &crate::vcs::Repo) -> Result<()> {
     // Anchor everything in the current repo's root, even if invoked
     // from a worktree or deeper subdirectory. Same lookup the rest
     // of the CLI uses.
@@ -104,11 +120,42 @@ pub async fn run(args: ConfigArgs, repo: &crate::vcs::Repo) -> Result<()> {
     let config_path = crate::config::project_config_path_with_fallback(&repo_root);
 
     match args.command {
-        ConfigCommand::Set { key, value } => set(&config_path, &key, &value),
-        ConfigCommand::Get { key } => get(&config_path, &key),
-        ConfigCommand::Unset { key } => unset(&config_path, &key),
-        ConfigCommand::List => list(&config_path),
+        ConfigCommand::Set { key, value } => set(&config_path, &key, &value, format),
+        ConfigCommand::Get { key } => get(&config_path, &key, format),
+        ConfigCommand::Unset { key } => unset(&config_path, &key, format),
+        ConfigCommand::List => list(&config_path, format),
     }
+}
+
+/// `ws config set` / `unset` result (json mode).
+#[derive(Serialize)]
+struct ConfigMutateOutput {
+    action: &'static str,
+    key: String,
+    /// New value for `set`; absent (`null`) for `unset`.
+    value: Option<String>,
+}
+
+/// One row of `ws config list` (json mode).
+#[derive(Serialize)]
+struct ConfigEntry {
+    key: &'static str,
+    kind: &'static str,
+    value: Option<String>,
+    description: &'static str,
+}
+
+#[derive(Serialize)]
+struct ConfigListOutput {
+    path: String,
+    keys: Vec<ConfigEntry>,
+}
+
+/// `ws config get` result (json mode).
+#[derive(Serialize)]
+struct ConfigGetOutput {
+    key: String,
+    value: Option<String>,
 }
 
 fn lookup_known(key: &str) -> Result<&'static KnownKey> {
@@ -127,7 +174,7 @@ fn lookup_known(key: &str) -> Result<&'static KnownKey> {
         })
 }
 
-fn set(config_path: &Path, key: &str, value_str: &str) -> Result<()> {
+fn set(config_path: &Path, key: &str, value_str: &str, format: OutputFormat) -> Result<()> {
     let known = lookup_known(key)?;
     let mut doc = load_doc(config_path)?;
 
@@ -169,12 +216,23 @@ fn set(config_path: &Path, key: &str, value_str: &str) -> Result<()> {
     }
 
     save_doc(config_path, &doc)?;
-    println!("Set {key} = {value_str}");
-    println!("(written to {})", config_path.display());
+    if format.is_json() {
+        output::emit_json(
+            &ConfigMutateOutput {
+                action: "set",
+                key: key.to_string(),
+                value: Some(value_str.to_string()),
+            },
+            format,
+        );
+    } else {
+        println!("Set {key} = {value_str}");
+        println!("(written to {})", config_path.display());
+    }
     Ok(())
 }
 
-fn get(config_path: &Path, key: &str) -> Result<()> {
+fn get(config_path: &Path, key: &str, format: OutputFormat) -> Result<()> {
     lookup_known(key)?;
     let doc = load_doc(config_path)?;
     let (section, field) = key
@@ -184,23 +242,34 @@ fn get(config_path: &Path, key: &str) -> Result<()> {
     let val = doc
         .get(section)
         .and_then(|item| item.as_table())
-        .and_then(|table| table.get(field));
+        .and_then(|table| table.get(field))
+        .map(|v| v.to_string().trim().to_string());
 
-    match val {
-        Some(v) => println!("{}", v.to_string().trim()),
-        None => println!("<unset>"),
+    if format.is_json() {
+        output::emit_json(
+            &ConfigGetOutput {
+                key: key.to_string(),
+                value: val,
+            },
+            format,
+        );
+    } else {
+        match val {
+            Some(v) => println!("{v}"),
+            None => println!("<unset>"),
+        }
     }
     Ok(())
 }
 
-fn unset(config_path: &Path, key: &str) -> Result<()> {
+fn unset(config_path: &Path, key: &str, format: OutputFormat) -> Result<()> {
     lookup_known(key)?;
     let mut doc = load_doc(config_path)?;
     let (section, field) = key
         .split_once('.')
         .ok_or_else(|| Error::Other(format!("malformed key '{key}'")))?;
 
-    if let Some(table) = doc.get_mut(section).and_then(|i| i.as_table_mut())
+    let removed = if let Some(table) = doc.get_mut(section).and_then(|i| i.as_table_mut())
         && table.remove(field).is_some()
     {
         // If we just emptied the section, drop it too so the file
@@ -209,30 +278,66 @@ fn unset(config_path: &Path, key: &str) -> Result<()> {
             doc.remove(section);
         }
         save_doc(config_path, &doc)?;
+        true
+    } else {
+        false
+    };
+
+    if format.is_json() {
+        output::emit_json(
+            &ConfigMutateOutput {
+                action: if removed { "unset" } else { "noop" },
+                key: key.to_string(),
+                value: None,
+            },
+            format,
+        );
+    } else if removed {
         println!("Unset {key}");
-        return Ok(());
+    } else {
+        println!("{key} was not set; nothing to do");
     }
-    println!("{key} was not set; nothing to do");
     Ok(())
 }
 
-fn list(config_path: &Path) -> Result<()> {
+fn list(config_path: &Path, format: OutputFormat) -> Result<()> {
     let doc = load_doc(config_path)?;
+
+    let entries: Vec<ConfigEntry> = KNOWN_KEYS
+        .iter()
+        .map(|known| {
+            let (section, field) = known.key.split_once('.').unwrap_or((known.key, ""));
+            let value = doc
+                .get(section)
+                .and_then(|i| i.as_table())
+                .and_then(|t| t.get(field))
+                .map(|v| v.to_string().trim().to_string());
+            ConfigEntry {
+                key: known.key,
+                kind: known.kind.as_str(),
+                value,
+                description: known.description,
+            }
+        })
+        .collect();
+
+    if format.is_json() {
+        output::emit_json(
+            &ConfigListOutput {
+                path: config_path.display().to_string(),
+                keys: entries,
+            },
+            format,
+        );
+        return Ok(());
+    }
+
     println!("Known config keys (project config: {}):", config_path.display());
     println!();
-    for known in KNOWN_KEYS {
-        let (section, field) = known.key.split_once('.').unwrap_or((known.key, ""));
-        let current = doc
-            .get(section)
-            .and_then(|i| i.as_table())
-            .and_then(|t| t.get(field))
-            .map(|v| v.to_string().trim().to_string())
-            .unwrap_or_else(|| "<unset>".to_string());
-        println!("  {key:<28} {kind:<6} = {current}", key = known.key, kind = match known.kind {
-            ValueKind::String => "string",
-            ValueKind::Bool => "bool",
-        });
-        println!("      {}", known.description);
+    for e in &entries {
+        let current = e.value.as_deref().unwrap_or("<unset>");
+        println!("  {key:<28} {kind:<6} = {current}", key = e.key, kind = e.kind);
+        println!("      {}", e.description);
         println!();
     }
     Ok(())
@@ -308,7 +413,7 @@ mod tests {
     fn set_string_writes_to_toml() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join(".agent-workspace.toml");
-        set(&path, "workspace.alias", "my-name").unwrap();
+        set(&path, "workspace.alias", "my-name", OutputFormat::Human).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("[workspace]"));
         assert!(content.contains("alias = \"my-name\""));
@@ -318,7 +423,7 @@ mod tests {
     fn set_bool_writes_to_toml() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join(".agent-workspace.toml");
-        set(&path, "workspace.use_path_hash", "true").unwrap();
+        set(&path, "workspace.use_path_hash", "true", OutputFormat::Human).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("use_path_hash = true"));
     }
@@ -327,7 +432,7 @@ mod tests {
     fn set_unknown_key_errors() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join(".agent-workspace.toml");
-        let result = set(&path, "workspace.alais", "x"); // typo
+        let result = set(&path, "workspace.alais", "x", OutputFormat::Human); // typo
         assert!(result.is_err());
         assert!(format!("{:?}", result.unwrap_err()).contains("unknown config key"));
     }
@@ -336,7 +441,7 @@ mod tests {
     fn set_invalid_bool_errors() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join(".agent-workspace.toml");
-        let result = set(&path, "workspace.use_path_hash", "maybe");
+        let result = set(&path, "workspace.use_path_hash", "maybe", OutputFormat::Human);
         assert!(result.is_err());
     }
 
@@ -346,7 +451,7 @@ mod tests {
         let path = tmp.path().join(".agent-workspace.toml");
         // Manually write a section with one key.
         std::fs::write(&path, "[workspace]\nalias = \"x\"\n").unwrap();
-        unset(&path, "workspace.alias").unwrap();
+        unset(&path, "workspace.alias", OutputFormat::Human).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(
             !content.contains("[workspace]"),
@@ -359,7 +464,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join(".agent-workspace.toml");
         std::fs::write(&path, "[general]\ntrunk = \"main\"\n").unwrap();
-        set(&path, "workspace.alias", "x").unwrap();
+        set(&path, "workspace.alias", "x", OutputFormat::Human).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("trunk = \"main\""), "existing general.trunk must survive");
         assert!(content.contains("alias = \"x\""));

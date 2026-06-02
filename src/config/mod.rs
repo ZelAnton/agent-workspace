@@ -344,6 +344,21 @@ impl MergeStrategy {
     pub fn is_squash(&self) -> bool {
         matches!(self, Self::Squash)
     }
+
+    /// Lowercase wire/display name — used in user-facing messages and JSON
+    /// (replaces leaking `{:?}` Debug, which renders `Squash`/`Merge`).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Squash => "squash",
+            Self::Merge => "merge",
+        }
+    }
+}
+
+impl std::fmt::Display for MergeStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, clap::ValueEnum)]
@@ -352,6 +367,22 @@ pub enum SyncStrategy {
     #[default]
     Rebase,
     Merge,
+}
+
+impl SyncStrategy {
+    /// Lowercase wire/display name — used in user-facing messages and JSON.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Rebase => "rebase",
+            Self::Merge => "merge",
+        }
+    }
+}
+
+impl std::fmt::Display for SyncStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -452,46 +483,7 @@ impl Config {
             None => repo,
         };
 
-        // Merge: project overrides global
-        let merge_strategy = project
-            .general
-            .merge_strategy
-            .unwrap_or(global.general.merge_strategy);
-        let sync_strategy = project
-            .general
-            .sync_strategy
-            .unwrap_or(global.general.sync_strategy);
-        let mut copy_files = global.general.copy_files;
-        copy_files.extend(project.general.copy_files);
-
-        let hooks = HooksConfig {
-            post_create: merge_hooks(&global.hooks.post_create, &project.hooks.post_create),
-            pre_merge: merge_hooks(&global.hooks.pre_merge, &project.hooks.pre_merge),
-            post_merge: merge_hooks(&global.hooks.post_merge, &project.hooks.post_merge),
-        };
-
-        let open_in_new_tab = project.ui.open_in_new_tab.unwrap_or(global.ui.open_in_new_tab);
-        let use_cow = project.create.use_cow.unwrap_or(global.create.use_cow);
-        let workspace_alias = project.workspace.alias.clone();
-        let use_path_hash = project.workspace.use_path_hash.unwrap_or(false);
-        let copy_excludes = project.copy.exclude.clone();
-
-        Ok(Self {
-            base_dir,
-            workspaces_dir,
-            merge_strategy,
-            sync_strategy,
-            copy_files,
-            hooks,
-            trunk: project.general.trunk,
-            vcs: project.general.vcs,
-            vcs_global: global.general.vcs,
-            open_in_new_tab,
-            use_cow,
-            workspace_alias,
-            use_path_hash,
-            copy_excludes,
-        })
+        Ok(merge_global_project(global, project, base_dir, workspaces_dir))
     }
 
     /// Resolve the per-repo workspace directory under `workspaces_dir`.
@@ -642,6 +634,69 @@ fn load_project_file(path: &Path) -> Result<ProjectConfig> {
     }
     let content = std::fs::read_to_string(path)?;
     Ok(toml::from_str(&content)?)
+}
+
+/// Fold the global layer under the (already layer-folded) project layer into
+/// the runtime [`Config`]. Pure (no I/O) so the merge semantics are unit-
+/// testable — `base_dir`/`workspaces_dir` are the only I/O-derived inputs and
+/// are passed in. Per-field rules:
+///   - `merge_strategy`/`sync_strategy`/`open_in_new_tab`/`use_cow`: Option
+///     override — project wins when set, else global's value.
+///   - `copy_files`: append (global first, then project).
+///   - `hooks`: replace-per-phase when the project phase is non-empty (see
+///     [`merge_hooks`]) — NOT append.
+///   - `trunk`/`vcs`/`workspace_alias`/`use_path_hash`/`copy_excludes`:
+///     project-only (no global counterpart); `vcs_global` is kept separate so
+///     `resolve_backend` can see both layers.
+///
+/// **Adding a config field?** Wire it here and extend the `merge_*` coverage
+/// test below so a forgotten merge fails CI instead of silently dropping the
+/// project (or global) value.
+fn merge_global_project(
+    global: GlobalConfig,
+    project: ProjectConfig,
+    base_dir: PathBuf,
+    workspaces_dir: PathBuf,
+) -> Config {
+    let merge_strategy = project
+        .general
+        .merge_strategy
+        .unwrap_or(global.general.merge_strategy);
+    let sync_strategy = project
+        .general
+        .sync_strategy
+        .unwrap_or(global.general.sync_strategy);
+    let mut copy_files = global.general.copy_files;
+    copy_files.extend(project.general.copy_files);
+
+    let hooks = HooksConfig {
+        post_create: merge_hooks(&global.hooks.post_create, &project.hooks.post_create),
+        pre_merge: merge_hooks(&global.hooks.pre_merge, &project.hooks.pre_merge),
+        post_merge: merge_hooks(&global.hooks.post_merge, &project.hooks.post_merge),
+    };
+
+    let open_in_new_tab = project.ui.open_in_new_tab.unwrap_or(global.ui.open_in_new_tab);
+    let use_cow = project.create.use_cow.unwrap_or(global.create.use_cow);
+    let workspace_alias = project.workspace.alias.clone();
+    let use_path_hash = project.workspace.use_path_hash.unwrap_or(false);
+    let copy_excludes = project.copy.exclude.clone();
+
+    Config {
+        base_dir,
+        workspaces_dir,
+        merge_strategy,
+        sync_strategy,
+        copy_files,
+        hooks,
+        trunk: project.general.trunk,
+        vcs: project.general.vcs,
+        vcs_global: global.general.vcs,
+        open_in_new_tab,
+        use_cow,
+        workspace_alias,
+        use_path_hash,
+        copy_excludes,
+    }
 }
 
 /// Fold two project-config layers; `over` (worktree) wins over `base` (repo).
@@ -858,6 +913,84 @@ mod tests {
         assert!(config.general.merge_strategy.is_none());
         assert!(config.general.sync_strategy.is_none());
         assert!(config.general.copy_files.is_empty());
+    }
+
+    /// Exhaustive merge-semantics coverage for [`merge_global_project`]: every
+    /// field is set DIFFERENTLY in the global vs project layers, and each
+    /// assertion pins the documented rule (override / append / replace /
+    /// project-only). Adding a config field without wiring its merge will leave
+    /// one of these assertions failing (or the struct literal incomplete), so a
+    /// forgotten merge can't ship silently.
+    #[test]
+    fn merge_global_project_covers_every_field() {
+        let global = GlobalConfig {
+            general: GeneralConfig {
+                merge_strategy: MergeStrategy::Squash,
+                sync_strategy: SyncStrategy::Rebase,
+                copy_files: vec!["global.env".into()],
+                vcs: Some(crate::vcs::VcsChoice::Git),
+            },
+            hooks: HooksConfig {
+                post_create: vec!["global-pc".into()],
+                pre_merge: vec!["global-pm".into()],
+                post_merge: vec!["global-pom".into()],
+            },
+            ui: UiConfig { open_in_new_tab: true },
+            create: CreateConfig { use_cow: true },
+        };
+        let project = ProjectConfig {
+            general: ProjectGeneralConfig {
+                trunk: Some("develop".into()),
+                merge_strategy: Some(MergeStrategy::Merge),
+                sync_strategy: Some(SyncStrategy::Merge),
+                copy_files: vec!["project.env".into()],
+                vcs: Some(crate::vcs::VcsChoice::Jj),
+            },
+            hooks: HooksConfig {
+                // Non-empty project phases REPLACE the global ones (not append).
+                post_create: vec!["project-pc".into()],
+                pre_merge: vec![], // empty → keep global's pre_merge
+                post_merge: vec!["project-pom".into()],
+            },
+            ui: ProjectUiConfig { open_in_new_tab: Some(false) },
+            create: ProjectCreateConfig { use_cow: Some(false) },
+            workspace: ProjectWorkspaceConfig {
+                alias: Some("my-alias".into()),
+                use_path_hash: Some(true),
+            },
+            copy: ProjectCopyConfig {
+                exclude: vec!["/target".into()],
+            },
+        };
+
+        let cfg = merge_global_project(
+            global,
+            project,
+            PathBuf::from("/base"),
+            PathBuf::from("/base"),
+        );
+
+        // Option-override: project wins when set.
+        assert_eq!(cfg.merge_strategy, MergeStrategy::Merge);
+        assert_eq!(cfg.sync_strategy, SyncStrategy::Merge);
+        assert!(!cfg.open_in_new_tab);
+        assert!(!cfg.use_cow);
+        // Append: global first, then project.
+        assert_eq!(cfg.copy_files, vec!["global.env", "project.env"]);
+        // Hooks replace-per-phase only when the project phase is non-empty.
+        assert_eq!(cfg.hooks.post_create, vec!["project-pc"]);
+        assert_eq!(cfg.hooks.pre_merge, vec!["global-pm"]); // empty project → global kept
+        assert_eq!(cfg.hooks.post_merge, vec!["project-pom"]);
+        // Project-only fields.
+        assert_eq!(cfg.trunk.as_deref(), Some("develop"));
+        assert_eq!(cfg.vcs, Some(crate::vcs::VcsChoice::Jj));
+        assert_eq!(cfg.workspace_alias.as_deref(), Some("my-alias"));
+        assert!(cfg.use_path_hash);
+        assert_eq!(cfg.copy_excludes, vec!["/target"]);
+        // vcs_global is kept separate so resolve_backend sees both layers.
+        assert_eq!(cfg.vcs_global, Some(crate::vcs::VcsChoice::Git));
+        // I/O-derived paths pass through unchanged.
+        assert_eq!(cfg.base_dir, PathBuf::from("/base"));
     }
 
     #[test]

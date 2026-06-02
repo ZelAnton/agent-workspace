@@ -21,7 +21,7 @@ checkout:
 - **Snap mode** — a "use and discard" loop: create a worktree, run an agent in it, and on exit `ws` walks you through merge-or-keep and tidies up.
 - **Near-instant creation** — Copy-on-Write (reflink) cloning makes `ws new` near-instant even on multi-gigabyte monorepos, using almost no extra disk.
 - **Native git *and* [Jujutsu (`jj`)](https://jj-vcs.github.io/jj/)** — both backends are first-class; colocated repos default to jj.
-- **Terminal-tab aware** — on Windows Terminal / iTerm2 / GNOME Terminal, `ws new` and `ws cd` open the worktree in a fresh tab and leave your current shell put.
+- **Terminal-tab aware** — on Windows Terminal / iTerm2 / GNOME Terminal / WezTerm (and tmux), `ws new` and `ws cd` open the worktree in a fresh tab/window and leave your current shell put.
 
 ### At a glance
 
@@ -44,7 +44,7 @@ ws clean                    # garbage-collect worktrees already merged
 This is a fork of [`nekocode/agent-worktree`](https://github.com/nekocode/agent-worktree). Highlights of the fork:
 
 - **Native [Jujutsu (`jj`)](https://jj-vcs.github.io/jj/) backend** alongside git. Both backends are feature-complete for `ws`'s happy-path workflows (new / ls / cd / rm / clean / merge / sync / status / mv). Lives behind `src/vcs/` with `GitBackend` and `JjBackend` as separate impls of a common trait. Colocated repos (both `.git/` and `.jj/` present) default to jj — override with `--vcs=git` or `[general] vcs = "git"` in `.workspace.toml`. A few git-shaped operations have no clean jj analogue and surface `Error::Unsupported` with a hint: `ws mv` (use `ws rm` + `ws new` instead) and `ws sync --abort`/`--continue` (jj records conflicts in commits — resolve files and re-run). See [`AGENTS.md`](AGENTS.md) → "VCS backend compatibility" for the full semantic-delta table.
-- **Terminal-tab integration** for `ws new` and `ws cd` on Windows Terminal, iTerm2, and GNOME Terminal — the creation / navigation flow opens a new tab titled with the branch and runs there; the originating shell stays put. `ws cd <branch>` to your current worktree is a no-op (no duplicate tabs unless `--in-new-tab` forces it). Auto-enabled when supported; disable with `--no-tab` or `[ui] open_in_new_tab = false`.
+- **Terminal-tab integration** for `ws new` and `ws cd` on Windows Terminal, iTerm2, GNOME Terminal, WezTerm, and tmux (new window; chosen only when no tabbed GUI terminal is detected) — the creation / navigation flow opens a new tab titled with the branch and runs there; the originating shell stays put. `ws cd <branch>` to your current worktree is a no-op (no duplicate tabs unless `--in-new-tab` forces it). Auto-enabled when supported; disable with `--no-tab` or `[ui] open_in_new_tab = false`.
 - **Copy-on-Write worktree creation** on filesystems that support block cloning (Windows ReFS / DevDrive, Linux Btrfs / XFS, macOS APFS). `ws new` becomes near-instant on large monorepos and the new worktree initially occupies only its diff on disk. Supported on both backends: git uses `worktree add --no-checkout` + reflink; jj uses `workspace add --sparse-patterns empty` + reflink + sparse-set restore. Colocated repos with `--vcs=git` bracket the git ops with `jj git import` to keep jj in sync. Auto-enabled when the source repo and `$AGENT_WORKSPACE_DIR` are on the same reflink-capable volume; falls back silently otherwise. Disable with `--no-cow` or `[create] use_cow = false`.
 
 ## Install
@@ -244,7 +244,7 @@ checks the worktree state:
 
 ## Machine-readable output (`--format json`)
 
-`ws` is built to be driven by AI agents, so the read/result commands can emit a
+`ws` is built to be driven by AI agents, so **every** read/result command can emit a
 stable JSON object instead of scraped text. Add the global `--format json` flag:
 
 ```bash
@@ -253,7 +253,16 @@ ws status --format json      # { "branch", "merge_target", "commits", "uncommitt
 ws repo-info --format json   # { "repo_name", "origin", "total_files", "total_bytes", "from_cache", ... }
 ws new feature-x --format json   # { "branch", "path", "base_branch", "created", "snap" }
 ws merge --format json           # { "merged", "branch", "target", "commits", "deleted" }
+ws sync --format json            # { "action", "branch", "target", "strategy" }
+ws clean --format json           # { "dry_run", "cleaned": [...], "skipped_dirty": [...] }
+ws rm . --format json            # { "action": "removed", "branch", "returned_to" }
+ws config list --format json     # { "path", "keys": [ { "key", "kind", "value", "description" } ] }
 ```
+
+Every object carries a top-level **`schema_version`** (currently `1`) so an agent can
+gate on the shape it expects — see [`docs/json-output.md`](docs/json-output.md) for the
+full per-command roster and the versioning policy. `mv`, `cd`, `exclude --list`, and
+`config get` emit JSON too.
 
 Discipline: in JSON mode **stdout carries only the single JSON object**; all
 progress, notices, and the update nag go to stderr (so `ws ls --format json | jq`

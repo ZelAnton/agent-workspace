@@ -117,37 +117,29 @@ impl Drop for Cleanup<'_> {
     }
 }
 
-/// Build the `ignore::Walk` used by both the scan and copy passes of
-/// [`try_clone_dir_except`]. Single source of truth for filter rules —
-/// the scan pass MUST visit the same set the copy pass will, otherwise
-/// the total-bytes denominator would diverge from the actual work and the
-/// progress bar would over- or under-shoot.
-/// Build the cow walker.
+/// Single source of truth for the CoW exclude matcher. Both copy paths build
+/// from the same two pattern sources so the in-process walker and the robocopy
+/// pre-scan can't drift.
 ///
-/// Two pattern sources, both fed into a single `Gitignore` matcher:
+/// Two pattern sources, both fed into one `ignore::gitignore::GitignoreBuilder`:
 ///
-///   - `hardcoded_excludes`: anchored top-level names the caller
-///     always wants skipped — `.git` (always), `.jj` (colocated jj).
-///     We promote each entry `X` to the anchored pattern `/X` so it
-///     only matches the top-level dir, mirroring the pre-v0.13.18
-///     behaviour exactly.
-///   - `user_patterns`: gitignore-style patterns from
-///     `[copy] exclude` in the project config — `target`,
-///     `/node_modules`, `**/*.iso`, `!keep-this`, etc.
+///   - `hardcoded_excludes`: anchored top-level names the caller always wants
+///     skipped — `.git` (always), `.jj` (colocated jj). Each entry `X` is
+///     promoted to the anchored pattern `/X` so it only matches the top-level
+///     dir (not a nested `.git` in a submodule or asset dir).
+///   - `user_patterns`: gitignore-style `[copy] exclude` patterns added
+///     verbatim — `target`, `/node_modules`, `**/*.iso`, `!keep-this`, etc.
 ///
-/// Both feed `ignore::gitignore::GitignoreBuilder`. A single
-/// `Match::Ignore` check in `filter_entry` decides skip/keep,
-/// supporting:
-///   - Anchored matches (`/target`) — top-level only.
-///   - Unanchored matches (`target`) — any depth.
-///   - Globs (`**/*.iso`, `*.tmp`).
-///   - Negations (`!keep-this`) — re-include after a broader rule.
-fn build_clone_walker(
+/// A single `Match::Ignore` check decides skip/keep, supporting anchored
+/// (`/target`, top-level only), unanchored (`target`, any depth), globs
+/// (`**/*.iso`), and negations (`!keep-this`). Falls back to an empty matcher
+/// (nothing excluded) if a pattern fails to compile — better than aborting the
+/// whole copy on a config syntax slip.
+fn build_exclude_matcher(
     src: &Path,
     hardcoded_excludes: &[&str],
     user_patterns: &[String],
-) -> ignore::Walk {
-    use ignore::WalkBuilder;
+) -> ignore::gitignore::Gitignore {
     use ignore::gitignore::GitignoreBuilder;
 
     let mut gi = GitignoreBuilder::new(src);
@@ -162,12 +154,47 @@ fn build_clone_walker(
     for pat in user_patterns {
         let _ = gi.add_line(None, pat);
     }
-    // If pattern compilation fails we fall back to an empty matcher
-    // (= nothing excluded). Better than aborting the entire copy on
-    // a syntax slip in user config.
-    let matcher = gi
-        .build()
-        .unwrap_or_else(|_| GitignoreBuilder::new(src).build().expect("empty gitignore builds"));
+    gi.build()
+        .unwrap_or_else(|_| GitignoreBuilder::new(src).build().expect("empty gitignore builds"))
+}
+
+/// True when every user pattern can be faithfully expressed to robocopy, which
+/// only understands literal top-level paths (`/XD <dir>` / `/XF <file>`). A
+/// pattern is safe iff it's anchored to the repo root (`/name`), names a single
+/// literal segment, and carries no glob metacharacters — exactly what the
+/// top-level pre-scan in [`try_clone_via_robocopy`] can honor. Unanchored names
+/// (`target` matches at any depth), nested paths (`build/cache`), globs
+/// (`**/*.iso`, `*.tmp`), and negations (`!keep`) can all match below the top
+/// level (or re-include), which robocopy can't express — so the caller falls
+/// through to the in-process copier instead of silently dropping them.
+// Only consulted on the Windows robocopy path; kept compiled (and tested)
+// everywhere so the logic doesn't bit-rot on non-Windows CI.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn all_patterns_robocopy_safe(user_patterns: &[String]) -> bool {
+    user_patterns.iter().all(|p| {
+        let p = p.trim();
+        let Some(rest) = p.strip_prefix('/') else {
+            return false;
+        };
+        !rest.is_empty() && !rest.contains('/') && !rest.contains(['*', '?', '[', ']'])
+    })
+}
+
+/// Build the `ignore::Walk` used by both the scan and copy passes of
+/// [`try_clone_dir_except`]. Single source of truth for which entries are
+/// visited — the scan pass MUST visit the same set the copy pass will, or the
+/// total-bytes denominator would diverge from the actual work and the progress
+/// bar would over- or under-shoot. Skips are driven solely by
+/// [`build_exclude_matcher`]; the underlying gitignore/hidden filters are off
+/// so we mirror the whole tree.
+fn build_clone_walker(
+    src: &Path,
+    hardcoded_excludes: &[&str],
+    user_patterns: &[String],
+) -> ignore::Walk {
+    use ignore::WalkBuilder;
+
+    let matcher = build_exclude_matcher(src, hardcoded_excludes, user_patterns);
 
     WalkBuilder::new(src)
         // Walk everything — including hidden files. We want a complete
@@ -370,21 +397,35 @@ pub fn try_clone_dir_except(
     // Vista, so the spawn essentially never fails for a missing binary;
     // if it does, we fall through to the in-process implementation
     // below.
+    //
+    // **Correctness gate**: robocopy only understands literal top-level
+    // paths, so a deep/glob exclude (`**/*.iso`, unanchored `target`)
+    // would be silently dropped on this path while the in-process copier
+    // honors it at every depth — same `ws new`, different result by host.
+    // When any pattern isn't robocopy-safe we skip robocopy entirely and
+    // use the in-process copier, so excludes behave identically everywhere.
     #[cfg(windows)]
-    match try_clone_via_robocopy(src, dst, excludes, user_patterns) {
-        Ok(bytes) => return Ok(bytes),
-        Err(RobocopyError::SpawnFailed(e)) => {
-            eprintln!(
-                "Note: failed to spawn robocopy ({e}); falling back to in-process copy."
-            );
-            // fall through to in-process path
+    if all_patterns_robocopy_safe(user_patterns) {
+        match try_clone_via_robocopy(src, dst, excludes, user_patterns) {
+            Ok(bytes) => return Ok(bytes),
+            Err(RobocopyError::SpawnFailed(e)) => {
+                eprintln!(
+                    "Note: failed to spawn robocopy ({e}); falling back to in-process copy."
+                );
+                // fall through to in-process path
+            }
+            Err(RobocopyError::ExitCode(code)) => {
+                return Err(Error::Io(std::io::Error::other(format!(
+                    "robocopy exited with code {code} (>= 8 indicates real errors; \
+                     try `ws new --no-cow` to bypass robocopy)"
+                ))));
+            }
         }
-        Err(RobocopyError::ExitCode(code)) => {
-            return Err(Error::Io(std::io::Error::other(format!(
-                "robocopy exited with code {code} (>= 8 indicates real errors; \
-                 try `ws new --no-cow` to bypass robocopy)"
-            ))));
-        }
+    } else {
+        eprintln!(
+            "Note: deep or glob exclude pattern(s) can't be expressed to robocopy; \
+             using the in-process copier so they're honored at every depth."
+        );
     }
 
     try_clone_dir_except_inproc(src, dst, excludes, user_patterns)
@@ -610,28 +651,19 @@ fn try_clone_via_robocopy(
         cmd.arg("/XD");
         cmd.arg(src_stripped.join(exc));
     }
-    // Honor `user_patterns` at the robocopy boundary by pre-scanning
-    // the source's top-level entries and feeding any matching paths to
-    // robocopy as `/XD <fullpath>` (dirs) / `/XF <fullpath>` (files).
+    // Honor `user_patterns` at the robocopy boundary by pre-scanning the
+    // source's top-level entries and feeding any matching paths to robocopy
+    // as `/XD <fullpath>` (dirs) / `/XF <fullpath>` (files).
     //
-    // **Limitation**: robocopy only understands literal paths, not
-    // gitignore globs. A pattern like `**/*.iso` that matches a file
-    // 5 levels deep cannot be expressed to robocopy without
-    // enumerating every match — which would defeat the purpose. So
-    // only TOP-LEVEL matches are honored on the robocopy path.
-    // Deep glob excludes silently no-op when robocopy is used. Users
-    // who need them can `--no-cow` to bypass robocopy and fall through
-    // to the in-process implementation (which respects the matcher
-    // at every depth).
+    // The caller ([`try_clone_dir_except`]) only routes here when EVERY user
+    // pattern is robocopy-safe (anchored top-level literals — see
+    // `all_patterns_robocopy_safe`), so this top-level pre-scan is exhaustive:
+    // deep/glob patterns never reach this path (they take the in-process
+    // copier instead), so nothing is silently dropped. Uses the shared matcher
+    // builder so the rule set matches the in-process walker exactly.
     {
-        use ignore::gitignore::GitignoreBuilder;
-        let mut gi = GitignoreBuilder::new(&src_stripped);
-        for pat in user_patterns {
-            let _ = gi.add_line(None, pat);
-        }
-        if let Ok(matcher) = gi.build()
-            && let Ok(entries) = std::fs::read_dir(&src_stripped)
-        {
+        let matcher = build_exclude_matcher(&src_stripped, &[], user_patterns);
+        if let Ok(entries) = std::fs::read_dir(&src_stripped) {
             for entry in entries.flatten() {
                 let name = entry.file_name();
                 let full = src_stripped.join(&name);

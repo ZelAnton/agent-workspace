@@ -11,26 +11,20 @@
 
 use processkit::Error as PkError;
 
-use crate::vcs::error::Error;
+use crate::vcs::error::{self, Error};
 
-/// Map any `processkit` subprocess error to our domain [`Error`].
+/// Map any `processkit` subprocess error to our domain [`Error`], stripping jj's
+/// `Error: ` prefix off the captured stderr. Thin wrapper over the shared
+/// [`error::map_pk_err`].
 pub(super) fn map_pk_err(err: PkError) -> Error {
-    match err {
-        PkError::Exit { stderr, .. } => Error::Command(clean_jj_error(&stderr)),
-        other => Error::Command(other.to_string()),
-    }
+    error::map_pk_err(err, clean_jj_error)
 }
 
-/// Build a user-friendly message from jj's stderr/stdout streams. Prefers
-/// stderr; falls back to stdout when stderr is empty (some jj commands print
-/// informational text to stdout even on error).
+/// Build a user-friendly message from jj's stderr/stdout streams — prefers
+/// stderr, falls back to stdout (some jj commands print info to stdout even on
+/// error). Thin wrapper over the shared [`error::extract_message`].
 pub(super) fn extract_message(stderr: &str, stdout: &[u8]) -> String {
-    let trimmed = stderr.trim();
-    if trimmed.is_empty() {
-        String::from_utf8_lossy(stdout).trim().to_string()
-    } else {
-        clean_jj_error(trimmed)
-    }
+    error::extract_message(stderr, stdout, clean_jj_error)
 }
 
 /// Strip jj's `Error: ` prefix for cleaner UX. Keeps `Warning:` (non-fatal,

@@ -18,6 +18,25 @@ fn same_volume_returns_true_for_self() {
 }
 
 #[test]
+fn robocopy_safe_only_for_anchored_literal_top_level() {
+    // Anchored single-segment literals — robocopy can express these as /XD//XF.
+    let safe = vec!["/target".to_string(), "/node_modules".to_string(), "/.workspace.toml".to_string()];
+    assert!(all_patterns_robocopy_safe(&safe));
+
+    // Each of these can match below the top level (or re-include) → NOT safe,
+    // so the caller must converge on the in-process copier.
+    for pat in ["target", "/build/cache", "**/*.iso", "/*.tmp", "!keep", "/a[bc]"] {
+        assert!(
+            !all_patterns_robocopy_safe(&[pat.to_string()]),
+            "pattern {pat:?} should force the in-process path"
+        );
+    }
+
+    // Empty set is trivially safe (no excludes to drop).
+    assert!(all_patterns_robocopy_safe(&[]));
+}
+
+#[test]
 fn same_volume_returns_true_for_sibling_dirs_under_tempdir() {
     let tmp = tempfile::tempdir().unwrap();
     let a = tmp.path().join("a");

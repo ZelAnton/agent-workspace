@@ -40,7 +40,7 @@ pub enum Error {
     #[error("{0}")]
     Git(#[from] crate::vcs::Error),
 
-    #[error("not in a git repository")]
+    #[error("not in a version-controlled repository")]
     NotInRepo,
 
     #[error("{0}")]
@@ -71,7 +71,8 @@ pub struct Cli {
 
     /// Output format. `human` (default) is the aligned/labelled text; `json`
     /// emits a single machine-readable object on stdout (progress/notices stay
-    /// on stderr). Honored by `ls`, `status`, `repo-info`, `new`, and `merge`.
+    /// on stderr). Honored by every read/result command; each JSON object
+    /// carries a top-level `schema_version` (see `output::SCHEMA_VERSION`).
     #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Human)]
     format: OutputFormat,
 }
@@ -85,6 +86,7 @@ enum Command {
     Ls(commands::LsArgs),
 
     /// Switch to a worktree directory (no args = return to main repo)
+    #[command(visible_alias = "checkout", visible_alias = "switch")]
     Cd(commands::CdArgs),
 
     /// Remove a worktree and its branch
@@ -185,20 +187,24 @@ impl Cli {
                 commands::lifecycle::new::run(args, &config, path_file, format, &repo).await
             }
             Command::Ls(args) => commands::ls::run(args, &config, format, &repo).await,
-            Command::Cd(args) => commands::nav::cd::run(args, &config, path_file, &repo).await,
-            Command::Rm(args) => commands::lifecycle::rm::run(args, &config, path_file, &repo).await,
+            Command::Cd(args) => {
+                commands::nav::cd::run(args, &config, path_file, format, &repo).await
+            }
+            Command::Rm(args) => {
+                commands::lifecycle::rm::run(args, &config, path_file, format, &repo).await
+            }
             Command::Clean(args) => {
-                commands::lifecycle::clean::run(args, &config, path_file, &repo).await
+                commands::lifecycle::clean::run(args, &config, path_file, format, &repo).await
             }
             Command::Merge(args) => {
                 commands::merge::run(args, &config, path_file, format, &repo).await
             }
             Command::Status => commands::status::run(&config, format, &repo).await,
             Command::RepoInfo(args) => commands::repo_info::run(args, &config, format, &repo).await,
-            Command::Config(args) => commands::config::run(args, &repo).await,
-            Command::Exclude(args) => commands::exclude::run(args, &repo).await,
-            Command::Sync(args) => commands::sync::run(args, &config, &repo).await,
-            Command::Mv(args) => commands::r#move::run(args, &config, path_file, &repo).await,
+            Command::Config(args) => commands::config::run(args, format, &repo).await,
+            Command::Exclude(args) => commands::exclude::run(args, format, &repo).await,
+            Command::Sync(args) => commands::sync::run(args, &config, format, &repo).await,
+            Command::Mv(args) => commands::r#move::run(args, &config, path_file, format, &repo).await,
             Command::Setup(args) => commands::sys::setup::run(args),
             Command::Uninstall(args) => commands::sys::uninstall::run(args),
             Command::Init(args) => commands::sys::init::run(args, &repo).await,
@@ -215,7 +221,7 @@ mod tests {
     #[test]
     fn test_error_display() {
         let err = Error::NotInRepo;
-        assert_eq!(err.to_string(), "not in a git repository");
+        assert_eq!(err.to_string(), "not in a version-controlled repository");
 
         let err = Error::Other("custom error".to_string());
         assert_eq!(err.to_string(), "custom error");

@@ -22,6 +22,8 @@ use std::path::PathBuf;
 mod gnome_terminal;
 mod iterm2;
 mod script;
+mod tmux;
+mod wezterm;
 mod windows_terminal;
 
 #[cfg(test)]
@@ -138,9 +140,12 @@ pub fn should_open_in_new_tab(no_tab: bool, in_new_tab: bool, config_value: bool
 /// inside. Returns `None` when no supported terminal is detected — caller
 /// should fall through to in-place creation.
 ///
-/// Detection order: Windows Terminal → iTerm2 → GNOME Terminal. The order
-/// only matters if multiple env vars are present (rare); the practical
-/// effect is that the first match wins.
+/// Detection order: Windows Terminal → iTerm2 → GNOME Terminal → WezTerm →
+/// tmux. Native-tab GUI terminals come first; tmux is LAST so that when it runs
+/// inside one of those, the GUI tab wins (tmux is only chosen when no tabbed GUI
+/// terminal is detected). The order otherwise only matters if multiple env vars
+/// are present (rare) — first match wins. To add a terminal, drop a module with
+/// a `detect()` and splice one line into this chain.
 pub fn detect() -> Option<Box<dyn TerminalIntegration>> {
     if let Some(t) = windows_terminal::detect() {
         return Some(t);
@@ -149,6 +154,12 @@ pub fn detect() -> Option<Box<dyn TerminalIntegration>> {
         return Some(t);
     }
     if let Some(t) = gnome_terminal::detect() {
+        return Some(t);
+    }
+    if let Some(t) = wezterm::detect() {
+        return Some(t);
+    }
+    if let Some(t) = tmux::detect() {
         return Some(t);
     }
     None

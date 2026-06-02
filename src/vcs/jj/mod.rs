@@ -25,42 +25,40 @@ use processkit::{Command, JobRunner};
 use vcs_jj::Jj;
 
 use super::backend::VcsBackend;
+use super::backend_state::BackendState;
 use super::common::{DiffStat, WorktreeInfo};
 use super::error::{Error, Result};
 
 /// The concrete vcs-jj client type used in production (real job-backed runner).
 pub(super) type JjClient = Jj<JobRunner>;
 
-/// jj-backed [`VcsBackend`].
+/// jj-backed [`VcsBackend`]. Holds the shared typed client plus an explicit
+/// working directory for every invocation (see [`BackendState`]).
 pub struct JjBackend {
-    jj: Arc<JjClient>,
-    cwd: Option<PathBuf>,
+    state: BackendState<JjClient>,
 }
 
 impl JjBackend {
     pub fn new() -> Self {
-        Self { jj: Arc::new(Jj::new()), cwd: None }
+        Self { state: BackendState::new(Arc::new(Jj::new())) }
     }
 
     pub fn with_client(jj: Arc<JjClient>) -> Self {
-        Self { jj, cwd: None }
+        Self { state: BackendState::new(jj) }
     }
 
     #[cfg(test)]
     #[allow(dead_code)]
     pub(crate) fn at(cwd: PathBuf) -> Self {
-        Self { jj: Arc::new(Jj::new()), cwd: Some(cwd) }
+        Self { state: BackendState::with_cwd(Arc::new(Jj::new()), cwd) }
     }
 
     fn dir(&self) -> std::io::Result<PathBuf> {
-        match &self.cwd {
-            Some(d) => Ok(d.clone()),
-            None => std::env::current_dir(),
-        }
+        self.state.dir()
     }
 
     fn jj(&self) -> &JjClient {
-        &self.jj
+        self.state.client()
     }
 }
 
@@ -97,7 +95,8 @@ impl VcsBackend for JjBackend {
     }
 
     fn at_cwd(&self, cwd: PathBuf) -> Box<dyn VcsBackend> {
-        Box::new(Self { jj: self.jj.clone(), cwd: Some(cwd) })
+        // Shares the same `Arc<JjClient>` — no new subprocess/runner.
+        Box::new(Self { state: self.state.pinned(cwd) })
     }
 
     // ----- Identity -------------------------------------------------------

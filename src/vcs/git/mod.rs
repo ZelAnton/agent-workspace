@@ -31,6 +31,7 @@ use processkit::{Command, JobRunner, ProcessResult};
 use vcs_git::Git;
 
 use super::backend::VcsBackend;
+use super::backend_state::BackendState;
 use super::common::{DiffStat, WorktreeInfo};
 use super::error::{Error, Result};
 
@@ -45,19 +46,15 @@ pub use worktree::parse_worktree_list;
 pub(super) type GitClient = Git<JobRunner>;
 
 /// Git-backed [`VcsBackend`]. Holds the shared typed client plus an explicit
-/// working directory for every invocation.
+/// working directory for every invocation (see [`BackendState`]).
 pub struct GitBackend {
-    git: Arc<GitClient>,
-    /// Explicit working directory for every git invocation. `None` means
-    /// "read the live process cwd" — preserving the historical behaviour
-    /// where helpers called `std::env::current_dir()` directly.
-    cwd: Option<PathBuf>,
+    state: BackendState<GitClient>,
 }
 
 impl GitBackend {
     /// Default constructor — uses the real job-backed runner.
     pub fn new() -> Self {
-        Self { git: Arc::new(Git::new()), cwd: None }
+        Self { state: BackendState::new(Arc::new(Git::new())) }
     }
 
     /// Construct with a caller-supplied client (e.g. a `ScriptedRunner`-backed
@@ -65,7 +62,7 @@ impl GitBackend {
     /// tests under `tests/` and downstream callers may want to substitute their
     /// own runner.
     pub fn with_client(git: Arc<GitClient>) -> Self {
-        Self { git, cwd: None }
+        Self { state: BackendState::new(git) }
     }
 
     /// Construct a backend anchored at an explicit `cwd` using the real runner.
@@ -74,22 +71,19 @@ impl GitBackend {
     /// parallel.
     #[cfg(test)]
     pub(crate) fn at(cwd: PathBuf) -> Self {
-        Self { git: Arc::new(Git::new()), cwd: Some(cwd) }
+        Self { state: BackendState::with_cwd(Arc::new(Git::new()), cwd) }
     }
 
     /// Resolve the working directory for a git invocation. `Some` returns the
     /// pinned path; `None` falls back to the live process cwd, exactly as the
     /// helpers used to do via `std::env::current_dir()`.
     fn dir(&self) -> std::io::Result<PathBuf> {
-        match &self.cwd {
-            Some(d) => Ok(d.clone()),
-            None => std::env::current_dir(),
-        }
+        self.state.dir()
     }
 
     /// The shared typed client.
     fn git(&self) -> &GitClient {
-        &self.git
+        self.state.client()
     }
 }
 
@@ -137,7 +131,8 @@ impl VcsBackend for GitBackend {
     }
 
     fn at_cwd(&self, cwd: PathBuf) -> Box<dyn VcsBackend> {
-        Box::new(Self { git: self.git.clone(), cwd: Some(cwd) })
+        // Shares the same `Arc<GitClient>` — no new subprocess/runner.
+        Box::new(Self { state: self.state.pinned(cwd) })
     }
 
     // ----- Identity -------------------------------------------------------

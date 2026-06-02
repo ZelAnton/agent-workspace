@@ -14,33 +14,21 @@
 
 use processkit::Error as PkError;
 
-use crate::vcs::error::Error;
+use crate::vcs::error::{self, Error};
 
-/// Map any `processkit` subprocess error to our domain [`Error`].
-///
-/// `Exit` gets the `clean_git_error` treatment on its captured stderr;
-/// everything else (spawn failures, timeouts, parse, IO) is stringified
-/// through its `Display` impl — the same user-facing shape the old
-/// `vcs_runner::RunError` path produced.
+/// Map any `processkit` subprocess error to our domain [`Error`], cleaning git's
+/// `fatal:`/`error:` prefixes off the captured stderr. Thin wrapper over the
+/// shared [`error::map_pk_err`].
 pub(super) fn map_pk_err(err: PkError) -> Error {
-    match err {
-        PkError::Exit { stderr, .. } => Error::Command(clean_git_error(&stderr)),
-        // Spawn / Timeout / Parse / Io — pass through the Display message.
-        other => Error::Command(other.to_string()),
-    }
+    error::map_pk_err(err, clean_git_error)
 }
 
 /// Build a user-friendly message from the split stderr/stdout streams of a
-/// captured [`ProcessResult`](processkit::ProcessResult). Prefers stderr;
-/// falls back to stdout when stderr is empty or whitespace — that's where
-/// `git merge` puts `CONFLICT (content): …` and `git commit` puts
-/// `nothing to commit, working tree clean`.
+/// captured [`ProcessResult`](processkit::ProcessResult) — prefers stderr, falls
+/// back to stdout (where `git merge` puts `CONFLICT (content): …`). Thin wrapper
+/// over the shared [`error::extract_message`].
 pub(super) fn extract_message(stderr: &str, stdout: &[u8]) -> String {
-    if stderr.trim().is_empty() {
-        String::from_utf8_lossy(stdout).trim().to_string()
-    } else {
-        clean_git_error(stderr)
-    }
+    error::extract_message(stderr, stdout, clean_git_error)
 }
 
 /// Strip git's `fatal:`/`error:` prefixes and rewrite the

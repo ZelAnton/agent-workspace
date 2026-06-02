@@ -29,7 +29,7 @@ struct MergeResult {
 #[derive(Args)]
 pub struct MergeArgs {
     /// Merge strategy (default: squash)
-    #[arg(short, long, value_enum)]
+    #[arg(short, long, value_enum, add = ArgValueCompleter::new(complete::complete_merge_strategies))]
     strategy: Option<MergeStrategy>,
 
     /// Target branch to merge into (default: trunk)
@@ -160,7 +160,7 @@ async fn run_merge(
     }
 
     let commit_count = repo.commit_count(&target, &current).await.unwrap_or(0);
-    eprintln!("Merging {current} into {target} ({commit_count} commits, {strategy:?})");
+    eprintln!("Merging {current} into {target} ({commit_count} commits, {strategy})");
 
     // Re-anchor at the main repo for every main-repo operation that follows —
     // replaces the old `set_current_dir(main_repo)` steering with an explicit
@@ -248,7 +248,7 @@ async fn run_merge(
         }
     }
 
-    eprintln!("Merge complete: {current} into {target}.");
+    output::success(format, format_args!("Merge complete: {current} into {target}."));
 
     output::emit_json(
         &MergeResult {

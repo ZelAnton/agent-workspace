@@ -41,15 +41,22 @@ use std::process::Command;
 use super::{script, Error, Result, TabSpec, TerminalIntegration};
 
 pub fn detect() -> Option<Box<dyn TerminalIntegration>> {
-    if std::env::var("WT_SESSION")
+    let in_wt = std::env::var("WT_SESSION")
         .ok()
         .filter(|s| !s.is_empty())
-        .is_some()
-    {
-        Some(Box::new(WindowsTerminal))
-    } else {
-        None
+        .is_some();
+    if !in_wt {
+        return None;
     }
+    // Soft-probe for `wt.exe` at DETECTION time, not spawn time. A stale
+    // `WT_SESSION` can linger in the environment of a shell that's no longer
+    // running under Windows Terminal (e.g. a detached process, or one re-exec'd
+    // from a parent WT that has since exited). Without this, `detect()` would
+    // claim WT support and `open_tab` would fail mid-`ws new` with a confusing
+    // "wt.exe not found" error. Returning `None` here lets the caller fall
+    // through to ordinary in-place creation instead.
+    locate_wt_binary()?;
+    Some(Box::new(WindowsTerminal))
 }
 
 pub struct WindowsTerminal;

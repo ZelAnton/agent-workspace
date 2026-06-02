@@ -48,3 +48,34 @@ pub enum Error {
     #[error("cow copy: {0}")]
     Cow(#[from] crate::cow::Error),
 }
+
+// ---------------------------------------------------------------------------
+// Shared processkit::Error → Error mapping
+//
+// Both backends fail with the same `processkit::Error`; only the prefix-
+// cleanup function differs (`clean_git_error` vs `clean_jj_error`). These two
+// helpers hold the identical fallback/dispatch logic so each `errmap.rs`
+// shrinks to its cleanup fn + thin wrappers.
+// ---------------------------------------------------------------------------
+
+/// Build a user-friendly message from a captured subprocess's split streams.
+/// Prefers stderr; falls back to stdout when stderr is blank — that's where
+/// `git merge` puts `CONFLICT (content): …` and `git commit` puts `nothing to
+/// commit`. `cleanup` is the backend's prefix stripper.
+pub(crate) fn extract_message(stderr: &str, stdout: &[u8], cleanup: fn(&str) -> String) -> String {
+    if stderr.trim().is_empty() {
+        String::from_utf8_lossy(stdout).trim().to_string()
+    } else {
+        cleanup(stderr)
+    }
+}
+
+/// Map a `processkit` subprocess error to [`Error::Command`]. `Exit` gets the
+/// backend `cleanup` on its captured stderr (processkit drops stdout once a run
+/// is judged a failure); every other variant is stringified via its `Display`.
+pub(crate) fn map_pk_err(err: processkit::Error, cleanup: fn(&str) -> String) -> Error {
+    match err {
+        processkit::Error::Exit { stderr, .. } => Error::Command(cleanup(&stderr)),
+        other => Error::Command(other.to_string()),
+    }
+}

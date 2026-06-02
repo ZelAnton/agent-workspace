@@ -64,10 +64,10 @@ pub async fn run(args: InitArgs, repo: &crate::vcs::Repo) -> Result<()> {
     eprintln!("Created {}", config_path.display());
     eprintln!("Trunk branch: {trunk}");
     if let Some(ref strategy) = config.general.merge_strategy {
-        eprintln!("Merge strategy: {strategy:?}");
+        eprintln!("Merge strategy: {strategy}");
     }
     if let Some(ref strategy) = config.general.sync_strategy {
-        eprintln!("Sync strategy: {strategy:?}");
+        eprintln!("Sync strategy: {strategy}");
     }
     if !config.general.copy_files.is_empty() {
         eprintln!("Copy files: {}", config.general.copy_files.join(", "));

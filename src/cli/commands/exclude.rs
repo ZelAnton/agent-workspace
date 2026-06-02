@@ -29,9 +29,17 @@
 use std::path::{Path, PathBuf};
 
 use clap::Args;
+use serde::Serialize;
 use toml_edit::{value, Array, DocumentMut, Item};
 
+use crate::cli::output::{self, OutputFormat};
 use crate::cli::{Error, Result};
+
+/// Machine-facing `ws exclude --list` payload (json mode).
+#[derive(Serialize)]
+struct ExcludeListOutput {
+    patterns: Vec<String>,
+}
 
 #[derive(Args)]
 pub struct ExcludeArgs {
@@ -56,17 +64,17 @@ pub struct ExcludeArgs {
     clear: bool,
 }
 
-pub async fn run(args: ExcludeArgs, repo: &crate::vcs::Repo) -> Result<()> {
+pub async fn run(args: ExcludeArgs, format: OutputFormat, repo: &crate::vcs::Repo) -> Result<()> {
     let repo_root = repo.repo_root().await.map_err(|e| Error::Other(e.to_string()))?;
     // Prefer `.workspace.toml`; edit a legacy `.agent-workspace.toml` in
     // place when only it exists. New repos get `.workspace.toml`.
     let config_path = crate::config::project_config_path_with_fallback(&repo_root);
 
     if args.list {
-        return list(&config_path);
+        return list(&config_path, format);
     }
     if args.clear {
-        return clear(&config_path);
+        return clear(&config_path, format);
     }
     if args.remove {
         if args.paths.is_empty() {
@@ -74,21 +82,30 @@ pub async fn run(args: ExcludeArgs, repo: &crate::vcs::Repo) -> Result<()> {
                 "`--remove` requires one or more paths".into(),
             ));
         }
-        return remove_paths(&config_path, &args.paths);
+        return remove_paths(&config_path, &args.paths, format);
     }
     if args.paths.is_empty() {
         // TUI mode. Load current patterns, launch picker, write back
         // on Save / no-op on Cancel.
-        return run_tui(&repo_root, &config_path);
+        return run_tui(&repo_root, &config_path, format);
     }
 
-    add_paths(&config_path, &args.paths)
+    add_paths(&config_path, &args.paths, format)
+}
+
+/// Machine-facing result for the mutating `ws exclude` paths (json mode).
+/// `patterns` is the full list AFTER the mutation, so an agent can read the
+/// resulting state directly.
+#[derive(Serialize)]
+struct ExcludeMutateOutput {
+    action: &'static str,
+    patterns: Vec<String>,
 }
 
 /// TUI dispatcher. Reads current patterns from disk, asks
 /// `exclude_tui::run` for the new set, writes back if the user
 /// confirmed with `s`.
-fn run_tui(repo_root: &Path, config_path: &Path) -> Result<()> {
+fn run_tui(repo_root: &Path, config_path: &Path, format: OutputFormat) -> Result<()> {
     let doc = load_doc(config_path)?;
     let current = read_excludes(&doc);
 
@@ -104,23 +121,43 @@ fn run_tui(repo_root: &Path, config_path: &Path) -> Result<()> {
             let mut doc = load_doc(config_path)?;
             write_excludes(&mut doc, &new_patterns)?;
             save_doc(config_path, &doc)?;
-            println!(
-                "Saved {} exclude pattern(s) to {}.",
-                new_patterns.len(),
-                config_path.display()
-            );
+            if format.is_json() {
+                output::emit_json(
+                    &ExcludeMutateOutput { action: "saved", patterns: new_patterns },
+                    format,
+                );
+            } else {
+                println!(
+                    "Saved {} exclude pattern(s) to {}.",
+                    new_patterns.len(),
+                    config_path.display()
+                );
+            }
             Ok(())
         }
         None => {
-            println!("Cancelled — no changes written.");
+            if format.is_json() {
+                output::emit_json(
+                    &ExcludeMutateOutput { action: "cancelled", patterns: current },
+                    format,
+                );
+            } else {
+                println!("Cancelled — no changes written.");
+            }
             Ok(())
         }
     }
 }
 
-fn list(config_path: &Path) -> Result<()> {
+fn list(config_path: &Path, format: OutputFormat) -> Result<()> {
     let doc = load_doc(config_path)?;
     let patterns = read_excludes(&doc);
+
+    if format.is_json() {
+        output::emit_json(&ExcludeListOutput { patterns }, format);
+        return Ok(());
+    }
+
     if patterns.is_empty() {
         println!("(no exclude patterns set for this repo)");
         println!("Add some with: ws exclude <path>...");
@@ -133,7 +170,7 @@ fn list(config_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn add_paths(config_path: &Path, paths: &[String]) -> Result<()> {
+fn add_paths(config_path: &Path, paths: &[String], format: OutputFormat) -> Result<()> {
     let mut doc = load_doc(config_path)?;
     let mut existing = read_excludes(&doc);
     let before = existing.len();
@@ -151,12 +188,19 @@ fn add_paths(config_path: &Path, paths: &[String]) -> Result<()> {
     save_doc(config_path, &doc)?;
 
     let added = existing.len() - before;
-    println!("Added {added} pattern(s); list now has {} entries.", existing.len());
-    println!("(written to {})", config_path.display());
+    if format.is_json() {
+        output::emit_json(
+            &ExcludeMutateOutput { action: "added", patterns: existing },
+            format,
+        );
+    } else {
+        println!("Added {added} pattern(s); list now has {} entries.", existing.len());
+        println!("(written to {})", config_path.display());
+    }
     Ok(())
 }
 
-fn remove_paths(config_path: &Path, paths: &[String]) -> Result<()> {
+fn remove_paths(config_path: &Path, paths: &[String], format: OutputFormat) -> Result<()> {
     let mut doc = load_doc(config_path)?;
     let existing = read_excludes(&doc);
     let before = existing.len();
@@ -168,22 +212,43 @@ fn remove_paths(config_path: &Path, paths: &[String]) -> Result<()> {
 
     let removed = before - kept.len();
     if removed == 0 {
-        println!("Nothing matched the supplied paths; list unchanged.");
+        if format.is_json() {
+            output::emit_json(
+                &ExcludeMutateOutput { action: "noop", patterns: kept },
+                format,
+            );
+        } else {
+            println!("Nothing matched the supplied paths; list unchanged.");
+        }
         return Ok(());
     }
 
     write_excludes(&mut doc, &kept)?;
     save_doc(config_path, &doc)?;
 
-    println!("Removed {removed} pattern(s); list now has {} entries.", kept.len());
-    println!("(written to {})", config_path.display());
+    if format.is_json() {
+        output::emit_json(
+            &ExcludeMutateOutput { action: "removed", patterns: kept },
+            format,
+        );
+    } else {
+        println!("Removed {removed} pattern(s); list now has {} entries.", kept.len());
+        println!("(written to {})", config_path.display());
+    }
     Ok(())
 }
 
-fn clear(config_path: &Path) -> Result<()> {
+fn clear(config_path: &Path, format: OutputFormat) -> Result<()> {
     let mut doc = load_doc(config_path)?;
     if doc.get("copy").is_none() {
-        println!("`[copy]` section already absent; nothing to clear.");
+        if format.is_json() {
+            output::emit_json(
+                &ExcludeMutateOutput { action: "noop", patterns: Vec::new() },
+                format,
+            );
+        } else {
+            println!("`[copy]` section already absent; nothing to clear.");
+        }
         return Ok(());
     }
     // Remove just `exclude`; if the section ends up empty, drop the
@@ -196,7 +261,14 @@ fn clear(config_path: &Path) -> Result<()> {
         }
     }
     save_doc(config_path, &doc)?;
-    println!("Cleared [copy] exclude (written to {}).", config_path.display());
+    if format.is_json() {
+        output::emit_json(
+            &ExcludeMutateOutput { action: "cleared", patterns: Vec::new() },
+            format,
+        );
+    } else {
+        println!("Cleared [copy] exclude (written to {}).", config_path.display());
+    }
     Ok(())
 }
 
@@ -315,7 +387,7 @@ mod tests {
     fn add_writes_patterns() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join(".agent-workspace.toml");
-        add_paths(&path, &["target".to_string(), "node_modules".to_string()]).unwrap();
+        add_paths(&path, &["target".to_string(), "node_modules".to_string()], OutputFormat::Human).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("[copy]"));
         assert!(content.contains("target"));
@@ -326,8 +398,8 @@ mod tests {
     fn add_is_idempotent() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join(".agent-workspace.toml");
-        add_paths(&path, &["target".to_string()]).unwrap();
-        add_paths(&path, &["target".to_string()]).unwrap();
+        add_paths(&path, &["target".to_string()], OutputFormat::Human).unwrap();
+        add_paths(&path, &["target".to_string()], OutputFormat::Human).unwrap();
         let doc = load_doc(&path).unwrap();
         let patterns = read_excludes(&doc);
         assert_eq!(patterns, vec!["target"]);
@@ -337,8 +409,8 @@ mod tests {
     fn remove_drops_matching_pattern() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join(".agent-workspace.toml");
-        add_paths(&path, &["target".to_string(), "node_modules".to_string()]).unwrap();
-        remove_paths(&path, &["target".to_string()]).unwrap();
+        add_paths(&path, &["target".to_string(), "node_modules".to_string()], OutputFormat::Human).unwrap();
+        remove_paths(&path, &["target".to_string()], OutputFormat::Human).unwrap();
         let doc = load_doc(&path).unwrap();
         let patterns = read_excludes(&doc);
         assert_eq!(patterns, vec!["node_modules"]);
@@ -348,8 +420,8 @@ mod tests {
     fn clear_removes_empty_section() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join(".agent-workspace.toml");
-        add_paths(&path, &["target".to_string()]).unwrap();
-        clear(&path).unwrap();
+        add_paths(&path, &["target".to_string()], OutputFormat::Human).unwrap();
+        clear(&path, OutputFormat::Human).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(
             !content.contains("[copy]"),
@@ -362,7 +434,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join(".agent-workspace.toml");
         std::fs::write(&path, "[general]\ntrunk = \"main\"\n").unwrap();
-        add_paths(&path, &["target".to_string()]).unwrap();
+        add_paths(&path, &["target".to_string()], OutputFormat::Human).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("trunk = \"main\""), "general section must survive");
         assert!(content.contains("target"));

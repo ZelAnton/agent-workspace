@@ -32,6 +32,8 @@ fn with_clean_env<F: FnOnce()>(f: F) {
         std::env::remove_var("TERM_PROGRAM");
         std::env::remove_var("GNOME_TERMINAL_SERVICE");
         std::env::remove_var("GNOME_TERMINAL_SCREEN");
+        std::env::remove_var("WEZTERM_PANE");
+        std::env::remove_var("TMUX");
         std::env::remove_var(SPAWNED_IN_TAB_ENV);
     }
     f();
@@ -88,8 +90,14 @@ fn detect_finds_windows_terminal_via_wt_session() {
             std::env::set_var("WT_SESSION", "abc-123");
         }
         let result = detect();
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().name(), "windows-terminal");
+        // WT detection now ALSO soft-probes for `wt.exe` (so a stale
+        // `WT_SESSION` on a host without Windows Terminal falls through
+        // gracefully). Hosts without the binary — non-Windows, or Windows
+        // w/o WT installed — therefore get `None`; when a backend IS
+        // returned it must be windows-terminal, never another terminal.
+        if let Some(t) = result {
+            assert_eq!(t.name(), "windows-terminal");
+        }
         unsafe {
             std::env::remove_var("WT_SESSION");
         }
@@ -137,9 +145,17 @@ fn detect_prefers_windows_terminal_when_multiple_envs_set() {
             std::env::set_var("TERM_PROGRAM", "iTerm.app");
         }
         let result = detect();
-        assert!(result.is_some());
-        // Detection order is WT → iTerm2 → GNOME Terminal.
-        assert_eq!(result.unwrap().name(), "windows-terminal");
+        // Detection order is WT → iTerm2 → GNOME Terminal, but WT now requires
+        // `wt.exe` to be present (soft-probe). When the binary exists WT wins;
+        // when it's absent (non-Windows / no WT installed) the soft-probe drops
+        // WT and iTerm2 is next. Either is correct — the invariant is that WT
+        // never loses to iTerm2 while its binary is present, and GNOME (not a
+        // candidate here) never wins.
+        let name = result.map(|t| t.name());
+        assert!(
+            name == Some("windows-terminal") || name == Some("iterm2"),
+            "expected WT (binary present) or iTerm2 fallback (binary absent), got {name:?}"
+        );
         unsafe {
             std::env::remove_var("WT_SESSION");
             std::env::remove_var("TERM_PROGRAM");

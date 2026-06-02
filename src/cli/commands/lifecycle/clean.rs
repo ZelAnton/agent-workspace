@@ -6,7 +6,9 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use clap::Args;
+use serde::Serialize;
 
+use crate::cli::output::{self, OutputFormat};
 use crate::cli::{write_path_file, Result};
 use crate::config::Config;
 use crate::vcs;
@@ -19,7 +21,18 @@ pub struct CleanArgs {
     pub dry_run: bool,
 }
 
-pub async fn run(args: CleanArgs, config: &Config, path_file: Option<&Path>, repo: &vcs::Repo) -> Result<()> {
+/// Machine-facing `ws clean` result (json mode). `cleaned` lists branches
+/// removed (or, under `dry_run`, that would be removed); `skipped_dirty`
+/// lists branches kept because of uncommitted changes.
+#[derive(Serialize)]
+struct CleanResult {
+    dry_run: bool,
+    cleaned: Vec<String>,
+    skipped_dirty: Vec<String>,
+    returned_to: Option<String>,
+}
+
+pub async fn run(args: CleanArgs, config: &Config, path_file: Option<&Path>, format: OutputFormat, repo: &vcs::Repo) -> Result<()> {
     // Get main repo path before any operations
     let main_path = repo.repo_root().await?;
     let workspace_id = repo.workspace_id().await?;
@@ -27,6 +40,15 @@ pub async fn run(args: CleanArgs, config: &Config, path_file: Option<&Path>, rep
 
     if !wt_dir.exists() {
         eprintln!("No worktrees to clean.");
+        output::emit_json(
+            &CleanResult {
+                dry_run: args.dry_run,
+                cleaned: Vec::new(),
+                skipped_dirty: Vec::new(),
+                returned_to: None,
+            },
+            format,
+        );
         return Ok(());
     }
 
@@ -42,9 +64,9 @@ pub async fn run(args: CleanArgs, config: &Config, path_file: Option<&Path>, rep
         .collect();
 
     let worktrees = repo.list_worktrees().await?;
-    let mut cleaned = 0;
+    let mut cleaned: Vec<String> = Vec::new();
     let mut checked = 0;
-    let mut skipped_dirty = 0;
+    let mut skipped_dirty: Vec<String> = Vec::new();
     let mut cleaned_current = false;
 
     for wt in worktrees {
@@ -83,13 +105,13 @@ pub async fn run(args: CleanArgs, config: &Config, path_file: Option<&Path>, rep
         let dirty = repo.uncommitted_count_in(&wt.path).await.unwrap_or(0);
         if dirty > 0 {
             eprintln!("Skipping {branch}: {dirty} uncommitted change(s)");
-            skipped_dirty += 1;
+            skipped_dirty.push(branch.clone());
             continue;
         }
 
         if args.dry_run {
             eprintln!("Would clean (no diff from {target}): {branch}");
-            cleaned += 1;
+            cleaned.push(branch.clone());
             continue;
         }
 
@@ -121,7 +143,7 @@ pub async fn run(args: CleanArgs, config: &Config, path_file: Option<&Path>, rep
 
         crate::meta::remove_meta(&wt_dir, branch);
 
-        cleaned += 1;
+        cleaned.push(branch.clone());
 
         if inside {
             cleaned_current = true;
@@ -136,19 +158,31 @@ pub async fn run(args: CleanArgs, config: &Config, path_file: Option<&Path>, rep
 
     if checked == 0 {
         eprintln!("No worktrees to clean.");
-    } else if cleaned == 0 {
+    } else if cleaned.is_empty() {
         eprintln!("No worktrees to clean (all have changes).");
     } else {
-        eprintln!("{cleaned} worktree(s) {verb}.");
+        eprintln!("{} worktree(s) {verb}.", cleaned.len());
     }
-    if skipped_dirty > 0 {
-        eprintln!("{skipped_dirty} worktree(s) skipped due to uncommitted changes.");
+    if !skipped_dirty.is_empty() {
+        eprintln!("{} worktree(s) skipped due to uncommitted changes.", skipped_dirty.len());
     }
 
     // Write main repo path for shell to cd if we were inside a cleaned worktree
-    if !args.dry_run && path_file.is_some() && cleaned_current {
+    let returned_to = if !args.dry_run && path_file.is_some() && cleaned_current {
         write_path_file(path_file, &main_path)?;
-    }
+        Some(main_path.display().to_string())
+    } else {
+        None
+    };
 
+    output::emit_json(
+        &CleanResult {
+            dry_run: args.dry_run,
+            cleaned,
+            skipped_dirty,
+            returned_to,
+        },
+        format,
+    );
     Ok(())
 }

@@ -14,12 +14,21 @@ notes.
 
 ### Added
 - `LICENSE` file (MIT) — the package already declared MIT but shipped no license text.
+- `--format json` now covers every command that prints a result — `sync`, `clean`, `rm`, `mv`, `cd`, `config get`/`set`/`unset`/`list`, and `exclude` (list + add/remove/clear) join the existing `ls`/`status`/`repo-info`/`new`/`merge`. The mutating `config`/`exclude` subcommands previously printed confirmations to stdout even under `--format json`, corrupting the output for a parser; they now emit a single JSON object. Each JSON object carries a top-level `schema_version` (a stable, versioned contract for agents); see `docs/json-output.md`.
+- Shell completion is now backend-aware: branch/worktree completion unions git refs with jj bookmarks, so the right names appear in pure-jj and colocated repos (previously git-only). Strategy flags (`--strategy`) and `ws config` keys also complete now.
+- New-tab integration now supports **WezTerm** (`wezterm cli spawn`) and **tmux** (`tmux new-window`), in addition to Windows Terminal / iTerm2 / GNOME Terminal. tmux is chosen only when no tabbed GUI terminal is detected.
+- `ws checkout` / `ws switch` are now aliases for `ws cd`.
 
 ### Changed
+- User-facing messages now print merge/sync strategies as `squash`/`merge`/`rebase` (a `Display` impl) instead of the debug-formatted `Squash`/`Rebase`.
+- Internal: deduplicated the git/jj `processkit::Error` mapping into shared `vcs::error` helpers; extracted a generic `BackendState<C>` so `GitBackend`/`JjBackend` no longer repeat constructor/cwd boilerplate; and pulled the global+project config merge into a pure, unit-tested `merge_global_project` (with exhaustive per-field coverage so a forgotten merge fails CI). No user-visible behavior change.
 - The terminal-tab recursion guard (`WS_SPAWNED_IN_TAB`) now takes precedence over an explicit `--in-new-tab`, making it an unconditional spawn-disable (no behavior change in normal use; defense against runaway tab spawning).
 - Internal: both VCS backends now run on the published `processkit` (async, job-backed process runner) + `vcs-git`/`vcs-jj` typed clients, instead of the in-house `vcs-runner`/`procpilot` pair; `ws` runs on a tokio runtime. The `vcs-github` (`gh`) client is wired in and ready (`Repo::github()`) but not yet used by any command. No user-visible behavior change.
 
 ### Fixed
+- Windows Terminal new-tab integration now soft-probes for `wt.exe` at detection time, so a stale `WT_SESSION` (inherited by a shell no longer running under WT) falls back to in-place creation instead of failing `ws new` mid-flight.
+- The "not in a … repository" error is now backend-neutral ("version-controlled" instead of "git"), matching jj support.
+- CoW `ws new` on Windows no longer silently ignores deep/glob `[copy] exclude` patterns (e.g. `**/*.iso`): robocopy can only express literal top-level excludes, so when a pattern can match deeper the copy now falls through to the in-process copier (which honors it at every depth) instead of dropping it. Top-level excludes still take the fast robocopy path.
 - `ws config --help` (and related comments) now say `.workspace.toml`, matching where `ws config` / `ws exclude` actually write.
 - `ws update` on the npm channel installed the wrong (unscoped) package; it now uses the correct `@zelanton/agent-workspace`.
 - `ws merge` no longer silently retargets to trunk when the worktree's base branch was deleted — it refuses and points you at `ws merge --into <branch>`, matching snap-mode behavior.

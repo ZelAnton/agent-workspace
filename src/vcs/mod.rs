@@ -20,6 +20,7 @@
 // on the process cwd or any thread-local state.
 
 pub mod backend;
+mod backend_state;
 pub mod common;
 mod detect;
 pub mod error;

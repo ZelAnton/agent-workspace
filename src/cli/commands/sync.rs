@@ -6,17 +6,29 @@ use std::collections::HashSet;
 
 use clap::Args;
 use clap_complete::engine::ArgValueCompleter;
+use serde::Serialize;
 
+use crate::cli::output::{self, OutputFormat};
 use crate::cli::{Error, Result};
 use crate::complete;
 use crate::config::{Config, SyncStrategy};
 use crate::vcs;
 use crate::meta;
 
+/// Machine-facing `ws sync` result (json mode). `action` is one of
+/// `rebased` / `merged` / `aborted` / `continued`.
+#[derive(Serialize)]
+struct SyncResult {
+    action: &'static str,
+    branch: String,
+    target: Option<String>,
+    strategy: Option<&'static str>,
+}
+
 #[derive(Args)]
 pub struct SyncArgs {
     /// Sync strategy (default: rebase)
-    #[arg(short, long, value_enum)]
+    #[arg(short, long, value_enum, add = ArgValueCompleter::new(complete::complete_sync_strategies))]
     strategy: Option<SyncStrategy>,
 
     /// Source branch to sync from (default: base branch or trunk)
@@ -32,7 +44,7 @@ pub struct SyncArgs {
     abort: bool,
 }
 
-pub async fn run(args: SyncArgs, config: &Config, repo: &vcs::Repo) -> Result<()> {
+pub async fn run(args: SyncArgs, config: &Config, format: OutputFormat, repo: &vcs::Repo) -> Result<()> {
     // jj has no "in progress" state — conflicts are recorded into commits
     // and resolved by editing files directly. --abort / --continue have no
     // direct analog. We detect "conflicts present" via is_merge_in_progress
@@ -67,6 +79,7 @@ pub async fn run(args: SyncArgs, config: &Config, repo: &vcs::Repo) -> Result<()
         } else {
             return Err(Error::Other("No sync in progress to abort".into()));
         }
+        output::emit_json(&sync_result("aborted", repo, None, None).await, format);
         return Ok(());
     }
 
@@ -95,6 +108,7 @@ pub async fn run(args: SyncArgs, config: &Config, repo: &vcs::Repo) -> Result<()
         } else {
             return Err(Error::Other("No sync in progress to continue".into()));
         }
+        output::emit_json(&sync_result("continued", repo, None, None).await, format);
         return Ok(());
     }
 
@@ -134,21 +148,49 @@ pub async fn run(args: SyncArgs, config: &Config, repo: &vcs::Repo) -> Result<()
 
     let strategy = args.strategy.unwrap_or(config.sync_strategy);
 
-    eprintln!("Syncing {current} with {target} ({strategy:?})...");
+    output::note(format, format_args!("Syncing {current} with {target} ({strategy})..."));
 
-    match strategy {
+    let action = match strategy {
         SyncStrategy::Rebase => {
             repo.rebase(&target).await?;
-            eprintln!("Rebased onto {target}");
+            output::success(format, format_args!("Rebased onto {target}"));
+            "rebased"
         }
         SyncStrategy::Merge => {
             // Sync merges `target` (trunk) INTO the worktree, so the
             // destination bookmark to advance is the worktree's own branch
             // (`current`), not `target`.
             repo.merge(&target, &current, false, false, None).await?;
-            eprintln!("Merged {target} into {current}");
+            output::success(format, format_args!("Merged {target} into {current}"));
+            "merged"
         }
-    }
+    };
 
+    output::emit_json(
+        &SyncResult {
+            action,
+            branch: current,
+            target: Some(target),
+            strategy: Some(strategy.as_str()),
+        },
+        format,
+    );
     Ok(())
+}
+
+/// Build a [`SyncResult`] for the abort/continue paths, best-effort resolving
+/// the current branch (these run in possibly-conflicted states where
+/// `current_branch` may fail — an empty string is fine for the machine view).
+async fn sync_result(
+    action: &'static str,
+    repo: &vcs::Repo,
+    target: Option<String>,
+    strategy: Option<&'static str>,
+) -> SyncResult {
+    SyncResult {
+        action,
+        branch: repo.current_branch().await.unwrap_or_default(),
+        target,
+        strategy,
+    }
 }

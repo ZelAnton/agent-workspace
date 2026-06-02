@@ -92,7 +92,7 @@ pub async fn run(args: NewArgs, config: &Config, path_file: Option<&Path>, forma
     // tab then re-enters `ws new` with `WS_SPAWNED_IN_TAB=1` set and
     // skips this branch — actual creation runs there.
     if should_open_new_tab(&args, config) && let Some(terminal) = crate::terminal::detect() {
-        return spawn_in_new_tab(&args, terminal.as_ref());
+        return spawn_in_new_tab(&args, terminal.as_ref(), format);
     }
 
     // CoW toggle resolution. The dispatcher in `vcs::create_worktree`
@@ -528,6 +528,7 @@ async fn resolve_base_via_menu(branch: &str, current_base: &str, repo: &vcs::Rep
 fn spawn_in_new_tab(
     args: &NewArgs,
     terminal: &dyn crate::terminal::TerminalIntegration,
+    format: OutputFormat,
 ) -> Result<()> {
     use std::path::PathBuf;
 
@@ -581,7 +582,32 @@ fn spawn_in_new_tab(
         .map_err(|e| Error::Other(format!("failed to open new tab: {e}")))?;
 
     eprintln!("Opened in new tab: {title} (terminal: {})", terminal.name());
+
+    // The real worktree is created in the spawned tab (its own stdout). This
+    // shell only spawned it, so we emit a minimal result mirroring `ws cd`'s
+    // `opened_in_tab` discriminator — the final branch may be auto-generated
+    // downstream and is unknown here, hence `branch` is whatever the user
+    // passed (or null). Keeps `--format json` stdout a single object on every
+    // `ws new` path instead of leaving it empty.
+    output::emit_json(
+        &SpawnedInTabResult {
+            opened_in_tab: true,
+            branch: args.branch.clone(),
+            snap: args.snap.is_some(),
+        },
+        format,
+    );
     Ok(())
+}
+
+/// Machine-facing `ws new` result for the terminal-tab-spawn path (json mode).
+/// Distinct from [`NewResult`] because the worktree isn't created in THIS
+/// process — the spawned tab does it; `opened_in_tab` is always `true` here.
+#[derive(serde::Serialize)]
+struct SpawnedInTabResult {
+    opened_in_tab: bool,
+    branch: Option<String>,
+    snap: bool,
 }
 
 #[cfg(test)]

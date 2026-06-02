@@ -6,7 +6,9 @@ use std::path::Path;
 
 use clap::Args;
 use clap_complete::engine::ArgValueCompleter;
+use serde::Serialize;
 
+use crate::cli::output::{self, OutputFormat};
 use crate::cli::{write_path_file, Error, Result};
 use crate::complete;
 use crate::config::Config;
@@ -22,7 +24,16 @@ pub struct MoveArgs {
     new_branch: String,
 }
 
-pub async fn run(args: MoveArgs, config: &Config, path_file: Option<&Path>, repo: &vcs::Repo) -> Result<()> {
+/// Machine-facing `ws mv` result (json mode).
+#[derive(Serialize)]
+struct MoveResult {
+    action: &'static str,
+    old_branch: String,
+    new_branch: String,
+    returned_to: Option<String>,
+}
+
+pub async fn run(args: MoveArgs, config: &Config, path_file: Option<&Path>, format: OutputFormat, repo: &vcs::Repo) -> Result<()> {
     let workspace_id = repo.workspace_id().await?;
     let wt_dir = config.project_dir_for(&workspace_id);
 
@@ -86,12 +97,24 @@ pub async fn run(args: MoveArgs, config: &Config, path_file: Option<&Path>, repo
         })?;
     }
 
-    eprintln!("Renamed {} -> {}", old_branch, args.new_branch);
+    output::success(format, format_args!("Renamed {} -> {}", old_branch, args.new_branch));
 
     // If we were inside the renamed worktree, write new path for shell to cd
-    if path_file.is_some() && inside_target {
+    let returned_to = if path_file.is_some() && inside_target {
         write_path_file(path_file, &new_path)?;
-    }
+        Some(new_path.display().to_string())
+    } else {
+        None
+    };
 
+    output::emit_json(
+        &MoveResult {
+            action: "renamed",
+            old_branch,
+            new_branch: args.new_branch,
+            returned_to,
+        },
+        format,
+    );
     Ok(())
 }

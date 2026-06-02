@@ -6,11 +6,24 @@ use std::path::{Path, PathBuf};
 
 use clap::Args;
 use clap_complete::engine::ArgValueCompleter;
+use serde::Serialize;
 
+use crate::cli::output::{self, OutputFormat};
 use crate::cli::{write_path_file, Error, Result};
 use crate::complete;
 use crate::config::Config;
 use crate::vcs;
+
+/// Machine-facing `ws cd` result (json mode).
+#[derive(Serialize)]
+struct CdResult {
+    action: &'static str,
+    target: String,
+    title: String,
+    /// True when a new terminal tab was spawned (the originating shell stayed
+    /// put); false when the shell wrapper performs the `cd` via the path-file.
+    opened_in_tab: bool,
+}
 
 #[derive(Args)]
 pub struct CdArgs {
@@ -32,7 +45,7 @@ pub struct CdArgs {
     no_tab: bool,
 }
 
-pub async fn run(args: CdArgs, config: &Config, path_file: Option<&Path>, repo: &vcs::Repo) -> Result<()> {
+pub async fn run(args: CdArgs, config: &Config, path_file: Option<&Path>, format: OutputFormat, repo: &vcs::Repo) -> Result<()> {
     // `ws cd` only makes sense behind the shell wrapper — a child process
     // can't change its parent shell's CWD. Without a path_file the wrapper
     // isn't installed (or the binary was invoked directly), so refuse loudly
@@ -104,11 +117,29 @@ pub async fn run(args: CdArgs, config: &Config, path_file: Option<&Path>, repo: 
             .map_err(|e| Error::Other(format!("failed to open new tab: {e}")))?;
         eprintln!("Opened in new tab: {title} (terminal: {})", terminal.name());
         // Do NOT write the path-file: the originating shell stays put.
+        output::emit_json(
+            &CdResult {
+                action: "cd",
+                target: target_path.display().to_string(),
+                title,
+                opened_in_tab: true,
+            },
+            format,
+        );
         return Ok(());
     }
 
     // 5. Fall-through: existing behaviour — write path-file, wrapper cd's.
     write_path_file(path_file, &target_path)?;
+    output::emit_json(
+        &CdResult {
+            action: "cd",
+            target: target_path.display().to_string(),
+            title,
+            opened_in_tab: false,
+        },
+        format,
+    );
     Ok(())
 }
 

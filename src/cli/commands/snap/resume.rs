@@ -295,6 +295,46 @@ mod tests {
     use super::*;
 
     // -----------------------------------------------------------------------
+    // Wire-protocol tripwire: the snap exit codes are a contract with the
+    // snap-loop `case`/`if` blocks in EVERY shell wrapper. These tests derive
+    // the expected branch labels from the constants and assert each wrapper
+    // contains them, so changing a constant without updating the templates
+    // (or vice versa) fails CI — making the "keep in sync" comment enforceable
+    // rather than aspirational.
+    // -----------------------------------------------------------------------
+
+    use crate::shell::Shell;
+
+    #[test]
+    fn snap_exit_codes_match_posix_wrapper_case_labels() {
+        // bash/zsh use POSIX `case` with `<code>)` labels; fish's `switch`
+        // uses `case <code>`. Derive each from the constants so a renumbered
+        // exit code that the template didn't follow trips this test.
+        for shell in [Shell::Bash, Shell::Zsh] {
+            let w = shell.wrapper_script();
+            assert!(w.contains(&format!("{EXIT_REOPEN})")), "{shell:?} EXIT_REOPEN label");
+            assert!(w.contains(&format!("{EXIT_PRESERVE})")), "{shell:?} EXIT_PRESERVE label");
+        }
+        let fish = Shell::Fish.wrapper_script();
+        assert!(fish.contains(&format!("case {EXIT_REOPEN}")), "fish EXIT_REOPEN case");
+        assert!(fish.contains(&format!("case {EXIT_PRESERVE}")), "fish EXIT_PRESERVE case");
+    }
+
+    #[test]
+    fn snap_exit_codes_match_powershell_wrapper_comparisons() {
+        // PowerShell branches with `-eq <code>`.
+        let w = Shell::PowerShell.wrapper_script();
+        assert!(
+            w.contains(&format!("-eq {EXIT_REOPEN}")),
+            "powershell wrapper must compare against EXIT_REOPEN"
+        );
+        assert!(
+            w.contains(&format!("-eq {EXIT_PRESERVE}")),
+            "powershell wrapper must compare against EXIT_PRESERVE"
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // determine_action_with_choice tests
     // -----------------------------------------------------------------------
 
