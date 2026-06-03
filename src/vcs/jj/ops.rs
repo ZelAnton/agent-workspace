@@ -1,5 +1,5 @@
 // ===========================================================================
-// vcs/jj/ops - Mutations (merge/rebase/checkout/commit/fetch)
+// vcs/jj/ops - Mutations (merge / rebase / checkout / fetch)
 // ===========================================================================
 //
 // **Semantic deltas vs git** (locked decisions + jj's model):
@@ -7,13 +7,11 @@
 //     resulting commit rather than failing. We materialise the merge, then
 //     `jj op restore <pre-op-id>` on internal failure to keep the "main repo
 //     never silently changes on failure" invariant `ws merge` relies on.
-//   - `*_abort` / `*_continue` are `Unsupported` (handled in `mod.rs`): jj has
-//     no in-progress state to abort or continue from.
-//   - `commit(message)` is `jj describe -m` (sets description on `@`).
+//   - `*_abort` / `*_continue` are `Unsupported` (returned by the facade
+//     wrapper's jj arm): jj has no in-progress state to abort or continue from.
 
 use std::path::Path;
 
-use processkit::Error as PkError;
 use vcs_jj::JjApi;
 
 use super::JjClient;
@@ -23,79 +21,34 @@ use crate::vcs::error::{Error, Result};
 /// How many times a transient `jj git fetch` failure is retried before giving up.
 const FETCH_MAX_ATTEMPTS: usize = 3;
 
-/// True if `stderr` looks like a transient network failure worth retrying
-/// (DNS / connection / protocol EOF). Mirrors the git backend's predicate.
-fn is_transient_fetch_err(stderr: &str) -> bool {
-    const MARKERS: &[&str] = &[
-        "Could not resolve",
-        "Could not read from remote",
-        "Connection",
-        "timed out",
-        "early EOF",
-        "the remote end hung up",
-    ];
-    MARKERS.iter().any(|m| stderr.contains(m))
-}
-
 /// `jj rebase -d <onto>` — rebase `@` onto the given revision. jj's rebase is
 /// atomic; conflicts are recorded into the rebased commits. Callers probe
 /// `is_merge_in_progress()` afterward to detect that.
-pub(super) async fn rebase(cwd: &Path, onto: &str) -> Result<()> {
+pub(crate) async fn rebase(cwd: &Path, onto: &str) -> Result<()> {
     super::exec(cwd, ["rebase", "-d", onto]).await
 }
 
 /// `jj edit <branch>` — move `@` to the named bookmark's commit. Pre-checks the
 /// bookmark exists (managed worktrees always have bookmarks, matching git's
 /// `checkout` semantics).
-pub(super) async fn checkout(jj: &JjClient, cwd: &Path, branch: &str) -> Result<()> {
+pub(crate) async fn checkout(jj: &JjClient, cwd: &Path, branch: &str) -> Result<()> {
     if !super::repo::branch_exists(jj, cwd, branch).await? {
         return Err(Error::BranchNotFound(branch.to_string()));
     }
     jj.edit(cwd, branch).await.map_err(map_pk_err)
 }
 
-/// `jj describe -m <message>` — set description on `@` (jj's closest analogue to
-/// git's `commit -m`).
-pub(super) async fn commit(cwd: &Path, message: &str) -> Result<()> {
-    super::exec(cwd, ["describe", "-m", message]).await
-}
-
-/// `jj git fetch`, best-effort with retry on transient network errors: a
-/// non-zero exit is swallowed (fetch failing is often not critical); a
-/// spawn/timeout failure propagates. Transient blips (DNS / connection / EOF)
-/// retry first.
-pub(super) async fn fetch(jj: &JjClient, cwd: &Path) -> Result<()> {
-    let mut attempt = 0;
-    loop {
-        attempt += 1;
-        match jj.git_fetch(cwd).await {
-            Ok(()) => return Ok(()),
-            Err(PkError::Exit { stderr, .. }) => {
-                if attempt < FETCH_MAX_ATTEMPTS && is_transient_fetch_err(&stderr) {
-                    continue;
-                }
-                // Best-effort: swallow a non-transient / retries-exhausted failure.
-                return Ok(());
-            }
-            // Spawn / timeout — propagate.
-            Err(e) => return Err(map_pk_err(e)),
-        }
-    }
-}
-
 /// Fetch a SINGLE bookmark from `origin` (`jj git fetch --remote origin -b
 /// <branch>`). Targeted and **hard-fails** on error — callers reach it only
 /// after `remote_branch_exists` confirmed the bookmark is there. Transient
 /// network blips retry first.
-pub(super) async fn fetch_remote_branch(jj: &JjClient, cwd: &Path, branch: &str) -> Result<()> {
+pub(crate) async fn fetch_remote_branch(jj: &JjClient, cwd: &Path, branch: &str) -> Result<()> {
     let mut attempt = 0;
     loop {
         attempt += 1;
         match jj.git_fetch_branch(cwd, branch).await {
             Ok(()) => return Ok(()),
-            Err(PkError::Exit { stderr, .. })
-                if attempt < FETCH_MAX_ATTEMPTS && is_transient_fetch_err(&stderr) =>
-            {
+            Err(e) if attempt < FETCH_MAX_ATTEMPTS && vcs_jj::is_transient_fetch_error(&e) => {
                 continue;
             }
             Err(e) => return Err(map_pk_err(e)),
@@ -104,7 +57,7 @@ pub(super) async fn fetch_remote_branch(jj: &JjClient, cwd: &Path, branch: &str)
 }
 
 /// Capture the current operation id for later `jj op restore`-based rollback.
-pub(super) async fn capture_op_id(jj: &JjClient, cwd: &Path) -> Result<String> {
+pub(crate) async fn capture_op_id(jj: &JjClient, cwd: &Path) -> Result<String> {
     jj.op_head(cwd).await.map_err(map_pk_err)
 }
 
@@ -116,7 +69,7 @@ async fn has_conflict_at(jj: &JjClient, cwd: &Path, revset: &str) -> bool {
 /// **Dry-run merge.** Materialise the merge, check for conflicts, restore to the
 /// pre-merge op state via `jj op restore <pre-op-id>`. Returns `Ok(true)` if the
 /// merge would be clean.
-pub(super) async fn dry_run_merge(jj: &JjClient, cwd: &Path, branch: &str, squash: bool) -> Result<bool> {
+pub(crate) async fn dry_run_merge(jj: &JjClient, cwd: &Path, branch: &str, squash: bool) -> Result<bool> {
     let pre_op = capture_op_id(jj, cwd).await?;
 
     // Pre-flight: already up to date?
@@ -152,7 +105,7 @@ pub(super) async fn dry_run_merge(jj: &JjClient, cwd: &Path, branch: &str, squas
 /// and `jj op restore`s on any internal step failure, so `merge()` is atomic
 /// from the caller's view.
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn merge(
+pub(crate) async fn merge(
     jj: &JjClient,
     cwd: &Path,
     branch: &str,
@@ -200,6 +153,6 @@ pub(super) async fn merge(
 /// `reset_merge` in jj terms — undo the most recent operation (`jj op undo`). jj
 /// has no in-progress merge state; this is the cleanup analogue for `merge.rs`
 /// paths that haven't captured an op id.
-pub(super) async fn reset_merge(cwd: &Path) -> Result<()> {
+pub(crate) async fn reset_merge(cwd: &Path) -> Result<()> {
     super::exec(cwd, ["op", "undo"]).await
 }

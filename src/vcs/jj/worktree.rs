@@ -22,7 +22,7 @@ use crate::vcs::error::{Error, Result};
 /// Derive a jj workspace name from a branch name. jj workspace names must be
 /// valid identifiers — no `/`, `.`, `\`, `:`, or whitespace — so substitute to
 /// `_`. Deterministic so `remove_worktree` can reconstruct it.
-pub(super) fn workspace_name_for(branch: &str) -> String {
+pub(crate) fn workspace_name_for(branch: &str) -> String {
     branch
         .chars()
         .map(|c| match c {
@@ -33,7 +33,7 @@ pub(super) fn workspace_name_for(branch: &str) -> String {
 }
 
 /// Create a new workspace + bookmark for the requested branch.
-pub(super) async fn create_worktree(
+pub(crate) async fn create_worktree(
     jj: &JjClient,
     cwd: &Path,
     path: &Path,
@@ -81,7 +81,7 @@ pub(super) async fn create_worktree(
 /// Create a workspace from a bookmark that exists only on `origin`: fetch just
 /// that bookmark, then create the workspace from it (resuming a local bookmark
 /// if `git.auto-local-bookmark` minted one, else basing on `<branch>@origin`).
-pub(super) async fn create_worktree_from_remote(
+pub(crate) async fn create_worktree_from_remote(
     jj: &JjClient,
     cwd: &Path,
     path: &Path,
@@ -257,7 +257,7 @@ async fn create_worktree_cow(
 /// Remove a workspace + delete the on-disk directory. **Order matters**: delete
 /// the filesystem dir first, then `jj workspace forget` — an orphan dir `ws` has
 /// lost track of is worse than a still-attached workspace.
-pub(super) async fn remove_worktree(jj: &JjClient, cwd: &Path, path: &Path, _force: bool) -> Result<()> {
+pub(crate) async fn remove_worktree(jj: &JjClient, cwd: &Path, path: &Path, _force: bool) -> Result<()> {
     let ws_name = workspace_name_for_path(jj, cwd, path).await?;
     if path.exists() {
         std::fs::remove_dir_all(path).map_err(|e| Error::Command(e.to_string()))?;
@@ -306,7 +306,7 @@ async fn workspace_name_for_path(jj: &JjClient, cwd: &Path, path: &Path) -> Resu
 /// subprocesses. Returns `None` when no workspace matches `path` (jj missing /
 /// not in a repo / no match) — the caller then SKIPS the forget rather than
 /// guessing a name, so it can never forget an unrelated workspace.
-pub(super) fn workspace_name_for_path_blocking(cwd: &Path, path: &Path) -> Option<String> {
+pub(crate) fn workspace_name_for_path_blocking(cwd: &Path, path: &Path) -> Option<String> {
     let target = normalize_for_compare(path);
     // `jj workspace list -T 'name ++ "\n"'` → one workspace name per line.
     let out = std::process::Command::new("jj")
@@ -341,7 +341,7 @@ pub(super) fn workspace_name_for_path_blocking(cwd: &Path, path: &Path) -> Optio
 /// List all attached workspaces, projected into the backend-agnostic
 /// `WorktreeInfo`. jj's `Workspace` carries no path, so we resolve each via
 /// `jj workspace root --name`.
-pub(super) async fn list_worktrees(jj: &JjClient, cwd: &Path) -> Result<Vec<WorktreeInfo>> {
+pub(crate) async fn list_worktrees(jj: &JjClient, cwd: &Path) -> Result<Vec<WorktreeInfo>> {
     let workspaces = jj.workspace_list(cwd).await.map_err(|e| match e {
         processkit::Error::Exit { .. } => Error::NotInRepo,
         other => map_pk_err(other),

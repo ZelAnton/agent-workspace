@@ -23,7 +23,7 @@ use crate::vcs::error::{Error, Result};
 ///
 /// CoW eligibility is decided by [`crate::cow::can_clone`]. When CoW isn't
 /// possible we silently fall back to plain — no warnings, no errors.
-pub(super) async fn create_worktree(
+pub(crate) async fn create_worktree(
     git: &GitClient,
     cwd: &Path,
     path: &Path,
@@ -57,14 +57,14 @@ pub(super) async fn create_worktree(
 /// Create a worktree from a branch that exists only on `origin`: fetch
 /// just that branch, then create the worktree from the remote-tracking
 /// ref. Reuses [`create_worktree`] with `base = "origin/<branch>"`.
-pub(super) async fn create_worktree_from_remote(
+pub(crate) async fn create_worktree_from_remote(
     git: &GitClient,
     cwd: &Path,
     path: &Path,
     branch: &str,
 ) -> Result<CreateOutcome> {
     eprintln!("  Fetching '{branch}' from origin...");
-    super::ops::fetch_remote_branch(cwd, branch).await?;
+    super::ops::fetch_remote_branch(git, cwd, branch).await?;
     create_worktree(git, cwd, path, branch, &format!("origin/{branch}")).await
 }
 
@@ -484,7 +484,7 @@ fn refresh_index_batched(path: &Path, started: std::time::Instant) -> Result<()>
 }
 
 /// Remove a worktree.
-pub(super) async fn remove_worktree(cwd: &Path, path: &Path, force: bool) -> Result<()> {
+pub(crate) async fn remove_worktree(cwd: &Path, path: &Path, force: bool) -> Result<()> {
     let path_arg = path_str(path)?;
     if force {
         super::exec(cwd, ["worktree", "remove", "--force", path_arg]).await
@@ -494,12 +494,12 @@ pub(super) async fn remove_worktree(cwd: &Path, path: &Path, force: bool) -> Res
 }
 
 /// Move a worktree to a new path.
-pub(super) async fn move_worktree(cwd: &Path, old_path: &Path, new_path: &Path) -> Result<()> {
+pub(crate) async fn move_worktree(cwd: &Path, old_path: &Path, new_path: &Path) -> Result<()> {
     super::exec(cwd, ["worktree", "move", path_str(old_path)?, path_str(new_path)?]).await
 }
 
 /// List all worktrees attached to the repo.
-pub(super) async fn list_worktrees(git: &GitClient, cwd: &Path) -> Result<Vec<WorktreeInfo>> {
+pub(crate) async fn list_worktrees(git: &GitClient, cwd: &Path) -> Result<Vec<WorktreeInfo>> {
     let worktrees = git.worktree_list(cwd).await.map_err(|e| match e {
         processkit::Error::Exit { .. } => Error::NotInRepo,
         other => super::errmap::map_pk_err(other),

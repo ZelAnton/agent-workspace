@@ -580,7 +580,7 @@ impl Config {
     ///
     /// **Why resolve roots here instead of `Repo::repo_root()`?** This runs
     /// BEFORE `Cli::run` builds the `Repo`, so no backend is available yet.
-    /// In a pure-jj repo (no `.git`), GitBackend's
+    /// In a pure-jj repo (no `.git`), the git backend's
     /// `git rev-parse --git-common-dir` would fail → `Error::NotInRepo` →
     /// project config silently lost. We resolve roots with a local filesystem
     /// probe + plain `git` subprocess instead — see [`resolve_main_repo_root`] /
@@ -783,8 +783,9 @@ fn run_git_utf8(cwd: &Path, args: &[&str]) -> std::io::Result<String> {
 /// Resolve the **main repo** root for project-config discovery, handling
 /// git worktrees correctly.
 ///
-/// This is the backend-independent counterpart to `GitBackend::repo_root`,
-/// used during `Config::load` (which runs before any backend is installed).
+/// This is the backend-independent counterpart to the git backend's
+/// `repo::repo_root` helper, used during `Config::load` (which runs before any
+/// backend is installed).
 /// See [`Config::load_project`] for the rationale.
 fn resolve_main_repo_root(cwd: &Path) -> Option<PathBuf> {
     use std::path::Component;

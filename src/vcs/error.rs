@@ -9,7 +9,8 @@
 /// Result alias used by every VCS-touching call.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Errors returned by any [`VcsBackend`](super::backend::VcsBackend) method.
+/// Errors returned by any VCS backend operation (a [`Repo`](super::Repo) method
+/// or the git/jj helpers behind it).
 ///
 /// `Command(String)` is the catch-all for backend CLI failures — the inner
 /// string is the post-processed user-facing message (already stripped of
@@ -24,8 +25,9 @@ pub enum Error {
     #[error("not in a version-controlled repository")]
     NotInRepo,
 
-    /// Operation requires a backend that isn't implemented yet (e.g. jj
-    /// methods that still live as stubs in `JjBackend`).
+    /// Operation has no analogue on the active backend (e.g. the jj
+    /// `move_worktree` / `*_abort` / `*_continue` arms return this via
+    /// `jj::unsupported`).
     #[error("operation not yet supported by this backend: {0}")]
     Unsupported(String),
 

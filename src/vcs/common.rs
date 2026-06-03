@@ -23,8 +23,10 @@ pub struct WorktreeInfo {
     pub is_bare: bool,
 }
 
-/// Aggregated insertion/deletion counts from `git diff --shortstat`
-/// (or the jj equivalent, once `JjBackend` lands).
+/// Aggregated insertion/deletion counts from `git diff --shortstat` (or the jj
+/// `diff --stat` equivalent). `ws`'s own DTO — kept because the facade's
+/// `vcs_core::DiffStat` is `#[non_exhaustive]` (so it can't be built in our
+/// parsers) and adds a `files_changed` field `ws` doesn't use.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DiffStat {
     pub insertions: usize,
@@ -58,8 +60,9 @@ pub enum CreateOutcome {
 /// `refname == "refs/heads/<name>"` — an exact match, never a substring/suffix
 /// test: `git ls-remote --heads origin foo` matches refs by trailing path
 /// component, so probing `foo` would otherwise falsely succeed on a remote
-/// `refs/heads/x/foo`. Pure + backend-agnostic so both `GitBackend` and the
-/// colocated `JjBackend` (which also shells out to `git ls-remote`) share it.
+/// `refs/heads/x/foo`. Pure + backend-agnostic so both the git and (colocated)
+/// jj `remote_branch_exists` helpers — which both shell out to `git ls-remote`
+/// — share it.
 pub(crate) fn ls_remote_has_branch(stdout: &str, name: &str) -> bool {
     let target = format!("refs/heads/{name}");
     stdout.lines().any(|line| {

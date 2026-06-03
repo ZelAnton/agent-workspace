@@ -1,28 +1,25 @@
 // ===========================================================================
-// vcs - VCS abstraction layer (git + jj)
+// vcs - VCS abstraction layer (git + jj), built on the vcs-core facade
 // ===========================================================================
 //
 // **Module layout**:
-//   - `backend.rs` — the `VcsBackend` trait every implementation satisfies.
-//   - `common.rs`  — backend-agnostic DTOs (`WorktreeInfo`, `DiffStat`) +
+//   - `common.rs`  — `ws`'s DTOs (`WorktreeInfo`, `DiffStat`, `CreateOutcome`) +
 //                    the `path_str` UTF-8 helper.
 //   - `error.rs`   — the shared `Error`/`Result` type.
-//   - `git/`       — `GitBackend`, the only real implementation today.
-//   - `jj/`        — `JjBackend`, currently `unimplemented!()` stubs.
+//   - `git/`, `jj/` — the per-backend helper functions (each takes a typed
+//                    client + cwd). The `vcs_core::Repo`-backed wrapper in
+//                    `repo.rs` dispatches to them via the escape hatches.
+//   - `repo.rs`    — `Repo`, the single handle every command reaches a backend
+//                    through.
 //
 // **How callers use this module**:
-// Don't import `Backend`/`VcsBackend` directly unless you're constructing
-// a backend (e.g. in tests). The intended surface is the [`Repo`] context
-// (`src/vcs/repo.rs`): `Cli::run` resolves a backend once via
-// [`resolve_backend`], wraps it in a `Repo` pinned to the process cwd, and
-// passes `&Repo` into every command. That keeps call sites in
-// `src/cli/commands/` from caring which backend is in use, with no reliance
-// on the process cwd or any thread-local state.
+// `Cli::run` resolves a [`Repo`] once via [`resolve_backend`] (a `vcs_core::Repo`
+// + `ws` policy veneer) and passes `&Repo` into every command, so call sites in
+// `src/cli/commands/` don't care which backend is in use, with no reliance on
+// the process cwd. Detection + the cwd-bound client come from `vcs-core`; the
+// common-vs-divergent op routing lives in `repo.rs`.
 
-pub mod backend;
-mod backend_state;
 pub mod common;
-mod detect;
 pub mod error;
 pub mod git;
 pub mod guard;
@@ -31,7 +28,8 @@ pub mod repo;
 
 use std::path::Path;
 
-pub use backend::VcsBackend;
+use vcs_core::BackendKind;
+
 pub use guard::WorktreeGuard;
 pub use repo::Repo;
 pub use common::{path_str, CreateOutcome, DiffStat, WorktreeInfo};
@@ -91,38 +89,52 @@ impl VcsChoice {
     }
 }
 
-/// Resolve which backend to install given the configured choices.
+/// Resolve and build the [`Repo`] handle for `cwd` given the configured choices.
 ///
 /// **Precedence** (first non-`Auto` wins):
 ///   1. `cli_choice` — explicit `--vcs=...` on the command line.
 ///   2. `project_choice` — `[general] vcs` in `.workspace.toml` (legacy
 ///      `.agent-workspace.toml` as a fallback).
 ///   3. `global_choice` — `[general] vcs` in `~/.agent-workspace/config.toml`.
-///   4. [`detect::detect_backend`] — a `.jj`/`.git` filesystem probe:
-///      colocated → `Jj`, jj-only → `Jj`, git-only → `Git`.
-///   5. Hard fallback: `Git`. Preserves behaviour for repos that
-///      detection can't classify (e.g. running `ws setup` outside any
-///      repo) — the resulting `GitBackend` will surface `NotInRepo` when
-///      it tries to actually do anything.
+///   4. [`vcs_core::detect`] — a `.jj`/`.git` ancestor-walk: colocated → `Jj`,
+///      jj-only → `Jj`, git-only → `Git`.
+///   5. Hard fallback: `Git`. Preserves behaviour for repos that detection
+///      can't classify (e.g. running `ws setup` outside any repo) — the
+///      resulting git handle surfaces `NotInRepo` when it does anything.
+///
+/// A forced choice (1–3) bypasses detection and builds the requested backend
+/// regardless of what's on disk. The `root` `ws` passes to the facade is the
+/// detected root when available else `cwd` — `ws`'s own `repo_root()` re-resolves
+/// it (via `--git-common-dir` / `jj workspace root`), so it's not load-bearing.
 pub fn resolve_backend(
+    cwd: &Path,
     cli_choice: VcsChoice,
     project_choice: Option<VcsChoice>,
     global_choice: Option<VcsChoice>,
-) -> Box<dyn VcsBackend> {
-    let backend = cli_choice
+) -> Repo {
+    let forced = cli_choice
         .resolve()
         .or_else(|| project_choice.and_then(|c| c.resolve()))
-        .or_else(|| global_choice.and_then(|c| c.resolve()))
-        .or_else(|| {
-            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            detect::detect_backend(&cwd)
-        })
-        .unwrap_or(Backend::Git);
+        .or_else(|| global_choice.and_then(|c| c.resolve()));
 
-    match backend {
-        Backend::Git => Box::new(git::GitBackend::new()),
-        Backend::Jj => Box::new(jj::JjBackend::new()),
-    }
+    // Only probe the filesystem when no backend was forced — a forced choice
+    // genuinely bypasses detection (and its `root` is inert; see below).
+    let located = if forced.is_none() { vcs_core::detect(cwd) } else { None };
+    let kind = forced
+        .map(|b| match b {
+            Backend::Git => BackendKind::Git,
+            Backend::Jj => BackendKind::Jj,
+        })
+        .or_else(|| located.as_ref().map(|l| l.kind))
+        .unwrap_or(BackendKind::Git);
+    let root = located.map(|l| l.root).unwrap_or_else(|| cwd.to_path_buf());
+
+    let inner = match kind {
+        BackendKind::Jj => vcs_core::Repo::from_jj(root, cwd, vcs_jj::Jj::new()),
+        // `BackendKind` is `#[non_exhaustive]`; anything not jj builds git.
+        _ => vcs_core::Repo::from_git(root, cwd, vcs_git::Git::new()),
+    };
+    Repo::from_core(inner)
 }
 
 /// Step the ws PROCESS out of `doomed` (into `escape_to`) before deleting or
@@ -141,47 +153,49 @@ pub fn step_out_of(doomed: &Path, escape_to: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod resolve_tests {
-    //! Precedence tests for `resolve_backend`. These check the priority
-    //! chain only — they don't validate `detect_vcs` behaviour (that's
-    //! tested in the vcs-runner crate itself).
+    //! Precedence tests for `resolve_backend`. These check the priority chain
+    //! only — a forced (non-`Auto`) choice bypasses `vcs_core::detect`, so the
+    //! `cwd` passed here need not be a real repo.
 
     use super::*;
+
+    // Any path works: every test below forces a backend, so detection (which
+    // would read this dir) is never consulted.
+    fn cwd() -> &'static Path {
+        Path::new(".")
+    }
 
     #[test]
     fn cli_choice_wins_over_project() {
         // Explicit CLI override beats project config.
-        let backend = resolve_backend(VcsChoice::Git, Some(VcsChoice::Jj), None);
-        assert_eq!(backend.name(), "git");
+        let repo = resolve_backend(cwd(), VcsChoice::Git, Some(VcsChoice::Jj), None);
+        assert_eq!(repo.backend_name(), "git");
     }
 
     #[test]
     fn project_wins_over_global() {
         // Project config beats global config when CLI is auto.
-        let backend = resolve_backend(VcsChoice::Auto, Some(VcsChoice::Jj), Some(VcsChoice::Git));
-        assert_eq!(backend.name(), "jj");
+        let repo = resolve_backend(cwd(), VcsChoice::Auto, Some(VcsChoice::Jj), Some(VcsChoice::Git));
+        assert_eq!(repo.backend_name(), "jj");
     }
 
     #[test]
     fn global_wins_when_project_absent() {
-        let backend = resolve_backend(VcsChoice::Auto, None, Some(VcsChoice::Jj));
-        assert_eq!(backend.name(), "jj");
+        let repo = resolve_backend(cwd(), VcsChoice::Auto, None, Some(VcsChoice::Jj));
+        assert_eq!(repo.backend_name(), "jj");
     }
 
     #[test]
     fn project_auto_falls_through_to_global() {
         // Project value of `Auto` is the same as `None` from the precedence
         // chain's point of view — it doesn't satisfy a non-Auto choice.
-        let backend = resolve_backend(
-            VcsChoice::Auto,
-            Some(VcsChoice::Auto),
-            Some(VcsChoice::Jj),
-        );
-        assert_eq!(backend.name(), "jj");
+        let repo = resolve_backend(cwd(), VcsChoice::Auto, Some(VcsChoice::Auto), Some(VcsChoice::Jj));
+        assert_eq!(repo.backend_name(), "jj");
     }
 
     #[test]
     fn explicit_jj_installs_jj_backend() {
-        let backend = resolve_backend(VcsChoice::Jj, None, None);
-        assert_eq!(backend.name(), "jj");
+        let repo = resolve_backend(cwd(), VcsChoice::Jj, None, None);
+        assert_eq!(repo.backend_name(), "jj");
     }
 }

@@ -1,26 +1,25 @@
 // ===========================================================================
-// vcs/git/tests - GitBackend unit tests
+// vcs/git/tests - git backend helper tests
 // ===========================================================================
 //
 // Two layers, matching the project's "validate against the real tool" stance:
-//   - **Real-git e2e** (`#[tokio::test]`): a `GitBackend` anchored at a fresh
-//     temp repo via `backend_at`, driving the actual `git` binary through the
-//     processkit + vcs-git stack. No mocks — these validate the async backend
+//   - **Real-git e2e** (`#[tokio::test]`): a git-backed [`Repo`] anchored at a
+//     fresh temp repo via `backend_at`, driving the actual `git` binary through
+//     the processkit + vcs-git stack. No mocks — these validate the git helpers
 //     end-to-end at the unit level.
-//   - **Pure parsers / predicates** (`#[test]`): `parse_worktree_list`,
-//     `parse_shortstat`, `clean_git_error`, `is_transient_fetch_err` — no
-//     subprocess, no runtime.
+//   - **Pure parsers** (`#[test]`): `parse_worktree_list`, `parse_shortstat`,
+//     `clean_git_error` — no subprocess, no runtime.
 //
 // Command-building (the exact argv each method emits) is owned and tested by the
-// `vcs-git` crate; we don't re-assert it here.
+// `vcs-git` crate; we don't re-assert it here. Transient-fetch classification
+// likewise moved to `vcs_git::is_transient_fetch_error`.
 
 use std::path::Path;
 use std::process::Command as StdCommand;
 
 use tempfile::tempdir;
 
-use super::GitBackend;
-use crate::vcs::backend::VcsBackend;
+use crate::vcs::Repo;
 
 /// Set up a minimal real git repo with one commit on `main`.
 fn setup_test_repo() -> tempfile::TempDir {
@@ -41,10 +40,10 @@ fn setup_test_repo() -> tempfile::TempDir {
     dir
 }
 
-/// A `GitBackend` anchored at `path` (real runner, explicit cwd — no process
-/// chdir, so tests run in parallel).
-fn backend_at(path: &Path) -> GitBackend {
-    GitBackend::at(path.to_path_buf())
+/// A git-backed [`Repo`] anchored at `path` (real runner, explicit cwd — no
+/// process chdir, so tests run in parallel).
+fn backend_at(path: &Path) -> Repo {
+    Repo::git_at(path)
 }
 
 // ---------------------------------------------------------------------------
@@ -173,11 +172,5 @@ fn clean_git_error_strips_prefixes_and_rewrites_uncommitted() {
     );
     assert_eq!(msg, "worktree 'feature' has uncommitted changes, use --force");
 }
-
-#[test]
-fn is_transient_fetch_err_matches_network_markers() {
-    assert!(super::ops::is_transient_fetch_err("fatal: Could not resolve host: github.com"));
-    assert!(super::ops::is_transient_fetch_err("Connection reset by peer"));
-    assert!(super::ops::is_transient_fetch_err("fatal: the remote end hung up unexpectedly"));
-    assert!(!super::ops::is_transient_fetch_err("fatal: couldn't find remote ref refs/heads/x"));
-}
+// Transient-fetch classification now lives in `vcs_git::is_transient_fetch_error`
+// (tested in the vcs-git crate); `ws` no longer hand-rolls the marker list.

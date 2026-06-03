@@ -18,17 +18,8 @@ fn conv(s: vcs_git::DiffStat) -> DiffStat {
     DiffStat { insertions: s.insertions, deletions: s.deletions }
 }
 
-/// Check if branch is merged into target.
-pub(super) async fn is_merged(git: &GitClient, cwd: &Path, branch: &str, target: &str) -> Result<bool> {
-    match git.is_merged(cwd, branch, target).await {
-        Ok(merged) => Ok(merged),
-        Err(PkError::Exit { .. }) => Ok(false),
-        Err(e) => Err(map_pk_err(e)),
-    }
-}
-
 /// True if `branch` has any committed-or-uncommitted diff from `target`.
-pub(super) async fn has_diff_from(git: &GitClient, cwd: &Path, branch: &str, target: &str) -> Result<bool> {
+pub(crate) async fn has_diff_from(git: &GitClient, cwd: &Path, branch: &str, target: &str) -> Result<bool> {
     let range = format!("{target}...{branch}");
     // A non-empty tree diff means "has diff" outright.
     if !git.diff_range_is_empty(cwd, &range).await.map_err(map_pk_err)? {
@@ -39,24 +30,24 @@ pub(super) async fn has_diff_from(git: &GitClient, cwd: &Path, branch: &str, tar
 }
 
 /// Delete a branch (`-d` / `-D` for force).
-pub(super) async fn delete_branch(git: &GitClient, cwd: &Path, name: &str, force: bool) -> Result<()> {
+pub(crate) async fn delete_branch(git: &GitClient, cwd: &Path, name: &str, force: bool) -> Result<()> {
     git.delete_branch(cwd, name, force).await.map_err(map_pk_err)
 }
 
 /// Check for any uncommitted changes in the current working directory.
-pub(super) async fn has_uncommitted_changes(git: &GitClient, cwd: &Path) -> Result<bool> {
+pub(crate) async fn has_uncommitted_changes(git: &GitClient, cwd: &Path) -> Result<bool> {
     Ok(!git.status(cwd).await.map_err(map_pk_err)?.is_empty())
 }
 
 /// Count uncommitted files in a specific worktree path.
-pub(super) async fn uncommitted_count_in(git: &GitClient, path: &Path) -> Result<usize> {
+pub(crate) async fn uncommitted_count_in(git: &GitClient, path: &Path) -> Result<usize> {
     Ok(git.status(path).await.map_err(map_pk_err)?.len())
 }
 
 /// Get diff `--shortstat` between two refs (committed changes).
-pub(super) async fn diff_shortstat(git: &GitClient, cwd: &Path, from: &str, to: &str) -> Result<DiffStat> {
+pub(crate) async fn diff_shortstat(git: &GitClient, cwd: &Path, from: &str, to: &str) -> Result<DiffStat> {
     let range = format!("{from}...{to}");
-    match git.diff_shortstat(cwd, &range).await {
+    match git.diff_stat(cwd, &range).await {
         Ok(stat) => Ok(conv(stat)),
         Err(PkError::Exit { .. }) => Ok(DiffStat::default()),
         Err(e) => Err(map_pk_err(e)),
@@ -65,8 +56,8 @@ pub(super) async fn diff_shortstat(git: &GitClient, cwd: &Path, from: &str, to: 
 
 /// Get `--shortstat` for uncommitted changes in a worktree (`git diff
 /// --shortstat HEAD`).
-pub(super) async fn diff_shortstat_in(git: &GitClient, path: &Path) -> Result<DiffStat> {
-    match git.diff_shortstat(path, "HEAD").await {
+pub(crate) async fn diff_shortstat_in(git: &GitClient, path: &Path) -> Result<DiffStat> {
+    match git.diff_stat(path, "HEAD").await {
         Ok(stat) => Ok(conv(stat)),
         Err(PkError::Exit { .. }) => Ok(DiffStat::default()),
         Err(e) => Err(map_pk_err(e)),
@@ -76,8 +67,7 @@ pub(super) async fn diff_shortstat_in(git: &GitClient, path: &Path) -> Result<Di
 /// Parse `git diff --shortstat` output into a [`DiffStat`].
 ///
 /// Kept as a pure helper (re-exported for tests and fixture parsing) even
-/// though the typed client now does the shortstat parsing internally —
-/// `JjBackend` and the test suite still call it directly.
+/// though the typed client now does the shortstat parsing internally.
 ///
 /// `--shortstat` is **git-specific** — jj's `diff --summary` has a different
 /// schema (per-file `M/A/D` lines, no aggregate counts).
@@ -110,16 +100,8 @@ pub fn parse_shortstat(output: &str) -> DiffStat {
     DiffStat { insertions, deletions }
 }
 
-/// True if current branch has any uncommitted changes OR commits ahead of trunk.
-pub(super) async fn has_changes_from_trunk(git: &GitClient, cwd: &Path, trunk: &str) -> Result<bool> {
-    if has_uncommitted_changes(git, cwd).await? {
-        return Ok(true);
-    }
-    Ok(commit_count(git, cwd, trunk, "HEAD").await? > 0)
-}
-
 /// Rename a branch in place.
-pub(super) async fn rename_branch(git: &GitClient, cwd: &Path, old: &str, new: &str) -> Result<()> {
+pub(crate) async fn rename_branch(git: &GitClient, cwd: &Path, old: &str, new: &str) -> Result<()> {
     git.rename_branch(cwd, old, new).await.map_err(map_pk_err)
 }
 
@@ -128,7 +110,7 @@ pub(super) async fn rename_branch(git: &GitClient, cwd: &Path, old: &str, new: &
 /// Not modelled by the typed client, so it runs through a raw command. A
 /// non-zero exit (e.g. an unknown ref) yields an empty string, matching the
 /// original best-effort behaviour.
-pub(super) async fn log_oneline(cwd: &Path, from: &str, to: &str) -> Result<String> {
+pub(crate) async fn log_oneline(cwd: &Path, from: &str, to: &str) -> Result<String> {
     let range = format!("{from}..{to}");
     let out = super::capture(cwd, ["log", "--oneline", &range]).await?;
     if out.is_success() {
@@ -139,7 +121,7 @@ pub(super) async fn log_oneline(cwd: &Path, from: &str, to: &str) -> Result<Stri
 }
 
 /// Count commits in a range (`git rev-list --count from..to`).
-pub(super) async fn commit_count(git: &GitClient, cwd: &Path, from: &str, to: &str) -> Result<usize> {
+pub(crate) async fn commit_count(git: &GitClient, cwd: &Path, from: &str, to: &str) -> Result<usize> {
     let range = format!("{from}..{to}");
     match git.rev_list_count(cwd, &range).await {
         Ok(n) => Ok(n),

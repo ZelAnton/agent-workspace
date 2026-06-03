@@ -179,8 +179,7 @@ impl Cli {
         // thread-local facade.
         let cwd = std::env::current_dir()
             .map_err(|e| Error::Other(format!("cannot read current directory: {e}")))?;
-        let backend = crate::vcs::resolve_backend(self.vcs, config.vcs, config.vcs_global);
-        let repo = crate::vcs::Repo::discover(cwd, backend);
+        let repo = crate::vcs::resolve_backend(&cwd, self.vcs, config.vcs, config.vcs_global);
 
         match self.command {
             Command::New(args) => {

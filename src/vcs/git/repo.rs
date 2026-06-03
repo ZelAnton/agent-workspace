@@ -17,7 +17,7 @@ use crate::vcs::error::{Error, Result};
 /// Uses `--git-common-dir` (via the typed client's `common_dir`) to handle
 /// worktrees correctly — it returns the main repo's `.git` regardless of which
 /// worktree the caller is sitting in.
-pub(super) async fn repo_root(git: &GitClient, cwd: &Path) -> Result<PathBuf> {
+pub(crate) async fn repo_root(git: &GitClient, cwd: &Path) -> Result<PathBuf> {
     // Outside-a-repo is the most common failure here; collapse a non-zero exit
     // to the friendly NotInRepo variant rather than the raw git stderr.
     let git_dir = git.common_dir(cwd).await.map_err(|e| match e {
@@ -51,7 +51,7 @@ pub(super) async fn repo_root(git: &GitClient, cwd: &Path) -> Result<PathBuf> {
 }
 
 /// Get the directory name of the current repository.
-pub(super) async fn repo_name(git: &GitClient, cwd: &Path) -> Result<String> {
+pub(crate) async fn repo_name(git: &GitClient, cwd: &Path) -> Result<String> {
     let root = repo_root(git, cwd).await?;
     root.file_name()
         .and_then(|n| n.to_str())
@@ -64,7 +64,7 @@ pub(super) async fn repo_name(git: &GitClient, cwd: &Path) -> Result<String> {
 /// Format: `{repo_name}-{hash[0:6]}` where hash is derived from the
 /// absolute repo path. Ensures repos with the same directory name living
 /// in different absolute locations get distinct workspace directories.
-pub(super) async fn workspace_id(git: &GitClient, cwd: &Path) -> Result<String> {
+pub(crate) async fn workspace_id(git: &GitClient, cwd: &Path) -> Result<String> {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
@@ -79,7 +79,7 @@ pub(super) async fn workspace_id(git: &GitClient, cwd: &Path) -> Result<String> 
 }
 
 /// Get the current branch name (`HEAD` symbolic ref).
-pub(super) async fn current_branch(git: &GitClient, cwd: &Path) -> Result<String> {
+pub(crate) async fn current_branch(git: &GitClient, cwd: &Path) -> Result<String> {
     git.current_branch(cwd).await.map_err(|e| match e {
         PkError::Exit { .. } => Error::NotInRepo,
         other => map_pk_err(other),
@@ -87,7 +87,7 @@ pub(super) async fn current_branch(git: &GitClient, cwd: &Path) -> Result<String
 }
 
 /// Get the current HEAD commit hash.
-pub(super) async fn current_commit(git: &GitClient, cwd: &Path) -> Result<String> {
+pub(crate) async fn current_commit(git: &GitClient, cwd: &Path) -> Result<String> {
     git.rev_parse(cwd, "HEAD").await.map_err(|e| match e {
         PkError::Exit { .. } => Error::NotInRepo,
         other => map_pk_err(other),
@@ -101,7 +101,7 @@ pub(super) async fn current_commit(git: &GitClient, cwd: &Path) -> Result<String
 /// `origin/HEAD` wins because it reflects the upstream's actual default
 /// branch — avoids silently picking `main` when the real trunk is `master`
 /// (or vice versa) just because both happen to exist locally.
-pub(super) async fn detect_trunk(git: &GitClient, cwd: &Path) -> Result<String> {
+pub(crate) async fn detect_trunk(git: &GitClient, cwd: &Path) -> Result<String> {
     if let Ok(Some(branch)) = git.remote_head_branch(cwd).await {
         return Ok(branch);
     }
@@ -116,7 +116,7 @@ pub(super) async fn detect_trunk(git: &GitClient, cwd: &Path) -> Result<String> 
 }
 
 /// List all local branch names. One subprocess instead of N `branch_exists` calls.
-pub(super) async fn local_branches(git: &GitClient, cwd: &Path) -> Result<Vec<String>> {
+pub(crate) async fn local_branches(git: &GitClient, cwd: &Path) -> Result<Vec<String>> {
     match git.branches(cwd).await {
         Ok(branches) => Ok(branches.into_iter().map(|b| b.name).collect()),
         // Outside a repo: return empty rather than error, matching the
@@ -129,7 +129,7 @@ pub(super) async fn local_branches(git: &GitClient, cwd: &Path) -> Result<Vec<St
 /// Check whether a local branch exists. `show-ref --verify --quiet` exits
 /// non-zero when the branch is absent — mapped to `Ok(false)` rather than
 /// surfacing an error.
-pub(super) async fn branch_exists(git: &GitClient, cwd: &Path, name: &str) -> Result<bool> {
+pub(crate) async fn branch_exists(git: &GitClient, cwd: &Path, name: &str) -> Result<bool> {
     match git.branch_exists(cwd, name).await {
         Ok(exists) => Ok(exists),
         Err(PkError::Exit { .. }) => Ok(false),
@@ -142,7 +142,7 @@ pub(super) async fn branch_exists(git: &GitClient, cwd: &Path, name: &str) -> Re
 /// point at; for a plain branch it's a no-op. Used by the CoW resume path
 /// to check out a branch's commit *detached* (so the branch ref stays free
 /// for `git worktree add <path> <branch>`).
-pub(super) async fn resolve_commit(git: &GitClient, cwd: &Path, rev: &str) -> Result<String> {
+pub(crate) async fn resolve_commit(git: &GitClient, cwd: &Path, rev: &str) -> Result<String> {
     git.resolve_commit(cwd, rev).await.map_err(map_pk_err)
 }
 
@@ -157,7 +157,7 @@ pub(super) async fn resolve_commit(git: &GitClient, cwd: &Path, rev: &str) -> Re
 /// `remote_branch_exists`) so we can apply an EXACT `refs/heads/<name>` match —
 /// `git ls-remote --heads origin <name>` matches refs by trailing path
 /// component, so a non-empty-stdout test would falsely match `x/<name>`.
-pub(super) async fn remote_branch_exists(_git: &GitClient, cwd: &Path, name: &str) -> Result<bool> {
+pub(crate) async fn remote_branch_exists(_git: &GitClient, cwd: &Path, name: &str) -> Result<bool> {
     let res = processkit::Command::new("git")
         .current_dir(cwd)
         .args(["ls-remote", "--heads", "origin", name])
