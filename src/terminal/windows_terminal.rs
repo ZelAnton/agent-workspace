@@ -70,6 +70,19 @@ impl TerminalIntegration for WindowsTerminal {
         let ps_command = script::build_pwsh(spec);
         let cwd_str = spec.cwd.to_string_lossy().to_string();
 
+        // CRITICAL: `wt.exe` splits its OWN command line on `;` even inside
+        // quoted arguments (the same hazard the `-File` temp-script dance below
+        // works around for the script body). `--title <branch>` is NOT immune:
+        // git allows `;` in a branch name, so a branch like `feat;x` would
+        // terminate the `new-tab` subcommand and let everything after the `;` be
+        // reparsed as a SECOND tab's command line — a spawn break and a literal
+        // command-injection vector through a branch name. The title is purely
+        // cosmetic here (the spawned script re-sets the tab title via OSC 0), so
+        // strip `;` and control chars before it reaches wt's argv parser. The
+        // `-d <cwd>` path gets the same treatment defensively.
+        let title = sanitize_wt_arg(&spec.title);
+        let cwd_str = sanitize_wt_arg(&cwd_str);
+
         // Find `wt.exe`. It SHOULD be on PATH inside a Windows Terminal
         // session, but the Microsoft Store WindowsApps directory has
         // unusual permissions and the `where` lookup occasionally misses
@@ -93,7 +106,7 @@ impl TerminalIntegration for WindowsTerminal {
             .args([
                 "new-tab",
                 "--title",
-                &spec.title,
+                &title,
                 "--suppressApplicationTitle",
                 "-d",
                 &cwd_str,
@@ -117,6 +130,16 @@ impl TerminalIntegration for WindowsTerminal {
         }
         Ok(())
     }
+}
+
+/// Neutralise a string before it becomes a `wt.exe` argument. Windows Terminal
+/// re-splits its command line on `;` (its subcommand delimiter) even inside
+/// quoted args, so a `;` smuggled in via a branch name or path would start a
+/// second `new-tab` subcommand — a spawn break / injection vector. Strips `;`
+/// and control characters; everything else (incl. spaces, which `Command::args`
+/// quotes correctly for the OS layer) is left intact.
+fn sanitize_wt_arg(s: &str) -> String {
+    s.chars().filter(|c| *c != ';' && !c.is_control()).collect()
 }
 
 /// Persist the PowerShell script to a uniquely-named `.ps1` file and
@@ -198,4 +221,26 @@ fn locate_wt_binary() -> Option<PathBuf> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_wt_arg;
+
+    #[test]
+    fn strips_semicolons_and_control_chars() {
+        // The injection vector: `;` must never survive into a wt.exe arg.
+        assert_eq!(sanitize_wt_arg("feat;split-pane pwsh -Command evil"), "featsplit-pane pwsh -Command evil");
+        assert_eq!(sanitize_wt_arg("a;b;c"), "abc");
+        // Control chars (incl. the OSC terminators BEL/ESC) are dropped.
+        assert_eq!(sanitize_wt_arg("ti\x07tle\x1b"), "title");
+        assert_eq!(sanitize_wt_arg("line\nbreak"), "linebreak");
+    }
+
+    #[test]
+    fn preserves_ordinary_titles_including_spaces() {
+        assert_eq!(sanitize_wt_arg("fix-auth-bug"), "fix-auth-bug");
+        assert_eq!(sanitize_wt_arg("feature/my work"), "feature/my work");
+        assert_eq!(sanitize_wt_arg("swift-fox"), "swift-fox");
+    }
 }

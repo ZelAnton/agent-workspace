@@ -48,6 +48,100 @@ pub enum Error {
 /// would otherwise be a silent-disable risk.
 pub const DISABLE_COW_ENV: &str = "WT_DISABLE_COW";
 
+// ---------------------------------------------------------------------------
+// Source-repo serialization for the CoW path
+// ---------------------------------------------------------------------------
+
+/// A stale CoW lock older than this is reclaimed — the source-mutating CoW
+/// window (stash → checkout → reflink → restore) never legitimately runs this
+/// long, so a lock this old is a crash leftover, not a live holder.
+const COW_LOCK_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// Best-effort exclusive lock serializing the CoW source-repo mutation for one
+/// repo. **Why:** the CoW flows mutate the SHARED source repo — git stashes +
+/// checks out `base`, jj `jj edit`s `@`. Two concurrent `ws new` against the
+/// same repo (an agent fan-out — the tool's whole reason to exist) would
+/// interleave catastrophically: a lost stash, the source left on the wrong
+/// branch, or a torn reflink tree. Plain `git worktree add` / `jj workspace
+/// add`, by contrast, never touch the source working copy and ARE
+/// concurrency-safe (the tool serializes its own registry).
+///
+/// So callers gate the CoW branch on holding this lock; on contention they fall
+/// back to the plain path. **The failure mode is deliberately safe:** every
+/// error path here returns "couldn't lock" → the caller does a plain (correct,
+/// just slower) creation. A leaked lock (process killed mid-CoW) is reclaimed
+/// after [`COW_LOCK_STALE_AFTER`]; until then the only cost is plain-instead-of-
+/// CoW. No lock bug can ever corrupt a worktree — at worst it degrades speed.
+///
+/// The lock file lives in the system temp dir keyed by a hash of the repo root
+/// (backend-agnostic, never pollutes the repo or its `git status`). Removed on
+/// drop.
+pub struct CowLock {
+    path: std::path::PathBuf,
+}
+
+impl CowLock {
+    /// Try to acquire the CoW lock for `repo_root`. `None` = already held by a
+    /// live peer (caller should use the plain path).
+    pub fn try_acquire(repo_root: &Path) -> Option<Self> {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        repo_root.hash(&mut hasher);
+        let path = std::env::temp_dir().join(format!("ws-cow-{:016x}.lock", hasher.finish()));
+
+        match Self::create_exclusive(&path) {
+            Ok(()) => Some(CowLock { path }),
+            Err(()) => {
+                // Held. Reclaim only if the holder is plainly stale (crash
+                // leftover) — a live CoW never runs longer than the threshold.
+                if Self::is_stale(&path) {
+                    let _ = std::fs::remove_file(&path);
+                    Self::create_exclusive(&path).ok().map(|()| CowLock { path })
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// Atomically create the lock file (`create_new` = fails if it exists).
+    /// `Err(())` means "exists or un-creatable" — the caller treats both as
+    /// "couldn't lock" and falls back to plain, so we don't distinguish.
+    fn create_exclusive(path: &Path) -> std::result::Result<(), ()> {
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(path) {
+            Ok(mut f) => {
+                use std::io::Write as _;
+                // Best-effort breadcrumb; content is informational only.
+                let _ = writeln!(f, "{}", std::process::id());
+                Ok(())
+            }
+            Err(_) => Err(()),
+        }
+    }
+
+    /// True when the existing lock file is older than the stale threshold (or
+    /// its mtime can't be read — a lock we can't reason about is safest treated
+    /// as reclaimable, since the worst case is two concurrent CoW runs, i.e. the
+    /// pre-lock status quo, not a new failure).
+    fn is_stale(path: &Path) -> bool {
+        let Ok(mtime) = std::fs::metadata(path).and_then(|m| m.modified()) else {
+            return true;
+        };
+        std::time::SystemTime::now()
+            .duration_since(mtime)
+            .map(|age| age > COW_LOCK_STALE_AFTER)
+            .unwrap_or(false) // future-dated → not (yet) stale; keep it
+    }
+}
+
+impl Drop for CowLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 /// True if `src_dir` and `dst_parent` are on the same volume **and** a
 /// sentinel reflink attempt succeeds at `dst_parent`.
 ///

@@ -63,16 +63,26 @@ pub(crate) async fn create_worktree(
         && parent.exists()
         && crate::cow::can_clone(&repo_root, parent)
     {
-        return create_worktree_cow(
-            jj,
-            cwd,
-            &repo_root,
-            path,
-            branch,
-            effective_base,
-            branch_already_exists,
-        )
-        .await;
+        // The jj CoW flow `jj edit`s the source workspace's `@`, which is unsafe
+        // to run concurrently with another `ws new`. Hold a per-repo lock for
+        // it; on contention, fall through to the concurrency-safe plain path.
+        // `_cow_lock` stays bound until `create_worktree_cow` returns.
+        if let Some(_cow_lock) = crate::cow::CowLock::try_acquire(&repo_root) {
+            return create_worktree_cow(
+                jj,
+                cwd,
+                &repo_root,
+                path,
+                branch,
+                effective_base,
+                branch_already_exists,
+            )
+            .await;
+        }
+        eprintln!(
+            "  Another `ws new` is using copy-on-write on this repo; \
+             using a plain workspace add (safe, slower)."
+        );
     }
 
     create_worktree_plain(jj, cwd, path, branch, effective_base, branch_already_exists).await

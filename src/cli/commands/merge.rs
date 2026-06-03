@@ -231,8 +231,18 @@ async fn run_merge(
         eprintln!("Running post-merge hooks...");
         // Match pre_merge: CWD = worktree (still on disk, since cleanup
         // happens after this block).
-        process::run_hooks(&config.hooks.post_merge, &wt_path)
-            .map_err(|e| Error::Other(e.to_string()))?;
+        //
+        // The merge has ALREADY landed by this point — a post_merge hook
+        // failure must not read as "the merge failed" (the user would retry and
+        // double-merge / hit "nothing to merge"). Make the message explicit, and
+        // skip the worktree cleanup below so the user can fix the hook and act.
+        process::run_hooks(&config.hooks.post_merge, &wt_path).map_err(|e| {
+            Error::Other(format!(
+                "Merge of '{current}' into '{target}' SUCCEEDED, but a post-merge hook failed: {e}\n\
+                 The merge commit is already on '{target}'. The worktree was kept — fix the hook, \
+                 then clean up with `ws rm {current}` if you still want it gone."
+            ))
+        })?;
     }
 
     if args.delete {

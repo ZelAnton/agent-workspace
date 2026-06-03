@@ -55,7 +55,16 @@ pub fn should_check(base_dir: &Path) -> bool {
     marker
         .metadata()
         .and_then(|m| m.modified())
-        .map(|mtime| SystemTime::now().duration_since(mtime).unwrap_or_default() > CHECK_INTERVAL)
+        .map(|mtime| match SystemTime::now().duration_since(mtime) {
+            // Normal case: checked > CHECK_INTERVAL ago → re-check.
+            Ok(elapsed) => elapsed > CHECK_INTERVAL,
+            // Future-dated marker (clock moved back, restored backup, copied
+            // with a future timestamp). `unwrap_or_default()` would yield ZERO
+            // and suppress checks until wall-clock catches up — possibly
+            // forever. A future timestamp is never a valid "checked recently"
+            // state, so treat it as stale and check.
+            Err(_) => true,
+        })
         .unwrap_or(true)
 }
 

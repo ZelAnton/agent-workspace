@@ -18,6 +18,25 @@ fn same_volume_returns_true_for_self() {
 }
 
 #[test]
+fn cow_lock_is_mutually_exclusive_and_released_on_drop() {
+    // Use a unique fake repo root so this test never collides with a real lock
+    // or a parallel run (the lock file is keyed by a hash of this path).
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_root = tmp.path().join("repo-unique-for-lock-test");
+
+    let first = CowLock::try_acquire(&repo_root).expect("first acquire succeeds");
+    // A second acquire while the first is held → None (caller falls back to plain).
+    assert!(
+        CowLock::try_acquire(&repo_root).is_none(),
+        "second concurrent acquire must be refused"
+    );
+    // Releasing the first lets a new acquire succeed.
+    drop(first);
+    let second = CowLock::try_acquire(&repo_root).expect("acquire succeeds after release");
+    drop(second);
+}
+
+#[test]
 fn robocopy_safe_only_for_anchored_literal_top_level() {
     // Anchored single-segment literals — robocopy can express these as /XD//XF.
     let safe = vec!["/target".to_string(), "/node_modules".to_string(), "/.workspace.toml".to_string()];

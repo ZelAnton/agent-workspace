@@ -39,6 +39,8 @@ The `# === agent-workspace BEGIN/END ===` markers around the wrapper are a wire 
 
 `src/cli/commands/snap/resume.rs` exports `EXIT_DONE = 0`, `EXIT_REOPEN = 2`, `EXIT_PRESERVE = 3`. The bash/zsh/fish/PowerShell wrapper scripts in `src/shell/mod.rs` switch on these to either loop the agent, drop the user into the worktree, or `cd` back to the main repo. **Changing these constants requires updating every wrapper template in lockstep.** The same exit codes are interpreted by the spawned-tab script generated in `src/terminal/script.rs` when `ws new --snap` opens a new terminal tab — keep that script's `case`/`if` block in sync too. Nested snap (`ws new -s` from inside a worktree) is refused for the same reason — two snap loops in one parent shell break the cwd tracking.
 
+The path-file carries two lines for snap (`<worktree-path>\n<snap-command>`); the wrappers read line 1 as the path and the **single** command line as the agent command. The snap command must be a single line — a command containing a literal newline is parsed inconsistently across shells (bash/zsh/fish take the last line, PowerShell the first) and gets truncated. Use a single shell string (`ws new -s "a && b"`), not an embedded newline.
+
 ### Terminal-tab integration changes the spawn point for `ws new` and `ws cd`
 
 When `ws new <branch>` or `ws cd <branch>` runs inside a supported terminal (Windows Terminal, iTerm2, GNOME Terminal — detection via `WT_SESSION`, `TERM_PROGRAM=iTerm.app`, `GNOME_TERMINAL_SERVICE`/`GNOME_TERMINAL_SCREEN`) and `[ui] open_in_new_tab` is enabled (default), the flow does NOT run in the originating shell. Instead `src/terminal/` opens a fresh tab titled with the branch name. The originating shell prints `Opened in new tab: <branch>` and exits cleanly without writing the `--path-file` (so its shell wrapper stays put).
@@ -91,6 +93,10 @@ Rollback on internal failure: `jj op restore <pre_op>` + `fs::remove_dir_all(pat
 **Colocated git-force bracketing** (`src/vcs/git/worktree.rs::create_worktree_cow`): when the source repo has `.jj/` alongside `.git/` and the user forced git backend via `--vcs=git`, raw git ops (stash, checkout, worktree add) would desync jj's view. The CoW flow brackets the entire git-side work with `jj git import` calls (before and after) so jj's bookmarks/refs catch up. Calls are best-effort — silently skipped if jj isn't installed.
 
 **User overrides**: `--no-cow` flag on `ws new`; `[create] use_cow = false` (project or global) to disable by default. Sets the `WT_DISABLE_COW` env var which both backends' CoW dispatchers check.
+
+**Concurrency**: the CoW flow mutates the *shared* source repo (git stash + checkout base; jj `jj edit @`), so two `ws new` against the same repo can't run it simultaneously. Both dispatchers hold a per-repo `cow::CowLock` (a temp-dir lock file keyed by the repo-root hash, auto-reclaimed after 30 min if a holder crashes) for the source-mutating window; on contention the loser falls back to the plain path (`git worktree add` / `jj workspace add`), which never touches the source working copy and is concurrency-safe. The lock's failure mode is purely speed — a lock bug degrades to plain, never corrupts.
+
+**Known limitation — git submodules**: `ws` has no submodule support, and CoW makes it visible: `git worktree add --no-checkout` writes the gitlink, but the reflink copies the submodule's *working files*, so the new worktree reports a permanent `M <submodule>` — which makes `ws merge`'s "worktree has uncommitted changes" guard refuse forever. Don't use `ws` worktrees on submodule-bearing repos (or `--no-cow` + manual `git submodule update`).
 
 ### Merge is atomic — no continue/abort
 

@@ -57,6 +57,16 @@ pub async fn run(args: MoveArgs, config: &Config, path_file: Option<&Path>, form
         )));
     }
 
+    // Refuse up front when the destination branch name already exists. Without
+    // this, `repo.move_worktree` succeeds (relocating the dir + git's tracking)
+    // and then `repo.rename_branch` fails on the collision — leaving the
+    // worktree physically moved but the branch un-renamed and its metadata
+    // misnamed. Catching it before any mutation keeps `ws mv` all-or-nothing for
+    // the common failure. (`branch_exists` errors are best-effort → don't block.)
+    if repo.branch_exists(&args.new_branch).await.unwrap_or(false) {
+        return Err(Error::Git(vcs::Error::WorktreeExists(args.new_branch.clone())));
+    }
+
     // Check if we're inside the worktree being renamed
     let inside_target = vcs::is_cwd_inside(&old_path);
 
@@ -82,8 +92,21 @@ pub async fn run(args: MoveArgs, config: &Config, path_file: Option<&Path>, form
     // Move worktree to new path (updates git's internal tracking)
     repo.move_worktree(&old_path, &new_path).await?;
 
-    // Rename branch
-    repo.rename_branch(&old_branch, &args.new_branch).await?;
+    // Rename branch. The worktree is ALREADY at `new_path` now, so if this
+    // fails we must still rescue the parent shell to `new_path` (it can't stay
+    // in the deleted `old_path`) before surfacing the error — otherwise a
+    // direct-binary `ws mv .` of the current worktree strands the shell.
+    if let Err(e) = repo.rename_branch(&old_branch, &args.new_branch).await {
+        if path_file.is_some() && inside_target {
+            let _ = write_path_file(path_file, &new_path);
+        }
+        return Err(Error::Other(format!(
+            "Worktree moved to {} but renaming branch '{old_branch}' → '{}' failed: {e}\n\
+             Rename the branch manually (the worktree is at the new path).",
+            new_path.display(),
+            args.new_branch
+        )));
+    }
 
     // Rename metadata file (find old with fallback, write new format)
     let old_meta = crate::meta::meta_path_with_fallback(&wt_dir, &old_branch);
