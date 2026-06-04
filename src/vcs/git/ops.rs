@@ -30,10 +30,13 @@ pub(crate) async fn merge(
         // merged ("already up to date") — `git commit` would error with
         // "nothing to commit" in that case, so probe the index first.
         if let Some(msg) = message {
-            // `diff --cached --quiet` is a true 0/1 predicate: exit 0 = nothing
-            // staged, exit 1 = staged changes present (anything else → `Err`).
-            // `probe()` encodes exactly that, so `!probe` = "there are staged
-            // changes to commit".
+            // `diff --cached --quiet` is a true 0/1 predicate (locale-independent,
+            // unlike matching "nothing to commit" text): exit 0 = nothing staged,
+            // exit 1 = staged changes present. `probe()` encodes exactly that, so
+            // `!probe` = "there are staged changes to commit". A non-0/1 exit
+            // means the index couldn't be read (a broken repo) — `probe()` returns
+            // `Err`, which we propagate so the merge FAILS and rolls back, rather
+            // than silently reporting success without committing the squash.
             let has_staged = !super::git_cmd(cwd, ["diff", "--cached", "--quiet"])
                 .probe()
                 .await

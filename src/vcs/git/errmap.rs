@@ -3,14 +3,13 @@
 // ===========================================================================
 //
 // The vcs-git typed client and our own raw `processkit::Command` calls both
-// fail with `processkit::Error`. `Exit { stderr, .. }` carries only stderr
-// (processkit drops stdout once a run is judged a failure), so the
+// fail with `processkit::Error`. `Exit` carries BOTH captured streams, so the
 // "prefer stderr, fall back to stdout" extraction that's load-bearing for
-// friendly merge/commit errors (git puts `CONFLICT (content): …` on stdout)
-// can only be applied where WE capture the raw `ProcessResult` ourselves —
-// see `exec`/`run_checked` in `mod.rs`, which pass both streams to
-// [`extract_message`]. This module's [`map_pk_err`] is the fallback used for
-// typed vcs-git calls, where only the structured `Exit` is available.
+// friendly merge/commit errors (git puts `CONFLICT (content): …` and `nothing
+// to commit` on stdout) applies on both paths: where WE capture the raw
+// `ProcessResult` (`exec`/`capture` in `mod.rs`) via [`extract_message`], and on
+// typed vcs-git calls via [`map_pk_err`], which now feeds the `Exit` variant's
+// stdout+stderr through the same extraction.
 
 use processkit::Error as PkError;
 
@@ -35,7 +34,7 @@ pub(super) fn extract_message(stderr: &str, stdout: &[u8]) -> String {
 /// "worktree contains modified or untracked files" message into a shorter
 /// "worktree '<branch>' has uncommitted changes, use --force" form.
 ///
-/// Kept `pub` so the unit tests in `src/vcs/git/tests/` can assert
+/// Kept `pub` so the unit tests in `src/vcs/git/tests.rs` can assert
 /// against it directly without going through the trait, and so external
 /// debugging callers can pre-clean a stderr string.
 pub fn clean_git_error(stderr: &str) -> String {

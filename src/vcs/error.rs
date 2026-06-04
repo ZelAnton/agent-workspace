@@ -72,12 +72,16 @@ pub(crate) fn extract_message(stderr: &str, stdout: &[u8], cleanup: fn(&str) -> 
     }
 }
 
-/// Map a `processkit` subprocess error to [`Error::Command`]. `Exit` gets the
-/// backend `cleanup` on its captured stderr (processkit drops stdout once a run
-/// is judged a failure); every other variant is stringified via its `Display`.
+/// Map a `processkit` subprocess error to [`Error::Command`]. `Exit` carries both
+/// captured streams (since processkit 0.5), so it gets the same "prefer stderr,
+/// fall back to stdout" extraction as the raw-capture path — git/jj write some
+/// decisive diagnostics (`CONFLICT (content): …`, `nothing to commit`) to stdout,
+/// not stderr. Every other variant is stringified via its `Display`.
 pub(crate) fn map_pk_err(err: processkit::Error, cleanup: fn(&str) -> String) -> Error {
     match err {
-        processkit::Error::Exit { stderr, .. } => Error::Command(cleanup(&stderr)),
+        processkit::Error::Exit { stderr, stdout, .. } => {
+            Error::Command(extract_message(&stderr, stdout.as_bytes(), cleanup))
+        }
         other => Error::Command(other.to_string()),
     }
 }
@@ -95,6 +99,13 @@ impl From<vcs_core::Error> for Error {
                 Error::WorktreeNotFound(p.display().to_string())
             }
             vcs_core::Error::Io(e) => Error::Io(e),
+            // The wrapped CLI error's `Display` is just "`git` exited with code N"
+            // — the real text is in its captured streams, surfaced by
+            // `diagnostic()` (stderr, else stdout). Fall back to `Display` only
+            // when nothing was captured.
+            vcs_core::Error::Vcs(e) => {
+                Error::Command(e.diagnostic().map(str::to_owned).unwrap_or_else(|| e.to_string()))
+            }
             other => Error::Command(other.to_string()),
         }
     }

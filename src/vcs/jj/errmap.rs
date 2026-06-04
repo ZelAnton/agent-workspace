@@ -4,10 +4,10 @@
 //
 // jj's error output is more structured than git's (it prefixes fatal messages
 // with `Error: ` rather than git's `fatal:`/`error:`). As with the git backend,
-// `processkit::Error::Exit` carries only stderr, so the stderr/stdout fallback
-// extraction can only be applied where WE capture the raw `ProcessResult`
-// (the `exec` helper in `mod.rs`); `map_pk_err` is the fallback for typed
-// `vcs-jj` calls.
+// `processkit::Error::Exit` carries both streams, so the "prefer stderr, fall
+// back to stdout" extraction applies on both paths: where WE capture the raw
+// `ProcessResult` (the `exec` helper in `mod.rs`) and on typed `vcs-jj` calls via
+// `map_pk_err` (which feeds the `Exit` stdout+stderr through the same extraction).
 
 use processkit::Error as PkError;
 
