@@ -5,9 +5,8 @@
 use std::path::Path;
 
 use processkit::Error as PkError;
-use vcs_git::GitApi;
+use vcs_git::GitAt;
 
-use super::GitClient;
 use super::errmap::map_pk_err;
 use crate::vcs::common::DiffStat;
 use crate::vcs::error::Result;
@@ -19,35 +18,35 @@ fn conv(s: vcs_git::DiffStat) -> DiffStat {
 }
 
 /// True if `branch` has any committed-or-uncommitted diff from `target`.
-pub(crate) async fn has_diff_from(git: &GitClient, cwd: &Path, branch: &str, target: &str) -> Result<bool> {
+pub(crate) async fn has_diff_from(g: GitAt<'_>, branch: &str, target: &str) -> Result<bool> {
     let range = format!("{target}...{branch}");
     // A non-empty tree diff means "has diff" outright.
-    if !git.diff_range_is_empty(cwd, &range).await.map_err(map_pk_err)? {
+    if !g.diff_range_is_empty(&range).await.map_err(map_pk_err)? {
         return Ok(true);
     }
     // No diff in the tree — check if branch has commits the target lacks.
-    Ok(commit_count(git, cwd, target, branch).await? > 0)
+    Ok(commit_count(g, target, branch).await? > 0)
 }
 
 /// Delete a branch (`-d` / `-D` for force).
-pub(crate) async fn delete_branch(git: &GitClient, cwd: &Path, name: &str, force: bool) -> Result<()> {
-    git.delete_branch(cwd, name, force).await.map_err(map_pk_err)
+pub(crate) async fn delete_branch(g: GitAt<'_>, name: &str, force: bool) -> Result<()> {
+    g.delete_branch(name, force).await.map_err(map_pk_err)
 }
 
 /// Check for any uncommitted changes in the current working directory.
-pub(crate) async fn has_uncommitted_changes(git: &GitClient, cwd: &Path) -> Result<bool> {
-    Ok(!git.status(cwd).await.map_err(map_pk_err)?.is_empty())
+pub(crate) async fn has_uncommitted_changes(g: GitAt<'_>) -> Result<bool> {
+    Ok(!g.status().await.map_err(map_pk_err)?.is_empty())
 }
 
-/// Count uncommitted files in a specific worktree path.
-pub(crate) async fn uncommitted_count_in(git: &GitClient, path: &Path) -> Result<usize> {
-    Ok(git.status(path).await.map_err(map_pk_err)?.len())
+/// Count uncommitted files in a specific worktree (the view's anchored path).
+pub(crate) async fn uncommitted_count_in(g: GitAt<'_>) -> Result<usize> {
+    Ok(g.status().await.map_err(map_pk_err)?.len())
 }
 
 /// Get diff `--shortstat` between two refs (committed changes).
-pub(crate) async fn diff_shortstat(git: &GitClient, cwd: &Path, from: &str, to: &str) -> Result<DiffStat> {
+pub(crate) async fn diff_shortstat(g: GitAt<'_>, from: &str, to: &str) -> Result<DiffStat> {
     let range = format!("{from}...{to}");
-    match git.diff_stat(cwd, &range).await {
+    match g.diff_stat(&range).await {
         Ok(stat) => Ok(conv(stat)),
         Err(PkError::Exit { .. }) => Ok(DiffStat::default()),
         Err(e) => Err(map_pk_err(e)),
@@ -55,9 +54,9 @@ pub(crate) async fn diff_shortstat(git: &GitClient, cwd: &Path, from: &str, to: 
 }
 
 /// Get `--shortstat` for uncommitted changes in a worktree (`git diff
-/// --shortstat HEAD`).
-pub(crate) async fn diff_shortstat_in(git: &GitClient, path: &Path) -> Result<DiffStat> {
-    match git.diff_stat(path, "HEAD").await {
+/// --shortstat HEAD`, at the view's anchored path).
+pub(crate) async fn diff_shortstat_in(g: GitAt<'_>) -> Result<DiffStat> {
+    match g.diff_stat("HEAD").await {
         Ok(stat) => Ok(conv(stat)),
         Err(PkError::Exit { .. }) => Ok(DiffStat::default()),
         Err(e) => Err(map_pk_err(e)),
@@ -101,8 +100,8 @@ pub fn parse_shortstat(output: &str) -> DiffStat {
 }
 
 /// Rename a branch in place.
-pub(crate) async fn rename_branch(git: &GitClient, cwd: &Path, old: &str, new: &str) -> Result<()> {
-    git.rename_branch(cwd, old, new).await.map_err(map_pk_err)
+pub(crate) async fn rename_branch(g: GitAt<'_>, old: &str, new: &str) -> Result<()> {
+    g.rename_branch(old, new).await.map_err(map_pk_err)
 }
 
 /// Short log of commits between two refs (`git log --oneline from..to`).
@@ -121,9 +120,9 @@ pub(crate) async fn log_oneline(cwd: &Path, from: &str, to: &str) -> Result<Stri
 }
 
 /// Count commits in a range (`git rev-list --count from..to`).
-pub(crate) async fn commit_count(git: &GitClient, cwd: &Path, from: &str, to: &str) -> Result<usize> {
+pub(crate) async fn commit_count(g: GitAt<'_>, from: &str, to: &str) -> Result<usize> {
     let range = format!("{from}..{to}");
-    match git.rev_list_count(cwd, &range).await {
+    match g.rev_list_count(&range).await {
         Ok(n) => Ok(n),
         Err(PkError::Exit { .. }) => Ok(0),
         Err(e) => Err(map_pk_err(e)),

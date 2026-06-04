@@ -6,9 +6,12 @@
 //   - `common.rs`  — `ws`'s DTOs (`WorktreeInfo`, `DiffStat`, `CreateOutcome`) +
 //                    the `path_str` UTF-8 helper.
 //   - `error.rs`   — the shared `Error`/`Result` type.
-//   - `git/`, `jj/` — the per-backend helper functions (each takes a typed
-//                    client + cwd). The `vcs_core::Repo`-backed wrapper in
-//                    `repo.rs` dispatches to them via the escape hatches.
+//   - `git/`, `jj/` — the per-backend helper functions. Pure query helpers take
+//                    a cwd-bound view (`vcs_git::GitAt` / `vcs_jj::JjAt`); the
+//                    remaining client+cwd ops (raw-command + state machines) use
+//                    the escape hatches. The `vcs_core::Repo`-backed wrapper in
+//                    `repo.rs` dispatches to them via `git_at`/`jj_at` and
+//                    `git()`/`jj()`.
 //   - `repo.rs`    — `Repo`, the single handle every command reaches a backend
 //                    through.
 //

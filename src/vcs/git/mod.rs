@@ -3,13 +3,13 @@
 // ===========================================================================
 //
 // These submodules hold the git-specific implementations behind
-// [`crate::vcs::Repo`]: each function takes the typed `vcs_git::Git` client +
-// an explicit cwd, returning `ws`'s `Result`/DTOs. The facade wrapper
-// (`src/vcs/repo.rs`) dispatches to them via the `repo.git()` escape hatch when
-// the backend is git. The ones the typed client doesn't model (CoW worktree
-// creation, `log --oneline`, `checkout --detach`, the index plumbing) drop to a
-// raw `processkit::Command` via the `exec`/`capture` helpers below — all honour
-// an explicit working directory, so nothing here mutates the process cwd.
+// [`crate::vcs::Repo`], returning `ws`'s `Result`/DTOs. Pure typed-client query
+// helpers take a `cwd`-bound `vcs_git::GitAt` view (the wrapper supplies it via
+// `repo.git_at()`); helpers that need the cwd for more than the subprocess (the
+// `--git-common-dir` walk in `repo_root`) or that drop to a raw
+// `processkit::Command` (CoW worktree creation, `log --oneline`, `checkout
+// --detach`, the index plumbing, via the `exec`/`capture` helpers below) keep an
+// explicit `cwd`/client. Either way nothing here mutates the process cwd.
 
 mod errmap;
 pub(crate) mod repo;

@@ -43,7 +43,7 @@ pub(crate) async fn create_worktree(
     // Resume an existing bookmark (create the workspace at it) rather than
     // minting a new one — parity with the git backend. Refuse only when the
     // bookmark is already checked out in another workspace.
-    let branch_already_exists = super::repo::branch_exists(jj, cwd, branch).await?;
+    let branch_already_exists = super::repo::branch_exists(jj.at(cwd), branch).await?;
     if branch_already_exists {
         let worktrees = list_worktrees(jj, cwd).await?;
         if worktrees.iter().any(|wt| wt.branch.as_deref() == Some(branch)) {
@@ -59,7 +59,7 @@ pub(crate) async fn create_worktree(
     // CoW probe — mirrors the git dispatcher's shape exactly.
     let parent = path.parent().unwrap_or(path);
     if std::env::var(crate::cow::DISABLE_COW_ENV).is_err()
-        && let Ok(repo_root) = super::repo::repo_root(jj, cwd).await
+        && let Ok(repo_root) = super::repo::repo_root(jj.at(cwd)).await
         && parent.exists()
         && crate::cow::can_clone(&repo_root, parent)
     {
@@ -98,8 +98,8 @@ pub(crate) async fn create_worktree_from_remote(
     branch: &str,
 ) -> Result<CreateOutcome> {
     eprintln!("  Fetching '{branch}' from origin...");
-    super::ops::fetch_remote_branch(jj, cwd, branch).await?;
-    let base = if super::repo::branch_exists(jj, cwd, branch).await? {
+    super::ops::fetch_remote_branch(jj.at(cwd), branch).await?;
+    let base = if super::repo::branch_exists(jj.at(cwd), branch).await? {
         branch.to_string()
     } else {
         format!("{branch}@origin")
@@ -162,11 +162,11 @@ async fn create_worktree_cow(
     let pre_op = super::ops::capture_op_id(jj, cwd).await?;
     // 2. Source @ change-id (survives snapshot rewrites; a later `jj edit
     //    <change_id>` lands on whatever that logical change has become).
-    let orig_change_id = super::repo::current_change_id(jj, cwd).await?;
+    let orig_change_id = super::repo::current_change_id(jj.at(cwd)).await?;
     // 3. Resolve `base` to a concrete commit-id BEFORE moving.
-    let base_commit = super::repo::resolve_commit(jj, cwd, base).await?;
+    let base_commit = super::repo::resolve_commit(jj.at(cwd), base).await?;
     // 4. Move source workspace to base (skip if already there).
-    let orig_commit = super::repo::current_commit(jj, cwd).await?;
+    let orig_commit = super::repo::current_commit(jj.at(cwd)).await?;
     let needs_move = orig_commit != base_commit;
     if needs_move {
         eprintln!("  Switching to base revision...");
@@ -309,43 +309,6 @@ async fn workspace_name_for_path(jj: &JjClient, cwd: &Path, path: &Path) -> Resu
         }
     }
     Err(Error::WorktreeNotFound(path.display().to_string()))
-}
-
-/// Synchronous path→workspace-name lookup for [`WorktreeGuard`]'s `Drop` (which
-/// can't await). Mirrors [`workspace_name_for_path`] using blocking `jj`
-/// subprocesses. Returns `None` when no workspace matches `path` (jj missing /
-/// not in a repo / no match) — the caller then SKIPS the forget rather than
-/// guessing a name, so it can never forget an unrelated workspace.
-pub(crate) fn workspace_name_for_path_blocking(cwd: &Path, path: &Path) -> Option<String> {
-    let target = normalize_for_compare(path);
-    // `jj workspace list -T 'name ++ "\n"'` → one workspace name per line.
-    let out = std::process::Command::new("jj")
-        .current_dir(cwd)
-        .args(["workspace", "list", "-T", "name ++ \"\\n\""])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    for name in String::from_utf8_lossy(&out.stdout).lines() {
-        let name = name.trim();
-        if name.is_empty() {
-            continue;
-        }
-        let root = std::process::Command::new("jj")
-            .current_dir(cwd)
-            .args(["workspace", "root", "--name", name])
-            .output();
-        if let Ok(r) = root
-            && r.status.success()
-        {
-            let p = PathBuf::from(String::from_utf8_lossy(&r.stdout).trim().to_string());
-            if normalize_for_compare(&p) == target || p == target || p == path {
-                return Some(name.to_string());
-            }
-        }
-    }
-    None
 }
 
 /// List all attached workspaces, projected into the backend-agnostic

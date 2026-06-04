@@ -3,10 +3,9 @@
 // ===========================================================================
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use processkit::Error as PkError;
-use vcs_git::GitApi;
+use vcs_git::{GitApi, GitAt};
 
 use super::GitClient;
 use super::errmap::map_pk_err;
@@ -79,45 +78,24 @@ pub(crate) async fn workspace_id(git: &GitClient, cwd: &Path) -> Result<String> 
 }
 
 /// Get the current branch name (`HEAD` symbolic ref).
-pub(crate) async fn current_branch(git: &GitClient, cwd: &Path) -> Result<String> {
-    git.current_branch(cwd).await.map_err(|e| match e {
+pub(crate) async fn current_branch(g: GitAt<'_>) -> Result<String> {
+    g.current_branch().await.map_err(|e| match e {
         PkError::Exit { .. } => Error::NotInRepo,
         other => map_pk_err(other),
     })
 }
 
 /// Get the current HEAD commit hash.
-pub(crate) async fn current_commit(git: &GitClient, cwd: &Path) -> Result<String> {
-    git.rev_parse(cwd, "HEAD").await.map_err(|e| match e {
+pub(crate) async fn current_commit(g: GitAt<'_>) -> Result<String> {
+    g.rev_parse("HEAD").await.map_err(|e| match e {
         PkError::Exit { .. } => Error::NotInRepo,
         other => map_pk_err(other),
     })
 }
 
-/// Detect the trunk branch.
-///
-/// Priority: `origin/HEAD` (remote-authoritative) > `main` > `master` > `"main"`.
-///
-/// `origin/HEAD` wins because it reflects the upstream's actual default
-/// branch — avoids silently picking `main` when the real trunk is `master`
-/// (or vice versa) just because both happen to exist locally.
-pub(crate) async fn detect_trunk(git: &GitClient, cwd: &Path) -> Result<String> {
-    if let Ok(Some(branch)) = git.remote_head_branch(cwd).await {
-        return Ok(branch);
-    }
-
-    for branch in ["main", "master"] {
-        if branch_exists(git, cwd, branch).await? {
-            return Ok(branch.to_string());
-        }
-    }
-
-    Ok("main".to_string())
-}
-
 /// List all local branch names. One subprocess instead of N `branch_exists` calls.
-pub(crate) async fn local_branches(git: &GitClient, cwd: &Path) -> Result<Vec<String>> {
-    match git.branches(cwd).await {
+pub(crate) async fn local_branches(g: GitAt<'_>) -> Result<Vec<String>> {
+    match g.branches().await {
         Ok(branches) => Ok(branches.into_iter().map(|b| b.name).collect()),
         // Outside a repo: return empty rather than error, matching the
         // original code which returned `Ok(Vec::new())` on non-success.
@@ -129,8 +107,8 @@ pub(crate) async fn local_branches(git: &GitClient, cwd: &Path) -> Result<Vec<St
 /// Check whether a local branch exists. `show-ref --verify --quiet` exits
 /// non-zero when the branch is absent — mapped to `Ok(false)` rather than
 /// surfacing an error.
-pub(crate) async fn branch_exists(git: &GitClient, cwd: &Path, name: &str) -> Result<bool> {
-    match git.branch_exists(cwd, name).await {
+pub(crate) async fn branch_exists(g: GitAt<'_>, name: &str) -> Result<bool> {
+    match g.branch_exists(name).await {
         Ok(exists) => Ok(exists),
         Err(PkError::Exit { .. }) => Ok(false),
         Err(e) => Err(map_pk_err(e)),
@@ -142,31 +120,20 @@ pub(crate) async fn branch_exists(git: &GitClient, cwd: &Path, name: &str) -> Re
 /// point at; for a plain branch it's a no-op. Used by the CoW resume path
 /// to check out a branch's commit *detached* (so the branch ref stays free
 /// for `git worktree add <path> <branch>`).
-pub(crate) async fn resolve_commit(git: &GitClient, cwd: &Path, rev: &str) -> Result<String> {
-    git.resolve_commit(cwd, rev).await.map_err(map_pk_err)
+pub(crate) async fn resolve_commit(g: GitAt<'_>, rev: &str) -> Result<String> {
+    g.resolve_commit(rev).await.map_err(map_pk_err)
 }
 
-/// Whether a branch named `name` exists on `origin`, queried WITHOUT a
-/// fetch via `git ls-remote --heads origin <name>`.
+/// Whether a branch named `name` exists on `origin`, queried WITHOUT a fetch.
 ///
-/// **Best-effort**: any failure (no remote, auth/credential prompt, network
-/// down, timeout) maps to `Ok(false)` so `ws new` never blocks on the probe.
-/// `GIT_TERMINAL_PROMPT=0` + a 10s timeout cap a wedged connection.
+/// Delegates to the typed client, which queries the fully-qualified
+/// `refs/heads/<name>` ref (an EXACT match — `ls-remote origin <name>` would
+/// tail-match `x/<name>`) with `GIT_TERMINAL_PROMPT=0` + a 10s timeout.
 ///
-/// We run `git ls-remote` directly (rather than the typed client's
-/// `remote_branch_exists`) so we can apply an EXACT `refs/heads/<name>` match —
-/// `git ls-remote --heads origin <name>` matches refs by trailing path
-/// component, so a non-empty-stdout test would falsely match `x/<name>`.
-pub(crate) async fn remote_branch_exists(_git: &GitClient, cwd: &Path, name: &str) -> Result<bool> {
-    let res = processkit::Command::new("git")
-        .current_dir(cwd)
-        .args(["ls-remote", "--heads", "origin", name])
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .timeout(Duration::from_secs(10))
-        .output_string()
-        .await;
-    Ok(matches!(res, Ok(out)
-        if out.is_success() && crate::vcs::common::ls_remote_has_branch(out.stdout(), name)))
+/// **Best-effort**: any failure (no remote, auth prompt, network down, timeout,
+/// missing `git`) maps to `Ok(false)` so `ws new` never blocks on the probe.
+pub(crate) async fn remote_branch_exists(g: GitAt<'_>, name: &str) -> Result<bool> {
+    Ok(g.remote_branch_exists(name).await.unwrap_or(false))
 }
 
 /// Whether `cwd` is inside `path` (after canonicalizing both). Pure

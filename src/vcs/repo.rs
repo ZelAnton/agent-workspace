@@ -17,10 +17,10 @@
 
 use std::path::{Path, PathBuf};
 
-use vcs_core::{BackendKind, Repo as CoreRepo};
+use vcs_core::{BackendKind, OperationState, Repo as CoreRepo};
 
 use super::common::{CreateOutcome, DiffStat, WorktreeInfo};
-use super::error::{Error, Result};
+use super::error::Result;
 use super::{git, jj};
 
 /// A VCS repository handle pinned to an explicit working directory.
@@ -79,170 +79,166 @@ impl Repo {
     fn jj(&self) -> &jj::JjClient {
         self.inner.jj().expect("jj backend resolved to a jj client")
     }
+    /// A `cwd`-bound git view (the toolkit `GitAt`), anchored at this Repo's cwd.
+    /// Only call from a git arm — panics on a jj handle.
+    fn git_view(&self) -> vcs_git::GitAt<'_> {
+        self.inner.git_at().expect("git backend resolved to a git client")
+    }
+    /// A `cwd`-bound jj view (the toolkit `JjAt`), anchored at this Repo's cwd.
+    /// Only call from a jj arm — panics on a git handle.
+    fn jj_view(&self) -> vcs_jj::JjAt<'_> {
+        self.inner.jj_at().expect("jj backend resolved to a jj client")
+    }
 
     // ----- Identity -------------------------------------------------------
     pub async fn repo_root(&self) -> Result<PathBuf> {
-        let cwd = self.inner.cwd();
         if self.is_git() {
-            git::repo::repo_root(self.git(), cwd).await
+            git::repo::repo_root(self.git(), self.inner.cwd()).await
         } else {
-            jj::repo::repo_root(self.jj(), cwd).await
+            jj::repo::repo_root(self.jj_view()).await
         }
     }
     pub async fn repo_name(&self) -> Result<String> {
-        let cwd = self.inner.cwd();
         if self.is_git() {
-            git::repo::repo_name(self.git(), cwd).await
+            git::repo::repo_name(self.git(), self.inner.cwd()).await
         } else {
-            jj::repo::repo_name(self.jj(), cwd).await
+            jj::repo::repo_name(self.jj_view()).await
         }
     }
     pub async fn workspace_id(&self) -> Result<String> {
-        let cwd = self.inner.cwd();
         if self.is_git() {
-            git::repo::workspace_id(self.git(), cwd).await
+            git::repo::workspace_id(self.git(), self.inner.cwd()).await
         } else {
-            jj::repo::workspace_id(self.jj(), cwd).await
+            jj::repo::workspace_id(self.jj_view()).await
         }
     }
     pub async fn current_branch(&self) -> Result<String> {
-        let cwd = self.inner.cwd();
         if self.is_git() {
-            git::repo::current_branch(self.git(), cwd).await
+            git::repo::current_branch(self.git_view()).await
         } else {
-            jj::repo::current_branch(self.jj(), cwd).await
+            jj::repo::current_branch(self.jj_view()).await
         }
     }
     pub async fn current_commit(&self) -> Result<String> {
-        let cwd = self.inner.cwd();
         if self.is_git() {
-            git::repo::current_commit(self.git(), cwd).await
+            git::repo::current_commit(self.git_view()).await
         } else {
-            jj::repo::current_commit(self.jj(), cwd).await
+            jj::repo::current_commit(self.jj_view()).await
         }
     }
+    /// Detect the trunk branch/bookmark. The facade resolves the backend-native
+    /// default (git `origin/HEAD`, jj `trunk()`) then falls back `main` →
+    /// `master`; we keep `ws`'s non-optional contract by defaulting to `"main"`
+    /// when nothing resolves.
     pub async fn detect_trunk(&self) -> Result<String> {
-        let cwd = self.inner.cwd();
-        if self.is_git() {
-            git::repo::detect_trunk(self.git(), cwd).await
-        } else {
-            jj::repo::detect_trunk(self.jj(), cwd).await
-        }
+        Ok(self.inner.trunk().await?.unwrap_or_else(|| "main".to_string()))
     }
 
     // ----- Branches -------------------------------------------------------
     pub async fn local_branches(&self) -> Result<Vec<String>> {
-        let cwd = self.inner.cwd();
         if self.is_git() {
-            git::repo::local_branches(self.git(), cwd).await
+            git::repo::local_branches(self.git_view()).await
         } else {
-            jj::repo::local_branches(self.jj(), cwd).await
+            jj::repo::local_branches(self.jj_view()).await
         }
     }
     pub async fn branch_exists(&self, name: &str) -> Result<bool> {
-        let cwd = self.inner.cwd();
         if self.is_git() {
-            git::repo::branch_exists(self.git(), cwd, name).await
+            git::repo::branch_exists(self.git_view(), name).await
         } else {
-            jj::repo::branch_exists(self.jj(), cwd, name).await
+            jj::repo::branch_exists(self.jj_view(), name).await
         }
     }
     pub async fn remote_branch_exists(&self, name: &str) -> Result<bool> {
-        let cwd = self.inner.cwd();
         if self.is_git() {
-            git::repo::remote_branch_exists(self.git(), cwd, name).await
+            git::repo::remote_branch_exists(self.git_view(), name).await
         } else {
-            jj::repo::remote_branch_exists(self.jj(), cwd, name).await
+            // jj keeps the client+cwd form: it shells out to a git client at cwd
+            // for the colocated `ls-remote` probe.
+            jj::repo::remote_branch_exists(self.jj(), self.inner.cwd(), name).await
         }
     }
     pub async fn has_diff_from(&self, branch: &str, target: &str) -> Result<bool> {
-        let cwd = self.inner.cwd();
         if self.is_git() {
-            git::branch::has_diff_from(self.git(), cwd, branch, target).await
+            git::branch::has_diff_from(self.git_view(), branch, target).await
         } else {
-            jj::branch::has_diff_from(self.jj(), cwd, branch, target).await
+            jj::branch::has_diff_from(self.jj_view(), branch, target).await
         }
     }
     pub async fn delete_branch(&self, name: &str, force: bool) -> Result<()> {
-        let cwd = self.inner.cwd();
         if self.is_git() {
-            git::branch::delete_branch(self.git(), cwd, name, force).await
+            git::branch::delete_branch(self.git_view(), name, force).await
         } else {
-            jj::repo::delete_branch(self.jj(), cwd, name, force).await
+            jj::repo::delete_branch(self.jj_view(), name, force).await
         }
     }
     pub async fn rename_branch(&self, old: &str, new: &str) -> Result<()> {
-        let cwd = self.inner.cwd();
         if self.is_git() {
-            git::branch::rename_branch(self.git(), cwd, old, new).await
+            git::branch::rename_branch(self.git_view(), old, new).await
         } else {
-            jj::repo::rename_branch(self.jj(), cwd, old, new).await
+            jj::repo::rename_branch(self.jj_view(), old, new).await
         }
     }
     pub async fn log_oneline(&self, from: &str, to: &str) -> Result<String> {
-        let cwd = self.inner.cwd();
         if self.is_git() {
-            git::branch::log_oneline(cwd, from, to).await
+            // git log_oneline runs a raw command, so it still takes cwd.
+            git::branch::log_oneline(self.inner.cwd(), from, to).await
         } else {
-            jj::branch::log_oneline(self.jj(), cwd, from, to).await
+            jj::branch::log_oneline(self.jj_view(), from, to).await
         }
     }
     pub async fn commit_count(&self, from: &str, to: &str) -> Result<usize> {
-        let cwd = self.inner.cwd();
         if self.is_git() {
-            git::branch::commit_count(self.git(), cwd, from, to).await
+            git::branch::commit_count(self.git_view(), from, to).await
         } else {
-            jj::branch::commit_count(self.jj(), cwd, from, to).await
+            jj::branch::commit_count(self.jj_view(), from, to).await
         }
     }
     pub async fn diff_shortstat(&self, from: &str, to: &str) -> Result<DiffStat> {
-        let cwd = self.inner.cwd();
         if self.is_git() {
-            git::branch::diff_shortstat(self.git(), cwd, from, to).await
+            git::branch::diff_shortstat(self.git_view(), from, to).await
         } else {
-            jj::branch::diff_shortstat(self.jj(), cwd, from, to).await
+            jj::branch::diff_shortstat(self.jj_view(), from, to).await
         }
     }
     pub async fn diff_shortstat_in(&self, path: &Path) -> Result<DiffStat> {
+        let wt = self.inner.at(path);
         if self.is_git() {
-            git::branch::diff_shortstat_in(self.git(), path).await
+            git::branch::diff_shortstat_in(wt.git_at().expect("git backend")).await
         } else {
-            jj::branch::diff_shortstat_in(self.jj(), path).await
+            jj::branch::diff_shortstat_in(wt.jj_at().expect("jj backend")).await
         }
     }
 
     // ----- Working-copy state --------------------------------------------
     pub async fn has_uncommitted_changes(&self) -> Result<bool> {
-        let cwd = self.inner.cwd();
         if self.is_git() {
-            git::branch::has_uncommitted_changes(self.git(), cwd).await
+            git::branch::has_uncommitted_changes(self.git_view()).await
         } else {
-            jj::branch::has_uncommitted_changes(self.jj(), cwd).await
+            jj::branch::has_uncommitted_changes(self.jj_view()).await
         }
     }
     pub async fn uncommitted_count_in(&self, path: &Path) -> Result<usize> {
+        let wt = self.inner.at(path);
         if self.is_git() {
-            git::branch::uncommitted_count_in(self.git(), path).await
+            git::branch::uncommitted_count_in(wt.git_at().expect("git backend")).await
         } else {
-            jj::branch::uncommitted_count_in(self.jj(), path).await
+            jj::branch::uncommitted_count_in(wt.jj_at().expect("jj backend")).await
         }
+    }
+    /// Backend-agnostic in-progress state, via the facade. Best-effort: a probe
+    /// failure (e.g. outside a repo) reads as [`OperationState::Clear`].
+    async fn in_progress_state(&self) -> OperationState {
+        self.inner.in_progress_state().await.unwrap_or(OperationState::Clear)
     }
     pub async fn is_rebase_in_progress(&self) -> bool {
-        let cwd = self.inner.cwd();
-        if self.is_git() {
-            git::ops::is_rebase_in_progress(self.git(), cwd).await
-        } else {
-            // jj operations are atomic — there is no in-progress rebase state.
-            false
-        }
+        // git reports `Rebase`; jj is atomic and never has an in-progress rebase.
+        matches!(self.in_progress_state().await, OperationState::Rebase)
     }
     pub async fn is_merge_in_progress(&self) -> bool {
-        let cwd = self.inner.cwd();
-        if self.is_git() {
-            git::ops::is_merge_in_progress(self.git(), cwd).await
-        } else {
-            jj::branch::is_merge_in_progress(self.jj(), cwd).await
-        }
+        // git reports `Merge` (MERGE_HEAD present); jj records the conflict on the
+        // change and surfaces it as `Conflict` — both mean "resolve, then continue".
+        matches!(self.in_progress_state().await, OperationState::Merge | OperationState::Conflict)
     }
 
     // ----- Mutations ------------------------------------------------------
@@ -390,43 +386,13 @@ impl Repo {
 
     /// Synchronously force-remove a partial worktree — used by
     /// [`WorktreeGuard`](super::guard::WorktreeGuard)'s `Drop`, which can't
-    /// `.await`. Dispatches to a blocking subprocess per backend.
+    /// `.await`. Delegates to the facade's blocking cleanup, which per backend
+    /// does exactly what `ws` needs: git `worktree remove --force` (a half-set-up
+    /// worktree has its new branch checked out, so a non-forced removal would
+    /// refuse); jj resolve-the-workspace-name-by-path → remove the dir → `workspace
+    /// forget`, and a no-match path is a safe no-op (never guesses a name).
     pub fn cleanup_worktree_blocking(&self, path: &Path) -> Result<()> {
-        let cwd = self.inner.cwd();
-        if self.is_git() {
-            // Force is required: a half-set-up worktree has its freshly-created
-            // branch checked out, which a non-forced removal refuses.
-            let path_arg = crate::vcs::common::path_str(path)?;
-            let status = std::process::Command::new("git")
-                .current_dir(cwd)
-                .args(["worktree", "remove", "--force", path_arg])
-                .status()
-                .map_err(|e| Error::Command(format!("spawn git worktree remove: {e}")))?;
-            if status.success() {
-                Ok(())
-            } else {
-                Err(Error::Command(format!(
-                    "git worktree remove exited with {}",
-                    status.code().unwrap_or(-1)
-                )))
-            }
-        } else {
-            // Delete the on-disk workspace dir + forget it from jj. Resolve the
-            // workspace name BEFORE removing the dir (the lookup needs the live
-            // `jj workspace root`). Forget only when positively identified —
-            // never guess a name (could forget an unrelated workspace).
-            let ws_name = jj::worktree::workspace_name_for_path_blocking(cwd, path);
-            if path.exists() {
-                std::fs::remove_dir_all(path).map_err(|e| Error::Command(e.to_string()))?;
-            }
-            if let Some(ws_name) = ws_name {
-                let _ = std::process::Command::new("jj")
-                    .current_dir(cwd)
-                    .args(["workspace", "forget", &ws_name])
-                    .status();
-            }
-            Ok(())
-        }
+        Ok(self.inner.cleanup_worktree_blocking(path)?)
     }
 
     /// Arm a [`WorktreeGuard`](super::guard::WorktreeGuard) over `path`: it

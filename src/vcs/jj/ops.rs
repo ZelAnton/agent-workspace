@@ -12,14 +12,11 @@
 
 use std::path::Path;
 
-use vcs_jj::JjApi;
+use vcs_jj::{JjApi, JjAt};
 
 use super::JjClient;
 use super::errmap::map_pk_err;
 use crate::vcs::error::{Error, Result};
-
-/// How many times a transient `jj git fetch` failure is retried before giving up.
-const FETCH_MAX_ATTEMPTS: usize = 3;
 
 /// `jj rebase -d <onto>` — rebase `@` onto the given revision. jj's rebase is
 /// atomic; conflicts are recorded into the rebased commits. Callers probe
@@ -32,7 +29,7 @@ pub(crate) async fn rebase(cwd: &Path, onto: &str) -> Result<()> {
 /// bookmark exists (managed worktrees always have bookmarks, matching git's
 /// `checkout` semantics).
 pub(crate) async fn checkout(jj: &JjClient, cwd: &Path, branch: &str) -> Result<()> {
-    if !super::repo::branch_exists(jj, cwd, branch).await? {
+    if !super::repo::branch_exists(jj.at(cwd), branch).await? {
         return Err(Error::BranchNotFound(branch.to_string()));
     }
     jj.edit(cwd, branch).await.map_err(map_pk_err)
@@ -40,20 +37,11 @@ pub(crate) async fn checkout(jj: &JjClient, cwd: &Path, branch: &str) -> Result<
 
 /// Fetch a SINGLE bookmark from `origin` (`jj git fetch --remote origin -b
 /// <branch>`). Targeted and **hard-fails** on error — callers reach it only
-/// after `remote_branch_exists` confirmed the bookmark is there. Transient
-/// network blips retry first.
-pub(crate) async fn fetch_remote_branch(jj: &JjClient, cwd: &Path, branch: &str) -> Result<()> {
-    let mut attempt = 0;
-    loop {
-        attempt += 1;
-        match jj.git_fetch_branch(cwd, branch).await {
-            Ok(()) => return Ok(()),
-            Err(e) if attempt < FETCH_MAX_ATTEMPTS && vcs_jj::is_transient_fetch_error(&e) => {
-                continue;
-            }
-            Err(e) => return Err(map_pk_err(e)),
-        }
-    }
+/// after `remote_branch_exists` confirmed the bookmark is there. The typed
+/// client's `git_fetch_branch` retries transient network blips internally
+/// (3× / 500 ms, classified by `vcs_jj::is_transient_fetch_error`).
+pub(crate) async fn fetch_remote_branch(j: JjAt<'_>, branch: &str) -> Result<()> {
+    j.git_fetch_branch(branch).await.map_err(map_pk_err)
 }
 
 /// Capture the current operation id for later `jj op restore`-based rollback.
@@ -73,7 +61,8 @@ pub(crate) async fn dry_run_merge(jj: &JjClient, cwd: &Path, branch: &str, squas
     let pre_op = capture_op_id(jj, cwd).await?;
 
     // Pre-flight: already up to date?
-    if super::branch::commit_count_via_revset(jj, cwd, &format!("({branch}) ~ ancestors(@)")).await?
+    if super::branch::commit_count_via_revset(jj.at(cwd), &format!("({branch}) ~ ancestors(@)"))
+        .await?
         == 0
     {
         return Ok(true);
@@ -115,7 +104,8 @@ pub(crate) async fn merge(
     message: Option<&str>,
 ) -> Result<()> {
     // No-op pre-flight: if branch has no commits @ lacks, nothing to merge.
-    if super::branch::commit_count_via_revset(jj, cwd, &format!("({branch}) ~ ancestors(@)")).await?
+    if super::branch::commit_count_via_revset(jj.at(cwd), &format!("({branch}) ~ ancestors(@)"))
+        .await?
         == 0
     {
         return Ok(());
@@ -130,7 +120,7 @@ pub(crate) async fn merge(
     let attempt: Result<()> = async {
         if squash {
             jj.new_merge(cwd, msg, vec!["@".into(), branch.into()]).await.map_err(map_pk_err)?;
-            jj.squash_into(cwd, "@-").await.map_err(map_pk_err)?;
+            jj.squash_into(cwd, "@-", false).await.map_err(map_pk_err)?;
             // After squash, the description on @- is <msg>; @ is a new empty
             // change above it. Advance the bookmark forward.
             jj.bookmark_move(cwd, dest_bookmark, "@-", true).await.map_err(map_pk_err)?;

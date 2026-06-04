@@ -3,13 +3,13 @@
 // ===========================================================================
 //
 // These submodules (`repo`, `branch`, `ops`, `worktree`) hold the jj-specific
-// implementations behind [`crate::vcs::Repo`]: each takes the typed
-// `vcs_jj::Jj` client (from `vcs_core::Repo::jj()`) + an explicit cwd and
-// returns `ws`'s `Result`/DTOs. The facade wrapper (`src/vcs/repo.rs`)
-// dispatches to them when the backend is jj. Operations the typed client
-// models are delegated to it; the few it doesn't (the CoW workspace dance —
-// `workspace add --sparse-patterns empty`, `sparse set`) drop to a raw
-// `processkit::Command` via `exec`.
+// implementations behind [`crate::vcs::Repo`], returning `ws`'s `Result`/DTOs.
+// Pure typed-client query helpers take a `cwd`-bound `vcs_jj::JjAt` view (the
+// wrapper supplies it via `repo.jj_at()`); the domain state-machines and CoW
+// dance keep the `vcs_jj::Jj` client + an explicit cwd (and build a view via
+// `jj.at(cwd)` when calling a view-based sub-helper). The few ops the typed
+// client doesn't model (`workspace add --sparse-patterns empty`, `sparse set`)
+// drop to a raw `processkit::Command` via `exec`.
 
 pub(crate) mod branch;
 mod errmap;

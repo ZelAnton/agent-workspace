@@ -1066,9 +1066,9 @@ dependencies = [
 
 [[package]]
 name = "processkit"
-version = "0.5.1"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d75acc3b95b1713d4d21204cf34bcfaf3c6d0f130521942cd50e741d47410f1"
+checksum = "10730f7ebd49baafb27a17167909c7405a3a923f9f5872191152765d84dc2093"
 dependencies = [
  "async-trait",
  "encoding_rs",
@@ -1742,10 +1742,11 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "vcs-core"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2807f95ac8fb6f8e543fb01dd1c66065ce7434e9f6394ab4bc1d9f0ceee8fab8"
+checksum = "c54694c9a8fc43e4d3cd7854d56b032a4d5c8ac6f0607921bac072f9158887f1"
 dependencies = [
+ "async-trait",
  "processkit",
  "vcs-git",
  "vcs-jj",
@@ -1753,9 +1754,9 @@ dependencies = [
 
 [[package]]
 name = "vcs-git"
-version = "0.3.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c2a344ed7fdb3c0106eb099e5736932f254c047a9af381a6571cf38c1c1a8e8"
+checksum = "b8466fbe0974b9c35c78e348f160844990967a6d287ebfaf7431a025a97c4bdf"
 dependencies = [
  "async-trait",
  "mockall",
@@ -1764,9 +1765,9 @@ dependencies = [
 
 [[package]]
 name = "vcs-github"
-version = "0.3.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b711049543020b9d859b7104140b142445477933a007f4bcbd24be15874d05e"
+checksum = "bd8e4492c1378021bd774f80267f65f688f4521a4db3b74a1bbba48893bd2bed"
 dependencies = [
  "async-trait",
  "processkit",
@@ -1776,9 +1777,9 @@ dependencies = [
 
 [[package]]
 name = "vcs-jj"
-version = "0.3.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "433a4be3d1e5c2ca501615d017fe835b7107ada62a4726dc6d7a95e17ae57146"
+checksum = "a4fbb5b1ef2c579c83772ed6abdae2b281a8af4d75e160dc05d060d2b0dff11b"
 dependencies = [
  "async-trait",
  "mockall",

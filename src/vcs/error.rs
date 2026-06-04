@@ -81,3 +81,21 @@ pub(crate) fn map_pk_err(err: processkit::Error, cleanup: fn(&str) -> String) ->
         other => Error::Command(other.to_string()),
     }
 }
+
+/// Map a [`vcs_core`] facade error onto our domain [`Error`]. Used where the
+/// `Repo` wrapper calls the facade's common-surface methods directly (trunk
+/// resolution, blocking worktree cleanup) rather than going through a per-backend
+/// helper. Repo-detection failures fold into [`Error::NotInRepo`]; the underlying
+/// CLI error keeps its already-shaped `Display` (the facade itself strips noise).
+impl From<vcs_core::Error> for Error {
+    fn from(err: vcs_core::Error) -> Self {
+        match err {
+            vcs_core::Error::NotARepository(_) => Error::NotInRepo,
+            vcs_core::Error::WorktreeNotFound(p) => {
+                Error::WorktreeNotFound(p.display().to_string())
+            }
+            vcs_core::Error::Io(e) => Error::Io(e),
+            other => Error::Command(other.to_string()),
+        }
+    }
+}

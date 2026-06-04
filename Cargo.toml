@@ -51,16 +51,18 @@ tempfile = "3"
 # facade (backend detection + a git/jj-agnostic `Repo` handle), `processkit`
 # (async job-backed process runner — kill-on-dispose process trees), and the
 # typed `vcs-git`/`vcs-jj`/`vcs-github` clients that drive the matching CLI on
-# top of it. The common detect-and-dispatch ops go through `vcs-core::Repo`;
-# the tool-specific escape hatches (`repo.git()?` / `repo.jj()?`) drive the CoW
-# flow, op-log rollback, retry loop, and merge/rebase state machines that stay
-# in `ws`. `vcs-core` re-exports `vcs_git`/`vcs_jj`, but we keep them as direct
-# deps for the `mock` feature and the escape-hatch types.
-vcs-core = "0.1"
-processkit = "0.5"
-vcs-git = "0.3"
-vcs-jj = "0.3"
-vcs-github = "0.3"
+# top of it. Common ops go through `vcs-core::Repo` — its facade methods
+# (`trunk`, `in_progress_state`, `cleanup_worktree_blocking`) and its cwd-bound
+# views (`git_at`/`jj_at`) back `ws`'s query helpers; the tool-specific escape
+# hatches (`repo.git()?` / `repo.jj()?`) drive the CoW flow, op-log rollback, and
+# the merge/rebase state machines that stay in `ws` (fetch retry now lives in the
+# toolkit clients). `vcs-core` re-exports `vcs_git`/`vcs_jj`, but we keep them as
+# direct deps for the `mock` feature and the escape-hatch types.
+vcs-core = "0.2"
+processkit = "0.6"
+vcs-git = "0.4"
+vcs-jj = "0.4"
+vcs-github = "0.4"
 # `processkit` (and the vcs-* clients) are async; `ws` therefore runs on a tokio
 # runtime. A `current_thread` runtime suffices (the CLI awaits subprocesses
 # sequentially, no concurrency to exploit) — `rt` gives the runtime +
@@ -106,5 +108,5 @@ tokio = { version = "1", features = ["rt", "macros"] }
 # `MockProcessRunner`. vcs-git/vcs-jj re-expose `MockGitApi`/`MockJjApi` behind
 # their own `mock` feature, used to drive the backend unit tests without
 # spawning a real git/jj binary.
-vcs-git = { version = "0.3", features = ["mock"] }
-vcs-jj = { version = "0.3", features = ["mock"] }
+vcs-git = { version = "0.4", features = ["mock"] }
+vcs-jj = { version = "0.4", features = ["mock"] }

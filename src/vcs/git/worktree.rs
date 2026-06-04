@@ -31,7 +31,7 @@ pub(crate) async fn create_worktree(
     base: &str,
 ) -> Result<CreateOutcome> {
     // Pre-flight `WorktreeExists` check applies to BOTH paths.
-    let branch_already_exists = super::repo::branch_exists(git, cwd, branch).await?;
+    let branch_already_exists = super::repo::branch_exists(git.at(cwd), branch).await?;
     if branch_already_exists {
         let worktrees = list_worktrees(git, cwd).await?;
         if worktrees.iter().any(|wt| wt.branch.as_deref() == Some(branch)) {
@@ -77,7 +77,7 @@ pub(crate) async fn create_worktree_from_remote(
     branch: &str,
 ) -> Result<CreateOutcome> {
     eprintln!("  Fetching '{branch}' from origin...");
-    super::ops::fetch_remote_branch(git, cwd, branch).await?;
+    super::ops::fetch_remote_branch(git.at(cwd), branch).await?;
     create_worktree(git, cwd, path, branch, &format!("origin/{branch}")).await
 }
 
@@ -199,10 +199,10 @@ async fn create_worktree_cow(
     // 1. Capture source state — branch name AND commit hash. When the branch
     //    name is "HEAD" the repo is detached, and `git checkout HEAD` is a
     //    no-op; restore via the captured commit hash in that case.
-    let orig_branch = super::repo::current_branch(git, cwd).await?;
-    let orig_commit = super::repo::current_commit(git, cwd).await?;
+    let orig_branch = super::repo::current_branch(git.at(cwd)).await?;
+    let orig_commit = super::repo::current_commit(git.at(cwd)).await?;
     let is_detached = orig_branch == "HEAD";
-    let needs_stash = super::branch::has_uncommitted_changes(git, cwd).await?;
+    let needs_stash = super::branch::has_uncommitted_changes(git.at(cwd)).await?;
 
     #[cfg(windows)]
     eprintln!("  Using ReFS block clone...");
@@ -236,7 +236,7 @@ async fn create_worktree_cow(
             // bare name: a tag sharing the name would otherwise win git's
             // ref-precedence and resolve to the wrong commit.
             let branch_commit =
-                super::repo::resolve_commit(git, cwd, &format!("refs/heads/{branch}")).await?;
+                super::repo::resolve_commit(git.at(cwd), &format!("refs/heads/{branch}")).await?;
             if orig_commit != branch_commit {
                 let t = std::time::Instant::now();
                 super::exec(cwd, ["checkout", "--detach", &branch_commit]).await?;
