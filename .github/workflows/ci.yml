@@ -1,0 +1,104 @@
+name: CI
+
+# Checks that gate every change landing on `main` (direct push or PR). Release is
+# a separate, MANUALLY-dispatched workflow (`release.yml`, `workflow_dispatch`) —
+# CI never publishes anything.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref so a new push doesn't queue behind stale CI.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+# CI only reads the repo and the dependency tree — never needs write scope.
+permissions:
+  contents: read
+
+# NOTE: there is deliberately no `rustfmt --check` job. This repo is not
+# `cargo fmt`-clean (a full reformat touches ~60 unrelated files); style is
+# matched by hand and the quality gate is clippy + tests. Add a fmt job only
+# after a dedicated one-shot `cargo fmt --all` reformat.
+
+jobs:
+  clippy:
+    name: clippy (${{ matrix.os }})
+    # Lint on BOTH OSes: this is a Windows-first tool with substantial
+    # `#[cfg(windows)]` (CoW/ReFS, winapi-util) AND `#[cfg(unix)]`/`cfg(not
+    # (windows))` code. A single-OS clippy lints only one cfg branch; the matrix
+    # covers both.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # `--all-targets` lints the integration tests too (which pull in the
+      # vcs-git/vcs-jj `mock` dev-feature). No `--all-features`: the crate
+      # declares no features of its own.
+      - run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The suite shells out to real `git` (preinstalled on the runners); it
+      # needs no `jj` (no jj-backed tests) and configures each temp repo's
+      # identity locally. A global identity is cheap insurance for any git call
+      # made before the per-repo `git config` runs.
+      - name: Configure git identity
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+      # Build the `ws` binary first: the integration tests in `tests/` exec
+      # `target/debug/ws` directly, so it must exist before `cargo test`.
+      - run: cargo build --all-targets
+      - run: cargo test
+
+  audit:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # Scan the dependency tree for RustSec advisories and banned/wildcard
+      # crates (config: deny.toml).
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans
+
+  msrv:
+    name: msrv (1.91)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # Verify the crate still builds on its declared Minimum Supported Rust
+      # Version. Keep `toolchain` in sync with `rust-version` in Cargo.toml.
+      # (`@master` + the `toolchain` input accepts a two-component "1.91"; the
+      # version-branch refs require a full patch version like `@1.91.0`.)
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.91"
+      # No `rust-toolchain.toml` exists today; if one is added later it would
+      # override the 1.91 toolchain above and silently test stable instead. Remove
+      # it (both the modern and legacy extensionless forms rustup honors)
+      # defensively so this job keeps honestly checking the declared floor.
+      - run: rm -f rust-toolchain.toml rust-toolchain
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --all-targets
